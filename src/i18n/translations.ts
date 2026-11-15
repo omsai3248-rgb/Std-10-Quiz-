@@ -264,7 +264,7 @@ const GU: Translations = {
   firebaseConnectedBadge: 'Firebase ચાલુ છે',
   firebaseNeedsAuthTitle: 'લાઇવ Firebase સિંક ચાલુ કરો',
   firebaseNeedsAuthDesc:
-    'પેમેન્ટ વિનંતીઓ જોવા અને કોડ એપ્રુવ કરવા નીચેના બટનથી Google (omsai3248@gmail.com) વડે Firebase ચાલુ કરો, અથવા Firebase Console → Authentication → Sign-in method માં Email/Password ચાલુ કરો.',
+    'પેમેન્ટ વિનંતીઓ જોવા અને કોડ એપ્રુવ કરવા નીચેના બટન પર ક્લિક કરી Google (omsai3248@gmail.com) વડે Firebase ચાલુ કરો.',
   onlyAdminAllowedError: 'માત્ર 9099592283 નંબર જ એડમિન લૉગિન માટે માન્ય છે!',
   signOutBtn: 'એડમિન લૉગ આઉટ',
 
@@ -425,7 +425,7 @@ const EN: Translations = {
   firebaseConnectedBadge: 'Firebase Active',
   firebaseNeedsAuthTitle: 'Connect Live Firebase Sync',
   firebaseNeedsAuthDesc:
-    'Tap below to activate live Firebase reads/approvals with Google (omsai3248@gmail.com), or enable Email/Password under Firebase Console → Authentication → Sign-in method.',
+    'Tap below to activate live Firebase reads and approvals directly with Google (omsai3248@gmail.com).',
   onlyAdminAllowedError: 'Only 9099592283 is allowed for Admin Login!',
   signOutBtn: 'Admin Sign Out',
 

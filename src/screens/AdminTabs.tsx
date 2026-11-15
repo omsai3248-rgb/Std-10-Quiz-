@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { useTranslation } from '../i18n/translations';
 import { exportAccessCodesA4Pdf } from '../services/pdfGenerator';
+import { getActiveFirebaseSummary } from '../services/quizRepository';
 import {
   displayPaymentTransactionRef,
   getSubjectDisplayName,
@@ -715,6 +716,7 @@ export const AdminFirebaseSetupTab: React.FC<{
 }> = (props) => {
   const { lang, t } = useTranslation();
   const { isBusy, isFirebaseConnected, onConnectFirebaseGoogle } = props;
+  const firebaseSummary = getActiveFirebaseSummary();
 
   return (
     <div className="space-y-4">
@@ -746,23 +748,17 @@ export const AdminFirebaseSetupTab: React.FC<{
           </div>
 
           <div className="rounded-xl bg-[#EFF4FA] dark:bg-[#0F172A] p-3 text-xs space-y-1 font-mono break-all">
-            <p>Project ID: cobalt-heuristic-lbcxw</p>
-            <p>Database: ai-studio-quickbookbykiran-476dca03-cd47-421b-8654-39026cc817b1</p>
+            <p>Project ID: {firebaseSummary.projectId}</p>
+            <p>Database: {firebaseSummary.databaseId}</p>
             <p>Admin: 9099592283 / omsai3248@gmail.com</p>
           </div>
 
           <ol className="list-decimal pl-5 space-y-2 text-xs leading-relaxed text-[#334155] dark:text-[#CBD5E1]">
             <li>
-              <strong>Google Sign-In (Web / Preview):</strong>{' '}
+              <strong>Google Sign-In (Android APK &amp; Web):</strong>{' '}
               {lang === 'gu'
-                ? 'બ્રાઉઝર/પ્રીવ્યુમાં 1-ક્લિકમાં Firebase ચાલુ કરવા નીચેના Google બટનથી omsai3248@gmail.com વડે સાઇન-ઇન કરો.'
-                : 'Sign in with omsai3248@gmail.com using the Google button below for instant live Firebase admin sync.'}
-            </li>
-            <li>
-              <strong>Email/Password (Android APK માટે):</strong>{' '}
-              {lang === 'gu'
-                ? 'APK ની અંદર 9099592283 + Kiran@0602 વડે સીધો Firebase એડમિન સિંક ચલાવવા Firebase Console → Authentication → Sign-in method માં Email/Password ચાલુ કરો.'
-                : 'Enable Email/Password under Firebase Console → Authentication → Sign-in method so 9099592283 + Kiran@0602 signs into Firebase directly inside the APK.'}
+                ? 'Android APK અને Web બંનેમાં 1-ક્લિકમાં Firebase ચાલુ કરવા Google બટનથી omsai3248@gmail.com વડે સાઇન-ઇન કરો.'
+                : 'Sign in with omsai3248@gmail.com using the Google button for instant live Firebase admin sync on both Android APK and Web.'}
             </li>
             <li>
               <strong>Public UPI Payments &amp; Access Codes:</strong>{' '}

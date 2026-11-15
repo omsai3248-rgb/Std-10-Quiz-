@@ -77,6 +77,9 @@ export const AdminPhoneLoginScreen: React.FC<AdminPhoneLoginScreenProps> = ({
       onAdminAuthenticated('firebase');
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : '';
+      if (msg === 'SIGN_IN_CANCELLED') {
+        return;
+      }
       if (msg === 'ONLY_ADMIN_GOOGLE_EMAIL') {
         setErrorMessage(t.errWrongAdminGoogleAccount);
       } else {

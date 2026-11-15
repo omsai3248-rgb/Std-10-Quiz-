@@ -1,7 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { onAuthStateChanged, signOut, type User } from 'firebase/auth';
 import { X } from 'lucide-react';
-import { auth } from './firebase';
 import { findChapter, findSubject } from './data/curriculum/std10Curriculum';
 import { TopNavHeader, type PublicTabId } from './components/TopNavHeader';
 import { UpdateAvailableModal } from './components/AppUpdateComponents';
@@ -17,10 +15,12 @@ import { extractReadableErrorMessage } from './services/firestoreErrorHandler';
 import {
   approvePaymentAndAssignCode,
   generateBulkAccessCodes,
+  hasNativeFirebaseBridge,
   isAdminAccount,
   loadMyPaymentRequestIds,
   observeAllAccessCodes,
   observeAllPaymentRequests,
+  observeAppAuthState,
   observeMyPaymentRequests,
   observeMyQuizAttempts,
   observePaymentRequestsByIds,
@@ -32,7 +32,9 @@ import {
   saveMyPaymentRequestId,
   saveReleaseConfig,
   signInAdminWithGoogle,
+  signOutAdminSession,
   submitPaymentRequest,
+  type AppAuthUser,
 } from './services/quizRepository';
 import {
   APP_VERSION_NAME,
@@ -94,7 +96,7 @@ function loadSavedUserMeta(): { name: string; mobile: string } {
 export const App: React.FC = () => {
   const { lang, t } = useTranslation();
 
-  const [authUser, setAuthUser] = useState<User | null>(null);
+  const [authUser, setAuthUser] = useState<AppAuthUser | null>(null);
   const [authInitialized, setAuthInitialized] = useState(false);
   const [localAdminAuthed, setLocalAdminAuthed] = useState(false);
 
@@ -206,10 +208,9 @@ export const App: React.FC = () => {
     }
   }, [isDarkTheme]);
 
-  // Observe Firebase Auth state (used for Admin Phone OTP +919099592283); public students log in
-  // via their mobile number locally and submit/redeem directly using persistent cryptographic IDs.
+  // Observe Firebase Auth state (native Credential Manager Google Sign-In on APK or Web Firebase Auth on browser).
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (user) => {
+    const unsub = observeAppAuthState((user) => {
       if (!user) {
         setAuthUser(null);
         setStudent(null);
@@ -256,16 +257,20 @@ export const App: React.FC = () => {
 
     if (authUser) {
       unsubs.push(
-        observeStudentProfile(
-          authUser.uid,
-          (profile) => setStudent(profile),
-          () => {}
-        ),
         observeMyPaymentRequests(authUser.uid, (items) => {
           setMyPayments(items);
-        }),
-        observeMyQuizAttempts(authUser.uid, setMyAttempts)
+        })
       );
+      if (!hasNativeFirebaseBridge()) {
+        unsubs.push(
+          observeStudentProfile(
+            authUser.uid,
+            (profile) => setStudent(profile),
+            () => {}
+          ),
+          observeMyQuizAttempts(authUser.uid, setMyAttempts)
+        );
+      }
     } else {
       unsubs.push(observePaymentRequestsByIds(myPaymentIds, setMyPayments));
     }
@@ -661,6 +666,9 @@ export const App: React.FC = () => {
       });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : '';
+      if (msg === 'SIGN_IN_CANCELLED') {
+        return;
+      }
       setBanner({
         isError: true,
         message:
@@ -676,7 +684,7 @@ export const App: React.FC = () => {
   const handleAdminSignOut = async () => {
     try {
       setLocalAdminAuthed(false);
-      await signOut(auth);
+      await signOutAdminSession();
       setApprovedConfirmation(null);
       setRoute({ name: 'public', tab: 'quiz' });
     } catch (err) {

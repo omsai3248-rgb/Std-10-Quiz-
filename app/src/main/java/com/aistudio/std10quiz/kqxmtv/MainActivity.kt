@@ -210,6 +210,7 @@ private fun PortalWebContainer() {
     var loadProgress by remember { mutableIntStateOf(0) }
     var canGoBack by remember { mutableStateOf(false) }
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
+    var firebaseBridgeRef by remember { mutableStateOf<NativeFirebaseBridge?>(null) }
     var pendingFileCallback by remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
@@ -227,6 +228,8 @@ private fun PortalWebContainer() {
         onDispose {
             pendingFileCallback?.onReceiveValue(null)
             pendingFileCallback = null
+            firebaseBridgeRef?.detach()
+            firebaseBridgeRef = null
             webViewRef?.destroy()
             webViewRef = null
         }
@@ -260,6 +263,10 @@ private fun PortalWebContainer() {
                         }
 
                         addJavascriptInterface(AndroidExportBridge(activity), "AndroidBridge")
+                        val firebaseBridge = NativeFirebaseBridge(activity, this)
+                        firebaseBridgeRef = firebaseBridge
+                        addJavascriptInterface(firebaseBridge, "AndroidFirebaseBridge")
+                        firebaseBridge.attach()
 
                         webViewClient = object : WebViewClient() {
                             override fun shouldInterceptRequest(

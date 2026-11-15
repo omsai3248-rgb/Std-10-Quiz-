@@ -16,11 +16,24 @@ import {
 import { getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage';
 import {
   createUserWithEmailAndPassword,
+  onAuthStateChanged,
   signInWithEmailAndPassword,
   signInWithPopup,
   signOut,
 } from 'firebase/auth';
 import { auth, db, googleProvider, storage } from '../firebase';
+import {
+  getActiveFirebaseSummary,
+  getNativeCurrentAuthUser,
+  hasNativeFirebaseBridge,
+  invokeNativeBridgeCall,
+  subscribeNativeAllCodes,
+  subscribeNativeAllPayments,
+  subscribeNativeAuthState,
+  subscribeNativeMyPayments,
+  subscribeNativeReleaseConfig,
+  type AppAuthUser,
+} from './nativeFirebaseBridge';
 import {
   ALL_SUBJECT_IDS,
   getFixedPlanPrice,
@@ -56,6 +69,36 @@ export const ADMIN_PASSCODE = 'Kiran@0602';
 
 const CODE_CHARSET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
+export { getActiveFirebaseSummary, hasNativeFirebaseBridge, type AppAuthUser };
+
+export function observeAppAuthState(cb: (user: AppAuthUser | null) => void): () => void {
+  if (hasNativeFirebaseBridge()) {
+    return subscribeNativeAuthState(cb);
+  }
+  return onAuthStateChanged(auth, (user) => {
+    if (!user) {
+      cb(null);
+      return;
+    }
+    cb({
+      uid: user.uid,
+      email: user.email ?? '',
+      phoneNumber: user.phoneNumber ?? '',
+      emailVerified: Boolean(user.emailVerified),
+    });
+  });
+}
+
+export async function signOutAdminSession(): Promise<void> {
+  if (hasNativeFirebaseBridge()) {
+    await invokeNativeBridgeCall((callId) => {
+      window.AndroidFirebaseBridge?.signOutGoogle?.(callId);
+    });
+    return;
+  }
+  await signOut(auth);
+}
+
 export function isAdminAccount(authPhone = '', authEmail = ''): boolean {
   const cleanEmail = (authEmail ?? '').trim().toLowerCase();
   if (cleanEmail === ADMIN_AUTH_EMAIL || cleanEmail === ADMIN_OWNER_EMAIL) return true;
@@ -66,6 +109,12 @@ export function isAdminAccount(authPhone = '', authEmail = ''): boolean {
 }
 
 export async function signInAdminWithGoogle(): Promise<void> {
+  if (hasNativeFirebaseBridge()) {
+    await invokeNativeBridgeCall((callId) => {
+      window.AndroidFirebaseBridge?.requestGoogleSignIn?.(callId);
+    });
+    return;
+  }
   const cred = await signInWithPopup(auth, googleProvider);
   const email = (cred.user.email ?? '').trim().toLowerCase();
   if (email !== ADMIN_OWNER_EMAIL) {
@@ -84,6 +133,14 @@ export async function signInAsAdminWithPasscode(
   }
   if (passwordInput !== ADMIN_PASSCODE) {
     throw new Error('INVALID_ADMIN_PASSWORD');
+  }
+
+  if (hasNativeFirebaseBridge()) {
+    const current = getNativeCurrentAuthUser();
+    if (current && isAdminAccount(current.phoneNumber, current.email)) {
+      return 'firebase';
+    }
+    return 'local';
   }
 
   try {
@@ -137,7 +194,9 @@ function randomHex32(): string {
 }
 
 export function getOrCreatePublicVisitorId(): string {
-  const signedInUid = auth.currentUser?.uid;
+  const signedInUid = hasNativeFirebaseBridge()
+    ? getNativeCurrentAuthUser()?.uid
+    : auth.currentUser?.uid;
   if (signedInUid) return signedInUid;
 
   try {
@@ -228,6 +287,10 @@ export function observeStudentProfile(
   onData: (profile: StudentProfile | null) => void,
   onError: (err: Error) => void
 ): Unsubscribe {
+  if (hasNativeFirebaseBridge()) {
+    onData(null);
+    return () => {};
+  }
   const ref = doc(db, COLLECTION_STUDENTS, userId);
   return onSnapshot(
     ref,
@@ -348,6 +411,33 @@ export async function submitPaymentRequest(params: {
     throw new Error('SCREENSHOT_REQUIRED');
   }
 
+  if (hasNativeFirebaseBridge()) {
+    const requestId = generateId('pay');
+    const screenshotBase64 = params.fallbackBase64.slice(0, 440_000);
+    if (!screenshotBase64) {
+      throw new Error('SCREENSHOT_REQUIRED');
+    }
+    await invokeNativeBridgeCall<string>((callId) => {
+      window.AndroidFirebaseBridge?.submitPaymentRequest?.(
+        callId,
+        JSON.stringify({
+          uid,
+          requestId,
+          studentName: cleanName,
+          mobileNumber: cleanMobile,
+          amountRupees: cleanAmount,
+          upiId: ADMIN_UPI_ID,
+          upiTransactionRef: rawUtr,
+          utrNormalized,
+          screenshotBase64,
+          subjectId: normalizedSubject,
+        })
+      );
+    });
+    saveMyPaymentRequestId(requestId, cleanMobile);
+    return requestId;
+  }
+
   // Fast pre-check for duplicate UTR
   const utrLockRef = doc(db, COLLECTION_UTR_LOCKS, utrNormalized);
   const existingLock = await getDoc(utrLockRef);
@@ -448,7 +538,6 @@ export async function approvePaymentAndAssignCode(params: {
   adminNote?: string;
   approvedSubjectId?: string;
 }): Promise<string> {
-  requireUserId();
   const {
     paymentRequest,
     adminNote = '',
@@ -458,6 +547,24 @@ export async function approvePaymentAndAssignCode(params: {
   const normalizedSubject = ALL_SUBJECT_IDS.includes(approvedSubjectId as SubjectId)
     ? approvedSubjectId
     : 'all';
+
+  if (hasNativeFirebaseBridge()) {
+    const amount = Math.max(0, Math.round(Number(paymentRequest.amountRupees ?? 24)));
+    const noteText = adminNote.trim() || `₹${amount} Approved (${getSubjectDisplayName(normalizedSubject)})`;
+    return invokeNativeBridgeCall<string>((callId) => {
+      window.AndroidFirebaseBridge?.approvePayment?.(
+        callId,
+        JSON.stringify({
+          requestId: paymentRequest.id,
+          subjectId: normalizedSubject,
+          batchName: `${getSubjectDisplayName(normalizedSubject)} • ₹${amount}`,
+          adminNote: noteText,
+        })
+      );
+    });
+  }
+
+  requireUserId();
   const reqRef = doc(db, COLLECTION_PAYMENT_REQUESTS, paymentRequest.id);
 
   try {
@@ -534,6 +641,19 @@ export async function rejectPaymentRequest(
   paymentRequest: PaymentRequest,
   adminNote: string
 ): Promise<void> {
+  if (hasNativeFirebaseBridge()) {
+    await invokeNativeBridgeCall((callId) => {
+      window.AndroidFirebaseBridge?.rejectPayment?.(
+        callId,
+        JSON.stringify({
+          requestId: paymentRequest.id,
+          adminNote: adminNote.trim() || 'પેમેન્ટ વિગત અથવા સ્ક્રીનશોટ અમાન્ય છે / Invalid payment proof',
+        })
+      );
+    });
+    return;
+  }
+
   requireUserId();
   const reqRef = doc(db, COLLECTION_PAYMENT_REQUESTS, paymentRequest.id);
   try {
@@ -570,6 +690,24 @@ export async function redeemAccessCodePublic(params: {
   }
 
   const deviceInfo = getDeviceBrowserInfo();
+  if (hasNativeFirebaseBridge()) {
+    return invokeNativeBridgeCall<{ code: string; subjectId: string; amountRupees: number }>(
+      (callId) => {
+        window.AndroidFirebaseBridge?.redeemAccessCode?.(
+          callId,
+          JSON.stringify({
+            cleanCode,
+            uid,
+            cleanName,
+            cleanMobile,
+            deviceInfo: deviceInfo || 'Android App',
+            expectedSubjectId: params.expectedSubjectId ?? '',
+          })
+        );
+      }
+    );
+  }
+
   const codeRef = doc(db, COLLECTION_ACCESS_CODES, cleanCode);
 
   try {
@@ -683,7 +821,6 @@ export async function generateBulkAccessCodes(
   batchName: string,
   subjectId = 'all'
 ): Promise<string[]> {
-  requireUserId();
   if (count < 1 || count > 500) {
     throw new Error('Can generate 1 to 500 codes per batch.');
   }
@@ -691,6 +828,17 @@ export async function generateBulkAccessCodes(
   const normalizedSubject = ALL_SUBJECT_IDS.includes(subjectId as SubjectId) ? subjectId : 'all';
   const subjectLabel = getSubjectDisplayName(normalizedSubject);
   const cleanBatch = (batchName.trim() || `${subjectLabel} Batch`).slice(0, 60);
+
+  if (hasNativeFirebaseBridge()) {
+    return invokeNativeBridgeCall<string[]>((callId) => {
+      window.AndroidFirebaseBridge?.generateBulkCodes?.(
+        callId,
+        JSON.stringify({ count, batchName: cleanBatch, subjectId: normalizedSubject })
+      );
+    });
+  }
+
+  requireUserId();
 
   const generated: string[] = [];
   const seen = new Set<string>();
@@ -804,6 +952,9 @@ export function observeMyPaymentRequests(
   onData: (list: PaymentRequest[]) => void,
   onError?: (err: Error) => void
 ): Unsubscribe {
+  if (hasNativeFirebaseBridge()) {
+    return subscribeNativeMyPayments([], onData);
+  }
   const q = query(collection(db, COLLECTION_PAYMENT_REQUESTS), where('userId', '==', userId));
   return onSnapshot(
     q,
@@ -828,6 +979,9 @@ export function observePaymentRequestsByIds(
   onData: (list: PaymentRequest[]) => void
 ): Unsubscribe {
   const validIds = Array.from(new Set(requestIds)).filter((id) => /^pay_[a-f0-9]{32}$/.test(id));
+  if (hasNativeFirebaseBridge()) {
+    return subscribeNativeMyPayments(validIds, onData);
+  }
   if (validIds.length === 0) {
     onData([]);
     return () => {};
@@ -868,6 +1022,10 @@ export function observeMyQuizAttempts(
   userId: string,
   onData: (list: QuizAttempt[]) => void
 ): Unsubscribe {
+  if (hasNativeFirebaseBridge()) {
+    onData([]);
+    return () => {};
+  }
   const colRef = collection(db, COLLECTION_STUDENTS, userId, SUBCOLLECTION_QUIZ_ATTEMPTS);
   return onSnapshot(
     colRef,
@@ -911,6 +1069,7 @@ export async function recordQuizAttempt(params: {
   previousTotalQuizzes: number;
   previousBestScore: number;
 }): Promise<void> {
+  if (hasNativeFirebaseBridge()) return;
   const uid = auth.currentUser?.uid;
   if (!uid) return;
   const {
@@ -1006,6 +1165,9 @@ export function observeAllPaymentRequests(
   onData: (list: PaymentRequest[]) => void,
   onError?: (err: Error) => void
 ): Unsubscribe {
+  if (hasNativeFirebaseBridge()) {
+    return subscribeNativeAllPayments(onData, onError);
+  }
   const colRef = collection(db, COLLECTION_PAYMENT_REQUESTS);
   return onSnapshot(
     colRef,
@@ -1029,6 +1191,9 @@ export function observeAllAccessCodes(
   onData: (list: AccessCode[]) => void,
   onError?: (err: Error) => void
 ): Unsubscribe {
+  if (hasNativeFirebaseBridge()) {
+    return subscribeNativeAllCodes(onData, onError);
+  }
   const colRef = collection(db, COLLECTION_ACCESS_CODES);
   return onSnapshot(
     colRef,
@@ -1105,6 +1270,9 @@ export async function updateStudentSubjectAccess(
 }
 
 export function observeReleaseConfig(onData: (cfg: AppReleaseConfig | null) => void): Unsubscribe {
+  if (hasNativeFirebaseBridge()) {
+    return subscribeNativeReleaseConfig(onData);
+  }
   const ref = doc(db, COLLECTION_APP_CONFIG, DOC_RELEASE_CONFIG);
   return onSnapshot(
     ref,
@@ -1131,6 +1299,18 @@ export async function saveReleaseConfig(
   githubOwnerRepo: string,
   releaseNotes: string
 ): Promise<void> {
+  if (hasNativeFirebaseBridge()) {
+    await invokeNativeBridgeCall((callId) => {
+      window.AndroidFirebaseBridge?.saveReleaseConfig?.(
+        callId,
+        JSON.stringify({
+          githubOwnerRepo: githubOwnerRepo.trim().slice(0, 120),
+          releaseNotes: releaseNotes.trim().slice(0, 300),
+        })
+      );
+    });
+    return;
+  }
   requireUserId();
   const ref = doc(db, COLLECTION_APP_CONFIG, DOC_RELEASE_CONFIG);
   try {
