@@ -46,11 +46,16 @@ class NativeFirebaseBridge(
 ) {
     private val appContext = activity.applicationContext
     private val db: FirebaseFirestore = FirebaseFirestore.getInstance(
-        appContext.getString(R.string.firestore_database_id)
+        getOptionalStringResource("firestore_database_id").ifBlank { "(default)" }
     )
     private val auth: FirebaseAuth = Firebase.auth
     private val credentialManager: CredentialManager = CredentialManager.create(activity)
     private val secureRandom = SecureRandom()
+
+    private fun getOptionalStringResource(name: String): String {
+        val resId = appContext.resources.getIdentifier(name, "string", appContext.packageName)
+        return if (resId != 0) runCatching { appContext.getString(resId) }.getOrDefault("") else ""
+    }
 
     private val publicListeners = mutableListOf<ListenerRegistration>()
     private val myPaymentListeners = mutableListOf<ListenerRegistration>()
@@ -77,11 +82,8 @@ class NativeFirebaseBridge(
 
     private fun attemptAutoSignIn() {
         if (auth.currentUser != null) return
-        val clientId = try {
-            appContext.getString(R.string.default_web_client_id)
-        } catch (_: Exception) {
-            return
-        }
+        val clientId = getOptionalStringResource("default_web_client_id")
+        if (clientId.isBlank()) return
         val googleIdOption = GetGoogleIdOption.Builder()
             .setFilterByAuthorizedAccounts(true)
             .setServerClientId(clientId)
@@ -109,8 +111,8 @@ class NativeFirebaseBridge(
 
     @JavascriptInterface
     fun getFirebaseConfigSummary(): String {
-        val projectId = runCatching { appContext.getString(R.string.project_id) }.getOrDefault("")
-        val dbId = runCatching { appContext.getString(R.string.firestore_database_id) }.getOrDefault("")
+        val projectId = getOptionalStringResource("project_id")
+        val dbId = getOptionalStringResource("firestore_database_id")
         return JSONObject().apply {
             put("projectId", projectId)
             put("databaseId", dbId)
@@ -122,9 +124,8 @@ class NativeFirebaseBridge(
 
     @JavascriptInterface
     fun requestGoogleSignIn(callId: String) {
-        val clientId = try {
-            appContext.getString(R.string.default_web_client_id)
-        } catch (_: Exception) {
+        val clientId = getOptionalStringResource("default_web_client_id")
+        if (clientId.isBlank()) {
             resolveCallError(callId, "Google Sign-In configuration missing: default_web_client_id not found")
             return
         }
