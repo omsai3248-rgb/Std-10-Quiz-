@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ધોરણ 10 ક્વિઝ</string>
+    <string name="loading_portal">એપ લોડ થઈ રહી છે…</string>
+    <string name="error_no_app">આ લિંક ખોલવા માટે કોઈ સુસંગત એપ ઉપલબ્ધ નથી.</string>
+    <string name="share_export_title">એક્સપોર્ટ ફાઇલ શેર / સેવ કરો</string>
+</resources>

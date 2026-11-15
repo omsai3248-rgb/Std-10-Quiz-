@@ -1,0 +1,6 @@
+{
+  "name": "ધોરણ 10 ક્વિઝ",
+  "description": "Std 10 Gujarati Quiz App (Maths, Science, Social Science) with book access code redemption, UPI payment verification, and Admin Panel.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

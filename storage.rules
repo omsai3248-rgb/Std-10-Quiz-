@@ -1,0 +1,20 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /payment_screenshots/{userId}/{fileName} {
+      // Signed-in user (including anonymous auth) can upload payment screenshot image up to 5 MB
+      allow create: if request.auth != null &&
+                       request.auth.uid == userId &&
+                       request.resource.size < 5 * 1024 * 1024 &&
+                       request.resource.contentType.matches('image/.*');
+
+      // Only the submitting user or the Admin (+919099592283) can read the payment screenshot
+      allow read: if request.auth != null && (
+        request.auth.uid == userId ||
+        request.auth.token.phone_number == '+919099592283'
+      );
+
+      allow update, delete: if false;
+    }
+  }
+}

@@ -1,0 +1,353 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global safety net: deny everything by default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidUtrKey(utr) {
+      return utr is string && utr.size() >= 4 && utr.size() <= 64 && utr.matches('^[A-Z0-9_\\-]+$');
+    }
+
+    // Strict admin check: ONLY phone number 9099592283 (+919099592283) via Firebase Phone OTP
+    function isAdmin() {
+      return isSignedIn() &&
+             'phone_number' in request.auth.token &&
+             request.auth.token.phone_number == '+919099592283';
+    }
+
+    function canUseReservedAdminMobile(data) {
+      return data.mobileNumber != '9099592283' || isAdmin();
+    }
+
+    function hasSubjectAccess(studentData, subjectId) {
+      return studentData.hasQuizAccess == true ||
+             ('unlockedSubjects' in studentData && (
+               'all' in studentData.unlockedSubjects ||
+               subjectId in studentData.unlockedSubjects
+             ));
+    }
+
+    function isValidStudent(data) {
+      return data.keys().hasAll([
+               'userId', 'fullName', 'mobileNumber', 'email', 'standard',
+               'hasQuizAccess', 'redeemedCode', 'paymentStatus',
+               'totalQuizzesTaken', 'bestScorePercent', 'createdAt', 'updatedAt'
+             ]) &&
+             data.keys().hasOnly([
+               'userId', 'fullName', 'mobileNumber', 'email', 'standard',
+               'hasQuizAccess', 'redeemedCode', 'paymentStatus',
+               'totalQuizzesTaken', 'bestScorePercent', 'unlockedSubjects',
+               'createdAt', 'updatedAt'
+             ]) &&
+             data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.fullName is string && data.fullName.size() >= 1 && data.fullName.size() <= 60 &&
+             data.mobileNumber is string && data.mobileNumber.matches('^[0-9]{10}$') &&
+             data.email is string && data.email.size() <= 120 &&
+             data.standard is string && data.standard.size() >= 1 && data.standard.size() <= 30 &&
+             data.hasQuizAccess is bool &&
+             data.redeemedCode is string && data.redeemedCode.size() <= 32 &&
+             data.paymentStatus in ['none', 'pending', 'approved', 'rejected'] &&
+             data.totalQuizzesTaken is int && data.totalQuizzesTaken >= 0 && data.totalQuizzesTaken <= 100000 &&
+             data.bestScorePercent is int && data.bestScorePercent >= 0 && data.bestScorePercent <= 100 &&
+             (!('unlockedSubjects' in data) || (data.unlockedSubjects is list && data.unlockedSubjects.size() <= 10)) &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidUsedByMap(usedBy) {
+      return usedBy is map &&
+             usedBy.keys().hasAll(['uid', 'name', 'mobile', 'deviceInfo']) &&
+             usedBy.keys().hasOnly(['uid', 'name', 'mobile', 'deviceInfo']) &&
+             usedBy.uid is string && usedBy.uid.size() >= 1 && usedBy.uid.size() <= 128 &&
+             usedBy.name is string && usedBy.name.size() >= 1 && usedBy.name.size() <= 60 &&
+             usedBy.mobile is string && usedBy.mobile.matches('^[0-9]{10}$') &&
+             usedBy.deviceInfo is string && usedBy.deviceInfo.size() >= 1 && usedBy.deviceInfo.size() <= 200;
+    }
+
+    function isValidAccessCode(data) {
+      return data.keys().hasAll([
+               'code', 'requestId', 'userName', 'mobileNumber', 'amountRupees',
+               'batchName', 'status', 'isUsed', 'usedByUserId', 'usedByMobile',
+               'usedByName', 'source', 'createdAt', 'updatedAt'
+             ]) &&
+             data.keys().hasOnly([
+               'code', 'requestId', 'userName', 'mobileNumber', 'amountRupees',
+               'batchName', 'status', 'isUsed', 'usedAt', 'usedBy',
+               'usedByUserId', 'usedByMobile', 'usedByName', 'source',
+               'subjectId', 'createdAt', 'updatedAt'
+             ]) &&
+             data.code is string && data.code.size() >= 4 && data.code.size() <= 32 && data.code.matches('^[A-Z0-9_\\-]+$') &&
+             data.requestId is string && data.requestId.size() <= 128 &&
+             data.userName is string && data.userName.size() <= 60 &&
+             data.mobileNumber is string && data.mobileNumber.size() <= 15 &&
+             data.amountRupees is int && data.amountRupees >= 0 && data.amountRupees <= 100000 &&
+             data.batchName is string && data.batchName.size() >= 1 && data.batchName.size() <= 60 &&
+             data.status in ['unused', 'used'] &&
+             data.isUsed is bool &&
+             data.isUsed == (data.status == 'used') &&
+             (!('usedAt' in data) || data.usedAt == null || (data.usedAt is timestamp && data.usedAt <= request.time)) &&
+             (!('usedBy' in data) || data.usedBy == null || isValidUsedByMap(data.usedBy)) &&
+             data.usedByUserId is string && data.usedByUserId.size() <= 128 &&
+             data.usedByMobile is string && data.usedByMobile.size() <= 15 &&
+             data.usedByName is string && data.usedByName.size() <= 60 &&
+             data.source in ['book', 'upi_payment'] &&
+             (!('subjectId' in data) || data.subjectId in ['maths', 'science', 'social_science', 'all']) &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidPaymentRequest(data) {
+      return data.keys().hasAll([
+               'userId', 'studentName', 'mobileNumber', 'amountRupees', 'upiId',
+               'upiTransactionRef', 'utrNormalized', 'screenshotUrl', 'screenshotPath',
+               'screenshotBase64', 'status', 'assignedCode', 'adminNote',
+               'createdAt', 'updatedAt'
+             ]) &&
+             data.keys().hasOnly([
+               'userId', 'studentName', 'mobileNumber', 'amountRupees', 'upiId',
+               'upiTransactionRef', 'utrNormalized', 'screenshotUrl', 'screenshotPath',
+               'screenshotBase64', 'status', 'assignedCode', 'adminNote', 'subjectId',
+               'createdAt', 'updatedAt'
+             ]) &&
+             data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.studentName is string && data.studentName.size() >= 1 && data.studentName.size() <= 60 &&
+             data.mobileNumber is string && data.mobileNumber.matches('^[0-9]{10}$') &&
+             data.amountRupees is int && data.amountRupees >= 1 && data.amountRupees <= 100000 &&
+             data.upiId is string && data.upiId.size() >= 3 && data.upiId.size() <= 60 &&
+             data.upiTransactionRef is string && data.upiTransactionRef.size() >= 4 && data.upiTransactionRef.size() <= 64 &&
+             isValidUtrKey(data.utrNormalized) &&
+             data.screenshotUrl is string && data.screenshotUrl.size() <= 2000 &&
+             data.screenshotPath is string && data.screenshotPath.size() <= 300 &&
+             data.screenshotBase64 is string && data.screenshotBase64.size() <= 450000 &&
+             (data.screenshotUrl.size() >= 10 || data.screenshotBase64.size() >= 10) &&
+             data.status in ['pending', 'approved', 'rejected'] &&
+             data.assignedCode is string && data.assignedCode.size() <= 32 &&
+             data.adminNote is string && data.adminNote.size() <= 200 &&
+             (!('subjectId' in data) || data.subjectId in ['maths', 'science', 'social_science', 'all']) &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidQuizAttempt(data) {
+      return data.keys().hasAll([
+               'userId', 'subjectId', 'subjectTitle', 'chapterTitle',
+               'score', 'totalQuestions', 'percentage', 'timeTakenSeconds', 'createdAt'
+             ]) &&
+             data.keys().hasOnly([
+               'userId', 'subjectId', 'subjectTitle', 'chapterTitle',
+               'score', 'totalQuestions', 'percentage', 'timeTakenSeconds', 'createdAt'
+             ]) &&
+             data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.subjectId in ['maths', 'science', 'social_science'] &&
+             data.subjectTitle is string && data.subjectTitle.size() >= 1 && data.subjectTitle.size() <= 50 &&
+             data.chapterTitle is string && data.chapterTitle.size() >= 1 && data.chapterTitle.size() <= 100 &&
+             data.totalQuestions is int && data.totalQuestions >= 1 && data.totalQuestions <= 100 &&
+             data.score is int && data.score >= 0 && data.score <= data.totalQuestions &&
+             data.percentage is int && data.percentage >= 0 && data.percentage <= 100 &&
+             data.timeTakenSeconds is int && data.timeTakenSeconds >= 0 && data.timeTakenSeconds <= 7200 &&
+             data.createdAt is timestamp && data.createdAt <= request.time;
+    }
+
+    // Read-only admin marker (kept for compatibility, never grants write/admin bypass)
+    match /admins/{adminUid} {
+      allow get: if isAdmin();
+      allow list, create, update, delete: if false;
+    }
+
+    // Students collection (tracks unlocked content + quiz stats per user UID)
+    match /students/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
+      allow list: if isAdmin();
+
+      allow create: if isSignedIn() &&
+                       isValidId(userId) &&
+                       request.auth.uid == userId &&
+                       isValidStudent(incoming()) &&
+                       canUseReservedAdminMobile(incoming()) &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().hasQuizAccess == false &&
+                       incoming().redeemedCode == '' &&
+                       incoming().paymentStatus == 'none' &&
+                       incoming().totalQuizzesTaken == 0 &&
+                       incoming().bestScorePercent == 0;
+
+      allow update: if isSignedIn() &&
+                       isValidId(userId) &&
+                       isValidStudent(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt && (
+                         isAdmin() ||
+                         (
+                           request.auth.uid == userId &&
+                           canUseReservedAdminMobile(incoming()) && (
+                             incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'mobileNumber', 'email', 'updatedAt']) ||
+                             (
+                               incoming().paymentStatus == 'pending' &&
+                               incoming().diff(existing()).affectedKeys().hasOnly(['paymentStatus', 'updatedAt'])
+                             ) ||
+                             (
+                               incoming().redeemedCode.size() >= 4 &&
+                               exists(/databases/$(database)/documents/access_codes/$(incoming().redeemedCode)) &&
+                               get(/databases/$(database)/documents/access_codes/$(incoming().redeemedCode)).data.isUsed == false &&
+                               getAfter(/databases/$(database)/documents/access_codes/$(incoming().redeemedCode)).data.isUsed == true &&
+                               getAfter(/databases/$(database)/documents/access_codes/$(incoming().redeemedCode)).data.usedByUserId == request.auth.uid &&
+                               (
+                                 incoming().hasQuizAccess == true ||
+                                 ('unlockedSubjects' in incoming() && incoming().unlockedSubjects.size() >= 1)
+                               ) &&
+                               incoming().diff(existing()).affectedKeys().hasOnly(['hasQuizAccess', 'redeemedCode', 'unlockedSubjects', 'updatedAt'])
+                             ) ||
+                             (
+                               (existing().hasQuizAccess == true || ('unlockedSubjects' in existing() && existing().unlockedSubjects.size() >= 1)) &&
+                               incoming().totalQuizzesTaken >= existing().totalQuizzesTaken &&
+                               incoming().diff(existing()).affectedKeys().hasOnly(['totalQuizzesTaken', 'bestScorePercent', 'updatedAt'])
+                             )
+                           )
+                         )
+                       );
+
+      allow delete: if isAdmin() && isValidId(userId);
+
+      match /quiz_attempts/{attemptId} {
+        allow get: if isSignedIn() && isValidId(attemptId) && (request.auth.uid == userId || isAdmin());
+        allow list: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+        allow create: if isSignedIn() &&
+                         isValidId(attemptId) &&
+                         request.auth.uid == userId &&
+                         isValidQuizAttempt(incoming()) &&
+                         incoming().userId == userId &&
+                         hasSubjectAccess(get(/databases/$(database)/documents/students/$(userId)).data, incoming().subjectId);
+        allow update, delete: if isAdmin() && isValidId(attemptId);
+      }
+    }
+
+    // Unique UTR lock collection to enforce duplicate UTR prevention server-side
+    match /utr_locks/{utrId} {
+      allow get: if isSignedIn() && isValidUtrKey(utrId);
+      allow list: if isAdmin();
+      allow create: if isSignedIn() &&
+                       isValidUtrKey(utrId) &&
+                       incoming().keys().hasAll(['utrNormalized', 'requestId', 'createdAt']) &&
+                       incoming().keys().hasOnly(['utrNormalized', 'requestId', 'createdAt']) &&
+                       incoming().utrNormalized == utrId &&
+                       isValidId(incoming().requestId) &&
+                       incoming().createdAt is timestamp && incoming().createdAt <= request.time &&
+                       getAfter(/databases/$(database)/documents/payment_requests/$(incoming().requestId)).data.utrNormalized == utrId &&
+                       getAfter(/databases/$(database)/documents/payment_requests/$(incoming().requestId)).data.userId == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    // Permanent access codes collection (NEVER deleted)
+    match /access_codes/{codeId} {
+      allow get: if isSignedIn() && isValidId(codeId) && (
+        isAdmin() ||
+        resource == null ||
+        (resource.data.status == 'unused' && resource.data.isUsed == false) ||
+        resource.data.usedByUserId == request.auth.uid
+      );
+      allow list: if isAdmin();
+
+      allow create: if isAdmin() &&
+                       isValidId(codeId) &&
+                       isValidAccessCode(incoming()) &&
+                       incoming().code == codeId &&
+                       incoming().status == 'unused' &&
+                       incoming().isUsed == false;
+
+      allow update: if isSignedIn() &&
+                       isValidId(codeId) &&
+                       isValidAccessCode(incoming()) &&
+                       incoming().code == existing().code &&
+                       incoming().createdAt == existing().createdAt && (
+                         isAdmin() ||
+                         (
+                           existing().status == 'unused' &&
+                           existing().isUsed == false &&
+                           incoming().status == 'used' &&
+                           incoming().isUsed == true &&
+                           incoming().usedByUserId == request.auth.uid &&
+                           isValidUsedByMap(incoming().usedBy) &&
+                           incoming().usedBy.uid == request.auth.uid &&
+                           incoming().usedByName == incoming().usedBy.name &&
+                           incoming().usedByMobile == incoming().usedBy.mobile &&
+                           incoming().usedAt is timestamp && incoming().usedAt <= request.time &&
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'status', 'isUsed', 'usedAt', 'usedBy',
+                             'usedByUserId', 'usedByMobile', 'usedByName', 'updatedAt'
+                           ])
+                         )
+                       );
+
+      // Permanent: codes must never be deleted
+      allow delete: if false;
+    }
+
+    function isValidAppConfig(data) {
+      return data.keys().hasAll(['githubOwnerRepo', 'releaseNotes', 'updatedAt']) &&
+             data.keys().hasOnly(['githubOwnerRepo', 'releaseNotes', 'updatedAt']) &&
+             data.githubOwnerRepo is string && data.githubOwnerRepo.size() <= 120 &&
+             data.releaseNotes is string && data.releaseNotes.size() <= 300 &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    match /app_config/{configId} {
+      allow get: if isSignedIn() && isValidId(configId);
+      allow list: if isAdmin();
+      allow create, update: if isAdmin() && isValidId(configId) && isValidAppConfig(incoming());
+      allow delete: if false;
+    }
+
+    // Payment requests collection
+    match /payment_requests/{requestId} {
+      allow get: if isSignedIn() && isValidId(requestId) && ((resource != null && resource.data.userId == request.auth.uid) || isAdmin());
+      allow list: if isSignedIn() && (isAdmin() || resource.data.userId == request.auth.uid);
+
+      allow create: if isSignedIn() &&
+                       isValidId(requestId) &&
+                       isValidPaymentRequest(incoming()) &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().status == 'pending' &&
+                       incoming().assignedCode == '' &&
+                       incoming().adminNote == '' &&
+                       !exists(/databases/$(database)/documents/utr_locks/$(incoming().utrNormalized)) &&
+                       getAfter(/databases/$(database)/documents/utr_locks/$(incoming().utrNormalized)).data.requestId == requestId;
+
+      allow update: if isAdmin() &&
+                       isValidId(requestId) &&
+                       isValidPaymentRequest(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().utrNormalized == existing().utrNormalized &&
+                       incoming().createdAt == existing().createdAt &&
+                       existing().status == 'pending' &&
+                       incoming().status in ['approved', 'rejected'] &&
+                       (
+                         incoming().status == 'rejected' ||
+                         (
+                           incoming().status == 'approved' &&
+                           incoming().assignedCode.size() == 8 &&
+                           getAfter(/databases/$(database)/documents/access_codes/$(incoming().assignedCode)).data.requestId == requestId
+                         )
+                       );
+
+      allow delete: if false;
+    }
+  }
+}

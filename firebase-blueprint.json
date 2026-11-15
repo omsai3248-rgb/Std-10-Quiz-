@@ -1,0 +1,124 @@
+{
+  "entities": {
+    "StudentProfile": {
+      "title": "StudentProfile",
+      "description": "User profile tracking unlocked Std 10 Quiz subjects and quiz progress.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "fullName": { "type": "string" },
+        "mobileNumber": { "type": "string" },
+        "email": { "type": "string" },
+        "standard": { "type": "string" },
+        "hasQuizAccess": { "type": "boolean" },
+        "redeemedCode": { "type": "string" },
+        "paymentStatus": { "type": "string", "enum": ["none", "pending", "approved", "rejected"] },
+        "totalQuizzesTaken": { "type": "integer" },
+        "bestScorePercent": { "type": "integer" },
+        "unlockedSubjects": { "type": "array", "items": { "type": "string" } },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "userId", "fullName", "mobileNumber", "email", "standard",
+        "hasQuizAccess", "redeemedCode", "paymentStatus",
+        "totalQuizzesTaken", "bestScorePercent", "createdAt", "updatedAt"
+      ]
+    },
+    "AccessCode": {
+      "title": "AccessCode",
+      "description": "Permanent 8-character alphanumeric access code created upon admin approval or batch generation.",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string" },
+        "requestId": { "type": "string" },
+        "userName": { "type": "string" },
+        "mobileNumber": { "type": "string" },
+        "amountRupees": { "type": "integer" },
+        "batchName": { "type": "string" },
+        "status": { "type": "string", "enum": ["unused", "used"] },
+        "isUsed": { "type": "boolean" },
+        "usedAt": { "type": "string", "format": "date-time" },
+        "usedBy": {
+          "type": "object",
+          "properties": {
+            "uid": { "type": "string" },
+            "name": { "type": "string" },
+            "mobile": { "type": "string" },
+            "deviceInfo": { "type": "string" }
+          }
+        },
+        "usedByUserId": { "type": "string" },
+        "usedByMobile": { "type": "string" },
+        "usedByName": { "type": "string" },
+        "source": { "type": "string", "enum": ["book", "upi_payment"] },
+        "subjectId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "code", "requestId", "userName", "mobileNumber", "amountRupees",
+        "batchName", "status", "isUsed", "usedByUserId", "usedByMobile",
+        "usedByName", "source", "createdAt", "updatedAt"
+      ]
+    },
+    "PaymentRequest": {
+      "title": "PaymentRequest",
+      "description": "Public payment submission with UTR ID and screenshot stored in Firebase Storage.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "studentName": { "type": "string" },
+        "mobileNumber": { "type": "string" },
+        "amountRupees": { "type": "integer" },
+        "upiId": { "type": "string" },
+        "upiTransactionRef": { "type": "string" },
+        "utrNormalized": { "type": "string" },
+        "screenshotUrl": { "type": "string" },
+        "screenshotPath": { "type": "string" },
+        "screenshotBase64": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "assignedCode": { "type": "string" },
+        "adminNote": { "type": "string" },
+        "subjectId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "userId", "studentName", "mobileNumber", "amountRupees", "upiId",
+        "upiTransactionRef", "utrNormalized", "screenshotUrl", "screenshotPath",
+        "screenshotBase64", "status", "assignedCode", "adminNote",
+        "createdAt", "updatedAt"
+      ]
+    },
+    "UtrLock": {
+      "title": "UtrLock",
+      "description": "Server-side uniqueness lock preventing duplicate UTR/Transaction IDs.",
+      "type": "object",
+      "properties": {
+        "utrNormalized": { "type": "string" },
+        "requestId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["utrNormalized", "requestId", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/students/{userId}": {
+      "schema": { "$ref": "#/entities/StudentProfile" },
+      "description": "Unlocked subject tracking per user UID."
+    },
+    "/payment_requests/{requestId}": {
+      "schema": { "$ref": "#/entities/PaymentRequest" },
+      "description": "Public payment requests with screenshot URL/base64 and live approval status."
+    },
+    "/utr_locks/{utrId}": {
+      "schema": { "$ref": "#/entities/UtrLock" },
+      "description": "Atomic UTR uniqueness locks."
+    },
+    "/access_codes/{codeId}": {
+      "schema": { "$ref": "#/entities/AccessCode" },
+      "description": "Permanent 8-character codes (unused -> used)."
+    }
+  }
+}
