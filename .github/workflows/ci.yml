@@ -111,16 +111,24 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
-      - name: Publish GitHub Release (on tag or manual trigger)
-        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.create_release == true)
+      - name: Publish GitHub Release
+        if: github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="${GITHUB_REF_NAME}"
-          if [[ "$TAG" != v* ]]; then
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            TAG="${GITHUB_REF_NAME}"
+          else
             TAG="v1.0.${GITHUB_RUN_NUMBER}"
           fi
-          gh release create "$TAG" build-artifacts/*.apk \
-            --title "Std 10 Quiz Android App ($TAG)" \
-            --notes "Automated Android APK & Web Portal build from commit ${GITHUB_SHA::7}." \
-            --latest
+          NOTES="Direct Android APK download for commit ${GITHUB_SHA::7} (Run #${GITHUB_RUN_NUMBER}). Tap Std10-Quiz-release.apk or Std10-Quiz-debug.apk below to install."
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" build-artifacts/*.apk --clobber
+            gh release edit "$TAG" --title "Std 10 Quiz Android App ($TAG)" --notes "$NOTES" --latest
+          else
+            gh release create "$TAG" build-artifacts/*.apk \
+              --target "$GITHUB_SHA" \
+              --title "Std 10 Quiz Android App ($TAG)" \
+              --notes "$NOTES" \
+              --latest
+          fi
