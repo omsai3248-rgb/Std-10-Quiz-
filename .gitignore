@@ -3,3 +3,13 @@ dist
 .DS_Store
 .env
 *-debug.log
+.gradle/
+.kotlin/
+.build-outputs/
+build/
+app/build/
+build-artifacts/
+local.properties
+debug.keystore
+*.apk
+*.aab

@@ -1,20 +1,111 @@
-name: Build & Lint
+name: Build Web & Android APK
 
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: 'Publish APK as a GitHub Release'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: write
 
 jobs:
-  verify:
+  build:
+    name: Build & Package APK
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
-      - run: npm run build
-      - run: npm run lint
+
+      - name: Install web dependencies
+        run: npm ci
+
+      - name: Lint web & security rules
+        run: npm run lint
+
+      - name: Build web bundle & sync Android assets
+        run: npm run android:sync
+
+      - name: Setup Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Gradle 9.3.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
+
+      - name: Prepare debug signing keystore
+        run: |
+          if [ ! -f debug.keystore ] && [ -f debug.keystore.base64 ]; then
+            base64 -d debug.keystore.base64 > debug.keystore || rm -f debug.keystore
+          fi
+
+      - name: Build Android APKs (Debug & Release)
+        run: gradle :app:assembleDebug :app:assembleRelease --no-daemon --stacktrace
+
+      - name: Stage APK outputs
+        run: |
+          mkdir -p build-artifacts
+          if [ -f app/build/outputs/apk/debug/app-debug.apk ]; then
+            cp app/build/outputs/apk/debug/app-debug.apk build-artifacts/Std10-Quiz-debug.apk
+          fi
+          if [ -f app/build/outputs/apk/release/app-release.apk ]; then
+            cp app/build/outputs/apk/release/app-release.apk build-artifacts/Std10-Quiz-release.apk
+          elif [ -f app/build/outputs/apk/release/app-release-unsigned.apk ]; then
+            cp app/build/outputs/apk/release/app-release-unsigned.apk build-artifacts/Std10-Quiz-release-unsigned.apk
+          fi
+          ls -lh build-artifacts/
+
+      - name: Upload Android APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: std10-quiz-android-apk
+          path: build-artifacts/*.apk
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Upload Web dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: std10-quiz-web-dist
+          path: dist/
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Publish GitHub Release (on tag or manual trigger)
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.create_release == true)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if [[ "$TAG" != v* ]]; then
+            TAG="v1.0.${GITHUB_RUN_NUMBER}"
+          fi
+          gh release create "$TAG" build-artifacts/*.apk \
+            --title "Std 10 Quiz Android App ($TAG)" \
+            --notes "Automated Android APK & Web Portal build from commit ${GITHUB_SHA::7}." \
+            --latest
