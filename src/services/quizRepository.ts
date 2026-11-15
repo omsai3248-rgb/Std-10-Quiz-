@@ -14,7 +14,13 @@ import {
   type Unsubscribe,
 } from 'firebase/firestore';
 import { getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage';
-import { auth, db, storage } from '../firebase';
+import {
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  signInWithPopup,
+  signOut,
+} from 'firebase/auth';
+import { auth, db, googleProvider, storage } from '../firebase';
 import {
   ALL_SUBJECT_IDS,
   getFixedPlanPrice,
@@ -44,14 +50,77 @@ export const ADMIN_UPI_ID = '9099592283@upi';
 export const ADMIN_UPI_NAME = 'KATRIYA KIRANKUMAR RAMESHBHAI';
 export const ADMIN_PHONE_TEN_DIGITS = '9099592283';
 export const ADMIN_PHONE_E164 = '+919099592283';
+export const ADMIN_AUTH_EMAIL = 'admin9099592283@std10quiz.app';
+export const ADMIN_OWNER_EMAIL = 'omsai3248@gmail.com';
+export const ADMIN_PASSCODE = 'Kiran@0602';
 
 const CODE_CHARSET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
-export function isAdminAccount(authPhone = ''): boolean {
+export function isAdminAccount(authPhone = '', authEmail = ''): boolean {
+  const cleanEmail = (authEmail ?? '').trim().toLowerCase();
+  if (cleanEmail === ADMIN_AUTH_EMAIL || cleanEmail === ADMIN_OWNER_EMAIL) return true;
   const clean = (authPhone ?? '').trim();
   if (clean === ADMIN_PHONE_E164) return true;
   const digits = clean.replace(/\D/g, '').slice(-10);
   return digits === ADMIN_PHONE_TEN_DIGITS && clean.startsWith('+91');
+}
+
+export async function signInAdminWithGoogle(): Promise<void> {
+  const cred = await signInWithPopup(auth, googleProvider);
+  const email = (cred.user.email ?? '').trim().toLowerCase();
+  if (email !== ADMIN_OWNER_EMAIL) {
+    await signOut(auth);
+    throw new Error('ONLY_ADMIN_GOOGLE_EMAIL');
+  }
+}
+
+export async function signInAsAdminWithPasscode(
+  phoneInput: string,
+  passwordInput: string
+): Promise<'firebase' | 'local'> {
+  const cleanDigits = phoneInput.replace(/\D/g, '').slice(-10);
+  if (cleanDigits !== ADMIN_PHONE_TEN_DIGITS) {
+    throw new Error('ONLY_ADMIN_NUMBER');
+  }
+  if (passwordInput !== ADMIN_PASSCODE) {
+    throw new Error('INVALID_ADMIN_PASSWORD');
+  }
+
+  try {
+    await signInWithEmailAndPassword(auth, ADMIN_AUTH_EMAIL, ADMIN_PASSCODE);
+    return 'firebase';
+  } catch (err: unknown) {
+    const code = (err as { code?: string })?.code ?? '';
+    if (
+      code === 'auth/user-not-found' ||
+      code === 'auth/invalid-credential' ||
+      code === 'auth/invalid-login-credentials'
+    ) {
+      try {
+        await createUserWithEmailAndPassword(auth, ADMIN_AUTH_EMAIL, ADMIN_PASSCODE);
+        return 'firebase';
+      } catch (createErr: unknown) {
+        const createCode = (createErr as { code?: string })?.code ?? '';
+        if (createCode === 'auth/email-already-in-use') {
+          throw new Error('INVALID_ADMIN_PASSWORD');
+        }
+        if (
+          createCode === 'auth/operation-not-allowed' ||
+          createCode === 'auth/admin-restricted-operation'
+        ) {
+          return 'local';
+        }
+        throw createErr;
+      }
+    }
+    if (
+      code === 'auth/operation-not-allowed' ||
+      code === 'auth/admin-restricted-operation'
+    ) {
+      return 'local';
+    }
+    throw err;
+  }
 }
 
 const PUBLIC_VISITOR_UID_KEY = 'std10_public_visitor_uid_v1';
@@ -212,7 +281,10 @@ export async function registerOrUpdateStudentProfile(
     throw new Error('INVALID_MOBILE');
   }
 
-  const canUseAdminMobile = isAdminAccount(auth.currentUser?.phoneNumber ?? '');
+  const canUseAdminMobile = isAdminAccount(
+    auth.currentUser?.phoneNumber ?? '',
+    auth.currentUser?.email ?? ''
+  );
   if (cleanMobile === ADMIN_PHONE_TEN_DIGITS && !canUseAdminMobile) {
     throw new Error('RESERVED_ADMIN_MOBILE');
   }

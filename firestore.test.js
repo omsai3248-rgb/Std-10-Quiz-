@@ -213,7 +213,7 @@ test("Duplicate UTR ID is rejected by Firestore rules", async () => {
   await assertFails(batch2.commit());
 });
 
-test("Only phone +919099592283 is admin; other phones and emails are strictly denied", async () => {
+test("Only authorized admin (+919099592283, admin9099592283@std10quiz.app, or verified omsai3248@gmail.com) is admin", async () => {
   await testEnv.withSecurityRulesDisabled(async (ctx) => {
     const db = ctx.firestore();
     await db.collection("payment_requests").doc("pay_1").set(makePaymentPayload(ALICE_UID));
@@ -222,25 +222,41 @@ test("Only phone +919099592283 is admin; other phones and emails are strictly de
   const wrongPhoneDb = testEnv.authenticatedContext("other_phone", {
     phone_number: "+919876543210",
   }).firestore();
-  const emailDb = testEnv.authenticatedContext("email_user", {
-    email: "omsai3248@gmail.com",
+  const wrongEmailDb = testEnv.authenticatedContext("other_email", {
+    email: "random_user@gmail.com",
     email_verified: true,
+  }).firestore();
+  const unverifiedOwnerDb = testEnv.authenticatedContext("unverified_owner", {
+    email: "omsai3248@gmail.com",
+    email_verified: false,
   }).firestore();
 
   await assertFails(wrongPhoneDb.collection("payment_requests").get());
-  await assertFails(emailDb.collection("payment_requests").get());
+  await assertFails(wrongEmailDb.collection("payment_requests").get());
+  await assertFails(unverifiedOwnerDb.collection("payment_requests").get());
   await assertFails(
     wrongPhoneDb.collection("access_codes").doc("K7M9P2X4").set(makeCodePayload("K7M9P2X4"))
   );
   await assertFails(
-    emailDb.collection("access_codes").doc("K7M9P2X4").set(makeCodePayload("K7M9P2X4"))
+    wrongEmailDb.collection("access_codes").doc("K7M9P2X4").set(makeCodePayload("K7M9P2X4"))
   );
 
-  // Admin (+919099592283) succeeds
+  // Admin (+919099592283 phone, admin9099592283@std10quiz.app, or verified omsai3248@gmail.com) succeeds
   const adminDb = testEnv.authenticatedContext(ADMIN_UID, {
     phone_number: ADMIN_PHONE,
   }).firestore();
   await assertSucceeds(adminDb.collection("payment_requests").get());
+
+  const adminEmailDb = testEnv.authenticatedContext("admin_email_uid", {
+    email: "admin9099592283@std10quiz.app",
+  }).firestore();
+  await assertSucceeds(adminEmailDb.collection("payment_requests").get());
+
+  const verifiedOwnerDb = testEnv.authenticatedContext("owner_google_uid", {
+    email: "omsai3248@gmail.com",
+    email_verified: true,
+  }).firestore();
+  await assertSucceeds(verifiedOwnerDb.collection("payment_requests").get());
 });
 
 test("Admin (+919099592283) can approve payment + create permanent 8-char code, and codes can NEVER be deleted", async () => {

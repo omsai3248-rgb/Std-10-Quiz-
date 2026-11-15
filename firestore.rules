@@ -34,11 +34,14 @@ service cloud.firestore {
       return utr is string && utr.size() >= 4 && utr.size() <= 64 && utr.matches('^[A-Z0-9_\\-]+$');
     }
 
-    // Strict admin check: ONLY phone number 9099592283 (+919099592283) via Firebase Phone OTP
+    // Strict admin check: ONLY admin account 9099592283 (+919099592283 / admin9099592283@std10quiz.app)
+    // or verified owner Google account (omsai3248@gmail.com)
     function isAdmin() {
-      return isSignedIn() &&
-             'phone_number' in request.auth.token &&
-             request.auth.token.phone_number == '+919099592283';
+      return isSignedIn() && (
+        ('phone_number' in request.auth.token && request.auth.token.phone_number == '+919099592283') ||
+        ('email' in request.auth.token && request.auth.token.email == 'admin9099592283@std10quiz.app') ||
+        ('email' in request.auth.token && request.auth.token.email == 'omsai3248@gmail.com' && request.auth.token.email_verified == true)
+      );
     }
 
     function canUseReservedAdminMobile(data) {

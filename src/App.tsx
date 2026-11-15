@@ -31,6 +31,7 @@ import {
   rejectPaymentRequest,
   saveMyPaymentRequestId,
   saveReleaseConfig,
+  signInAdminWithGoogle,
   submitPaymentRequest,
 } from './services/quizRepository';
 import {
@@ -95,6 +96,7 @@ export const App: React.FC = () => {
 
   const [authUser, setAuthUser] = useState<User | null>(null);
   const [authInitialized, setAuthInitialized] = useState(false);
+  const [localAdminAuthed, setLocalAdminAuthed] = useState(false);
 
   const [student, setStudent] = useState<StudentProfile | null>(null);
   const [savedUserMeta, setSavedUserMeta] = useState<{ name: string; mobile: string }>(
@@ -224,10 +226,12 @@ export const App: React.FC = () => {
     return () => unsub();
   }, []);
 
-  const isAdmin = useMemo(() => {
+  const isFirebaseAdmin = useMemo(() => {
     if (!authUser) return false;
-    return isAdminAccount(authUser.phoneNumber ?? '');
+    return isAdminAccount(authUser.phoneNumber ?? '', authUser.email ?? '');
   }, [authUser]);
+
+  const isAdmin = localAdminAuthed || isFirebaseAdmin;
 
   const effectiveUnlockedSubjects = useMemo(() => {
     const set = new Set<string>(localUnlockedSubjects);
@@ -241,7 +245,7 @@ export const App: React.FC = () => {
 
   // Realtime Firestore listeners
   useEffect(() => {
-    if (!isAdmin) {
+    if (!isFirebaseAdmin) {
       knownPendingIdsRef.current = null;
       knownUsedCodesRef.current = null;
       setAllPayments([]);
@@ -266,7 +270,7 @@ export const App: React.FC = () => {
       unsubs.push(observePaymentRequestsByIds(myPaymentIds, setMyPayments));
     }
 
-    if (isAdmin) {
+    if (isFirebaseAdmin) {
       const onAdminListenerError = (err: unknown) => {
         setBanner({
           isError: true,
@@ -366,7 +370,7 @@ export const App: React.FC = () => {
     return () => {
       unsubs.forEach((u) => u());
     };
-  }, [authUser, isAdmin, myPaymentIds, syncVersion]);
+  }, [authUser, isFirebaseAdmin, myPaymentIds, syncVersion]);
 
   useEffect(() => {
     if (!banner) return;
@@ -521,7 +525,10 @@ export const App: React.FC = () => {
     adminNote: string,
     subjectId: string
   ) => {
-    if (!isAdmin) return;
+    if (!isFirebaseAdmin) {
+      setBanner({ isError: true, message: t.firebaseNeedsAuthDesc });
+      return;
+    }
     setIsBusy(true);
     setBanner(null);
     const resolvedSub = subjectId || resolvePaymentSubjectId(req);
@@ -559,7 +566,10 @@ export const App: React.FC = () => {
   };
 
   const handleRejectPayment = async (req: PaymentRequest, reason: string) => {
-    if (!isAdmin) return;
+    if (!isFirebaseAdmin) {
+      setBanner({ isError: true, message: t.firebaseNeedsAuthDesc });
+      return;
+    }
     setIsBusy(true);
     setBanner(null);
     try {
@@ -576,7 +586,10 @@ export const App: React.FC = () => {
   };
 
   const handleGenerateBulkCodes = async (count: number, batchName: string, subjectId: string) => {
-    if (!isAdmin) return;
+    if (!isFirebaseAdmin) {
+      setBanner({ isError: true, message: t.firebaseNeedsAuthDesc });
+      return;
+    }
     setIsBusy(true);
     try {
       const codes = await generateBulkAccessCodes(count, batchName, subjectId);
@@ -596,7 +609,10 @@ export const App: React.FC = () => {
   };
 
   const handleSaveGithubRepo = async (repo: string, notes: string) => {
-    if (!isAdmin) return;
+    if (!isFirebaseAdmin) {
+      setBanner({ isError: true, message: t.firebaseNeedsAuthDesc });
+      return;
+    }
     setIsBusy(true);
     try {
       await saveReleaseConfig(repo, notes);
@@ -615,8 +631,51 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleAdminLoginSuccess = (mode: 'firebase' | 'local') => {
+    setLocalAdminAuthed(true);
+    setRoute({ name: 'public', tab: 'admin' });
+    setBanner({
+      isError: false,
+      message:
+        mode === 'local'
+          ? t.firebaseNeedsAuthDesc
+          : lang === 'en'
+            ? 'Firebase Admin connected!'
+            : 'Firebase એડમિન સફળતાપૂર્વક ચાલુ થઈ ગયું છે!',
+    });
+  };
+
+  const handleConnectFirebaseGoogle = async () => {
+    setIsBusy(true);
+    setBanner(null);
+    try {
+      await signInAdminWithGoogle();
+      setLocalAdminAuthed(true);
+      setRoute({ name: 'public', tab: 'admin' });
+      setBanner({
+        isError: false,
+        message:
+          lang === 'en'
+            ? 'Firebase Admin connected via Google (omsai3248@gmail.com)!'
+            : 'Google (omsai3248@gmail.com) વડે Firebase ચાલુ થઈ ગયું છે!',
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : '';
+      setBanner({
+        isError: true,
+        message:
+          msg === 'ONLY_ADMIN_GOOGLE_EMAIL'
+            ? t.errWrongAdminGoogleAccount
+            : formatAppError(err, 'Google Sign-In failed'),
+      });
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
   const handleAdminSignOut = async () => {
     try {
+      setLocalAdminAuthed(false);
       await signOut(auth);
       setApprovedConfirmation(null);
       setRoute({ name: 'public', tab: 'quiz' });
@@ -652,6 +711,7 @@ export const App: React.FC = () => {
         currentVersionName={APP_VERSION_NAME}
         isBusy={isBusy}
         isCheckingUpdate={isCheckingUpdate}
+        isFirebaseConnected={isFirebaseAdmin}
         approvedConfirmation={approvedConfirmation}
         onDismissApprovedConfirmation={() => setApprovedConfirmation(null)}
         onBackToPublic={() => setRoute({ name: 'public', tab: 'quiz' })}
@@ -659,6 +719,7 @@ export const App: React.FC = () => {
         onToggleSound={() => setIsSoundEnabled((prev) => !prev)}
         onClearAlerts={() => setLiveAlerts([])}
         onSignOut={() => void handleAdminSignOut()}
+        onConnectFirebaseGoogle={() => void handleConnectFirebaseGoogle()}
         onGenerateBulkCodes={(c, b, s) => void handleGenerateBulkCodes(c, b, s)}
         onApprovePayment={(r, n, s) => void handleApprovePayment(r, n, s)}
         onRejectPayment={(r, reason) => void handleRejectPayment(r, reason)}
@@ -744,7 +805,7 @@ export const App: React.FC = () => {
               initialName={savedUserMeta.name}
               initialMobile={savedUserMeta.mobile}
               onLoginSuccess={handleStudentLogin}
-              onOpenAdminLogin={() => setRoute({ name: 'public', tab: 'admin' })}
+              onAdminAuthenticated={handleAdminLoginSuccess}
             />
           )}
 
@@ -765,17 +826,7 @@ export const App: React.FC = () => {
           )}
 
           {activeTab === 'admin' && !isAdmin && (
-            <AdminPhoneLoginScreen
-              onAdminAuthenticated={() => {
-                setBanner({
-                  isError: false,
-                  message:
-                    lang === 'en'
-                      ? 'Admin authenticated (+91 9099592283)'
-                      : 'એડમિન લૉગિન સફળ (+91 9099592283)',
-                });
-              }}
-            />
+            <AdminPhoneLoginScreen onAdminAuthenticated={handleAdminLoginSuccess} />
           )}
         </main>
       </div>

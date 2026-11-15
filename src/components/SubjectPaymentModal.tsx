@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ArrowLeft,
   CheckCircle2,
   Clock,
   Copy,
@@ -125,7 +126,7 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
       const matched = myPayments.filter((p) => p.id === submittedRequestId);
       if (matched.length > 0) return matched;
     }
-    return myPayments.slice(0, 2);
+    return myPayments.slice(0, 3);
   }, [myPayments, submittedRequestId]);
 
   if (!isOpen) return null;
@@ -266,52 +267,62 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-3 sm:p-4"
+      className="fixed inset-0 z-50 overflow-y-auto bg-[#FAF9F5] dark:bg-[#0B1120] text-[#0F172A] dark:text-[#F8FAFC]"
       role="dialog"
       aria-modal="true"
-      onClick={onClose}
     >
-      <div
-        className="w-full max-w-lg max-h-[92vh] overflow-y-auto rounded-3xl bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] shadow-2xl p-4 sm:p-5 space-y-4"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="flex items-start justify-between gap-2">
-          <div>
-            <h3 className="text-base sm:text-lg font-extrabold">
-              {defaultSubjectId === 'all'
-                ? t.unlockAllBannerTitle
-                : `${getSubjectDisplayName(defaultSubjectId, lang)} • ${lang === 'en' ? 'Unlock Quiz' : 'ક્વિઝ અનલૉક કરો'}`}
-            </h3>
-            <p className="text-xs text-[#475569] dark:text-[#94A3B8]">
-              {studentName} • +91 {studentMobile}
-            </p>
+      {/* Sticky Full-Screen Header */}
+      <header className="sticky top-0 z-10 bg-white/95 dark:bg-[#1E293B]/95 backdrop-blur border-b border-[#E2E8F0] dark:border-[#334155]">
+        <div className="max-w-2xl mx-auto px-3 sm:px-5 py-2.5 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label={t.closeBtn}
+              className="h-11 w-11 rounded-xl border border-[#CBD5E1] dark:border-[#334155] flex items-center justify-center hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer shrink-0"
+            >
+              <ArrowLeft className="h-5 w-5" />
+            </button>
+            <div className="min-w-0">
+              <h3 className="text-sm sm:text-base font-extrabold leading-snug break-words">
+                {defaultSubjectId === 'all'
+                  ? t.unlockAllBannerTitle
+                  : `${getSubjectDisplayName(defaultSubjectId, lang)} • ${lang === 'en' ? 'Unlock Quiz' : 'ક્વિઝ અનલૉક કરો'}`}
+              </h3>
+              <p className="text-xs text-[#475569] dark:text-[#94A3B8] truncate">
+                {studentName} • +91 {studentMobile}
+              </p>
+            </div>
           </div>
+
           <button
             type="button"
             onClick={onClose}
             aria-label={t.closeBtn}
-            className="h-9 w-9 rounded-xl border border-[#CBD5E1] dark:border-[#334155] flex items-center justify-center hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer shrink-0"
+            className="h-11 w-11 rounded-xl border border-[#CBD5E1] dark:border-[#334155] flex items-center justify-center hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer shrink-0"
           >
-            <X className="h-4 w-4" />
+            <X className="h-5 w-5" />
           </button>
         </div>
+      </header>
 
+      {/* Full-Width Scrollable Payment & Unlock Body */}
+      <main className="max-w-2xl mx-auto px-3.5 sm:px-5 py-4 pb-24 space-y-4">
         {/* 2-Tab Switcher: UPI Payment vs Code */}
-        <div className="grid grid-cols-2 gap-1.5 rounded-xl bg-[#EFF4FA] dark:bg-[#0F172A] p-1">
+        <div className="grid grid-cols-2 gap-2 rounded-2xl bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] p-1.5 shadow-sm">
           <button
             type="button"
             onClick={() => {
               setActiveTab('pay');
               setLocalError(null);
             }}
-            className={`h-10 rounded-lg text-xs font-extrabold flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+            className={`min-h-[48px] py-2 px-2.5 rounded-xl text-xs sm:text-sm font-extrabold flex items-center justify-center gap-1.5 text-center leading-tight transition-colors cursor-pointer ${
               activeTab === 'pay'
                 ? 'bg-[#1E3A8A] text-white shadow-sm'
-                : 'text-[#475569] dark:text-[#94A3B8]'
+                : 'text-[#475569] dark:text-[#94A3B8] hover:bg-slate-100 dark:hover:bg-slate-800'
             }`}
           >
-            <IndianRupee className="h-3.5 w-3.5" />
+            <IndianRupee className="h-4 w-4 shrink-0" />
             <span>{t.payTabLabel}</span>
           </button>
 
@@ -321,85 +332,103 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
               setActiveTab('code');
               setLocalError(null);
             }}
-            className={`h-10 rounded-lg text-xs font-extrabold flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+            className={`min-h-[48px] py-2 px-2.5 rounded-xl text-xs sm:text-sm font-extrabold flex items-center justify-center gap-1.5 text-center leading-tight transition-colors cursor-pointer ${
               activeTab === 'code'
                 ? 'bg-[#1E3A8A] text-white shadow-sm'
-                : 'text-[#475569] dark:text-[#94A3B8]'
+                : 'text-[#475569] dark:text-[#94A3B8] hover:bg-slate-100 dark:hover:bg-slate-800'
             }`}
           >
-            <KeyRound className="h-3.5 w-3.5" />
+            <KeyRound className="h-4 w-4 shrink-0" />
             <span>{t.codeTabLabel}</span>
           </button>
         </div>
 
         {activeTab === 'pay' ? (
           <div className="space-y-4">
-            {/* Fixed Price Plan Selector: Single Subject ₹24 vs All Subjects ₹49 */}
-            <div className="space-y-1.5">
-              <p className="text-xs font-bold text-slate-700 dark:text-slate-300">
-                {t.fieldSubject} ({t.fixedPriceBadge})
-              </p>
-              <div className="grid grid-cols-2 gap-2.5">
+            {/* Fixed Price Plan Selector Card */}
+            <section className="rounded-2xl bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] p-4 space-y-2.5 shadow-sm">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs sm:text-sm font-extrabold text-slate-800 dark:text-slate-100">
+                  {t.fieldSubject}
+                </p>
+                <span className="rounded-full bg-[#DBEAFE] dark:bg-[#1E3A5F] text-[#1E3A8A] dark:text-[#93C5FD] px-2.5 py-0.5 text-[11px] font-bold">
+                  {t.fixedPriceBadge}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                 {defaultSubjectId !== 'all' && (
                   <button
                     type="button"
                     onClick={() => setSelectedPlanSubject(singleSubjectOptionId)}
-                    className={`rounded-xl p-3 border text-left transition-colors cursor-pointer ${
+                    className={`rounded-xl p-3.5 border-2 text-left transition-colors cursor-pointer flex items-center justify-between gap-3 ${
                       selectedPlanSubject === singleSubjectOptionId
-                        ? 'bg-[#DBEAFE] dark:bg-[#1E3A5F] border-[#1E3A8A] text-[#1E3A8A] dark:text-white'
+                        ? 'bg-[#DBEAFE]/70 dark:bg-[#1E3A5F] border-[#1E3A8A] text-[#1E3A8A] dark:text-white'
                         : 'bg-[#FAF9F5] dark:bg-[#0F172A] border-[#CBD5E1] dark:border-[#334155]'
                     }`}
                   >
-                    <p className="text-[11px] font-bold opacity-85">
-                      {getSubjectDisplayName(singleSubjectOptionId, lang)}
-                    </p>
-                    <p className="text-lg font-extrabold tabular-nums">₹{PRICE_SINGLE_SUBJECT}</p>
-                    <p className="text-[10px] font-semibold opacity-75">
-                      {t.unlockSingleSubjectLabel}
-                    </p>
+                    <div className="min-w-0">
+                      <p className="text-xs font-extrabold">
+                        {getSubjectDisplayName(singleSubjectOptionId, lang)}
+                      </p>
+                      <p className="text-[11px] font-semibold opacity-80 mt-0.5">
+                        {t.unlockSingleSubjectLabel}
+                      </p>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <p className="text-xl font-extrabold tabular-nums">
+                        ₹{PRICE_SINGLE_SUBJECT}
+                      </p>
+                      <span className="text-[10px] font-bold uppercase opacity-75">Fix</span>
+                    </div>
                   </button>
                 )}
 
                 <button
                   type="button"
                   onClick={() => setSelectedPlanSubject('all')}
-                  className={`rounded-xl p-3 border text-left transition-colors cursor-pointer ${
-                    defaultSubjectId === 'all' ? 'col-span-2' : ''
+                  className={`rounded-xl p-3.5 border-2 text-left transition-colors cursor-pointer flex items-center justify-between gap-3 ${
+                    defaultSubjectId === 'all' ? 'sm:col-span-2' : ''
                   } ${
                     selectedPlanSubject === 'all'
                       ? 'bg-[#FEF3C7] dark:bg-[#451A03] border-[#D97706] text-[#92400E] dark:text-[#FDE68A]'
                       : 'bg-[#FAF9F5] dark:bg-[#0F172A] border-[#CBD5E1] dark:border-[#334155]'
                   }`}
                 >
-                  <p className="text-[11px] font-bold opacity-85">
-                    {getSubjectDisplayName('all', lang)}
-                  </p>
-                  <p className="text-lg font-extrabold tabular-nums">₹{PRICE_ALL_SUBJECTS}</p>
-                  <p className="text-[10px] font-semibold opacity-75">
-                    {t.unlockAllSubjectsLabel}
-                  </p>
+                  <div className="min-w-0">
+                    <p className="text-xs font-extrabold">{getSubjectDisplayName('all', lang)}</p>
+                    <p className="text-[11px] font-semibold opacity-80 mt-0.5 leading-snug">
+                      {t.unlockAllSubjectsLabel}
+                    </p>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <p className="text-xl font-extrabold tabular-nums">₹{PRICE_ALL_SUBJECTS}</p>
+                    <span className="text-[10px] font-bold uppercase opacity-75">Fix</span>
+                  </div>
                 </button>
               </div>
-            </div>
+            </section>
 
             {/* Single Clean UPI Payment Card (Only UPI) */}
-            <div className="rounded-2xl bg-[#FEF3C7] dark:bg-[#451A03] border border-[#F59E0B]/35 p-3.5 text-[#92400E] dark:text-[#FDE68A] space-y-2.5">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-xs font-extrabold">{ADMIN_UPI_NAME}</span>
-                <span className="rounded-lg bg-white/80 dark:bg-black/30 px-2.5 py-0.5 text-xs font-extrabold tabular-nums">
+            <section className="rounded-2xl bg-[#FEF3C7] dark:bg-[#451A03] border border-[#F59E0B]/40 p-4 text-[#92400E] dark:text-[#FDE68A] space-y-3 shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-xs sm:text-sm font-extrabold break-words">
+                  {ADMIN_UPI_NAME}
+                </span>
+                <span className="rounded-lg bg-white/85 dark:bg-black/30 px-3 py-1 text-sm font-extrabold tabular-nums">
                   ₹{fixedAmount}
                 </span>
               </div>
 
-              <div className="flex items-center justify-between gap-2 rounded-xl bg-white/80 dark:bg-black/25 px-3 py-2">
+              <div className="flex items-center justify-between gap-2 rounded-xl bg-white/85 dark:bg-black/25 px-3.5 py-2.5">
                 <div className="min-w-0">
-                  <p className="text-[10px] opacity-75">UPI ID</p>
-                  <p className="text-sm font-extrabold truncate">{ADMIN_UPI_ID}</p>
+                  <p className="text-[10px] font-bold opacity-75">UPI ID</p>
+                  <p className="text-sm sm:text-base font-extrabold break-all">{ADMIN_UPI_ID}</p>
                 </div>
                 <button
                   type="button"
                   onClick={() => void handleCopy(ADMIN_UPI_ID)}
-                  className="h-8 px-2.5 rounded-lg bg-[#92400E]/10 hover:bg-[#92400E]/20 dark:bg-white/10 text-xs font-bold flex items-center gap-1 shrink-0 cursor-pointer"
+                  className="min-h-[40px] px-3 rounded-lg bg-[#92400E]/15 hover:bg-[#92400E]/25 dark:bg-white/15 text-xs font-extrabold flex items-center gap-1.5 shrink-0 cursor-pointer"
                 >
                   <Copy className="h-3.5 w-3.5" />
                   <span>{t.payUpiCopy}</span>
@@ -417,19 +446,22 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
                   );
                   launchUpiPayment(upiUrl);
                 }}
-                className="w-full h-11 rounded-xl bg-[#1E3A8A] hover:bg-[#172554] text-white text-xs sm:text-sm font-extrabold flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                className="w-full min-h-[48px] py-2.5 px-4 rounded-xl bg-[#1E3A8A] hover:bg-[#172554] text-white text-sm font-extrabold flex items-center justify-center gap-2 transition-colors cursor-pointer"
               >
-                <ExternalLink className="h-4 w-4" />
+                <ExternalLink className="h-4 w-4 shrink-0" />
                 <span>
                   {t.payUpiOpenApp} (₹{fixedAmount})
                 </span>
               </button>
 
-              <p className="text-[11px] font-medium opacity-85">{t.payUpiQuickTip}</p>
-            </div>
+              <p className="text-xs font-medium opacity-90 leading-relaxed">{t.payUpiQuickTip}</p>
+            </section>
 
             {/* UTR & Screenshot Form */}
-            <form onSubmit={(e) => void handlePaymentSubmit(e)} className="space-y-3">
+            <form
+              onSubmit={(e) => void handlePaymentSubmit(e)}
+              className="rounded-2xl bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] p-4 space-y-3.5 shadow-sm"
+            >
               <div>
                 <label
                   htmlFor="modal-utr-input"
@@ -447,7 +479,7 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
                     setLocalError(null);
                   }}
                   placeholder={t.fieldUtrPlaceholder}
-                  className="w-full h-11 rounded-xl border border-[#CBD5E1] dark:border-[#334155] bg-[#FAF9F5] dark:bg-[#0F172A] px-3 text-sm font-semibold tracking-wide outline-none focus:border-[#1E3A8A]"
+                  className="w-full h-12 rounded-xl border border-[#CBD5E1] dark:border-[#334155] bg-[#FAF9F5] dark:bg-[#0F172A] px-3.5 text-sm font-semibold tracking-wide outline-none focus:border-[#1E3A8A]"
                 />
               </div>
 
@@ -463,9 +495,9 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
                   type="button"
                   disabled={isProcessingImage || isBusy}
                   onClick={() => fileInputRef.current?.click()}
-                  className="w-full h-11 rounded-xl border-2 border-dashed border-[#CBD5E1] dark:border-[#334155] hover:border-[#1E3A8A] text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 hover:bg-slate-50 dark:hover:bg-slate-900/50 transition-colors disabled:opacity-50 cursor-pointer"
+                  className="w-full min-h-[52px] px-3 py-2.5 rounded-xl border-2 border-dashed border-[#CBD5E1] dark:border-[#334155] hover:border-[#1E3A8A] text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 hover:bg-slate-50 dark:hover:bg-slate-900/50 transition-colors disabled:opacity-50 cursor-pointer"
                 >
-                  <ImageIcon className="h-4 w-4 text-[#1E3A8A] dark:text-[#93C5FD]" />
+                  <ImageIcon className="h-4 w-4 text-[#1E3A8A] dark:text-[#93C5FD] shrink-0" />
                   <span>
                     {isProcessingImage
                       ? t.preparingImage
@@ -476,7 +508,7 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
                 </button>
 
                 {previewDataUrl && (
-                  <div className="h-40 w-full rounded-xl border border-[#CBD5E1] dark:border-[#334155] bg-[#FAF9F5] dark:bg-[#0F172A] overflow-hidden flex items-center justify-center p-1.5">
+                  <div className="h-48 w-full rounded-xl border border-[#CBD5E1] dark:border-[#334155] bg-[#FAF9F5] dark:bg-[#0F172A] overflow-hidden flex items-center justify-center p-2">
                     <img
                       src={previewDataUrl}
                       alt={t.fieldScreenshot}
@@ -498,19 +530,19 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
               <button
                 type="submit"
                 disabled={isBusy || isProcessingImage}
-                className="w-full h-12 rounded-xl bg-[#D97706] hover:bg-[#B45309] text-white text-sm font-extrabold flex items-center justify-center gap-2 transition-colors disabled:opacity-60 cursor-pointer"
+                className="w-full min-h-[52px] py-3 px-4 rounded-xl bg-[#D97706] hover:bg-[#B45309] text-white text-sm font-extrabold flex items-center justify-center gap-2 transition-colors disabled:opacity-60 cursor-pointer"
               >
-                <Upload className="h-4 w-4" />
+                <Upload className="h-4 w-4 shrink-0" />
                 <span>{isBusy ? t.submittingBtn : t.submitToAdminBtn}</span>
               </button>
             </form>
 
-            {/* Live Request Status inside Modal */}
+            {/* Live Request Status */}
             {relevantPayments.length > 0 && (
-              <div className="space-y-2 pt-2 border-t border-slate-100 dark:border-slate-800">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-extrabold">{t.myRequestsTitle}</span>
-                  <span className="inline-flex items-center gap-1 rounded-full bg-[#D1FAE5] dark:bg-[#064E3B] text-[#064E3B] dark:text-[#D1FAE5] px-2 py-0.5 text-[10px] font-bold">
+              <section className="rounded-2xl bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] p-4 space-y-2.5 shadow-sm">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs sm:text-sm font-extrabold">{t.myRequestsTitle}</span>
+                  <span className="inline-flex items-center gap-1 rounded-full bg-[#D1FAE5] dark:bg-[#064E3B] text-[#064E3B] dark:text-[#D1FAE5] px-2.5 py-0.5 text-[10px] font-bold">
                     <Radio className="h-3 w-3 animate-pulse" />
                     <span>{t.liveBadge}</span>
                   </span>
@@ -524,20 +556,22 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
                       className="rounded-xl bg-[#EFF4FA] dark:bg-[#0F172A] border border-[#CBD5E1] dark:border-[#334155] p-3 space-y-2"
                     >
                       <div className="flex items-center justify-between gap-2 text-xs">
-                        <div className="flex items-center gap-2 min-w-0">
+                        <div className="flex items-center gap-2.5 min-w-0">
                           {thumb && (
                             <img
                               src={thumb}
                               alt={t.zoomModalTitle}
-                              className="h-9 w-9 rounded-lg object-cover shrink-0 border border-slate-300 dark:border-slate-700"
+                              className="h-10 w-10 rounded-lg object-cover shrink-0 border border-slate-300 dark:border-slate-700"
                             />
                           )}
                           <div className="min-w-0">
                             <p className="font-bold truncate">
-                              ₹{req.amountRupees} • {getSubjectDisplayName(resolvePaymentSubjectId(req), lang)}
+                              ₹{req.amountRupees} •{' '}
+                              {getSubjectDisplayName(resolvePaymentSubjectId(req), lang)}
                             </p>
-                            <p className="text-[10px] text-slate-500 truncate">
-                              UTR: {req.upiTransactionRef} • {formatTimestampLabel(req.createdAt, lang)}
+                            <p className="text-[11px] text-slate-500 truncate">
+                              UTR: {req.upiTransactionRef} •{' '}
+                              {formatTimestampLabel(req.createdAt, lang)}
                             </p>
                           </div>
                         </div>
@@ -559,14 +593,14 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
                       </div>
 
                       {req.status === 'pending' && (
-                        <div className="flex items-center gap-1.5 text-[11px] font-semibold text-[#92400E] dark:text-[#FDE68A]">
+                        <div className="flex items-center gap-1.5 text-xs font-semibold text-[#92400E] dark:text-[#FDE68A]">
                           <Clock className="h-3.5 w-3.5 shrink-0 animate-pulse" />
                           <span>{t.waitingApprovalLive}</span>
                         </div>
                       )}
 
                       {req.status === 'rejected' && (
-                        <div className="flex items-center gap-1.5 text-[11px] font-semibold text-[#7F1D1D] dark:text-[#FEE2E2]">
+                        <div className="flex items-center gap-1.5 text-xs font-semibold text-[#7F1D1D] dark:text-[#FEE2E2]">
                           <XCircle className="h-3.5 w-3.5 shrink-0" />
                           <span>{req.adminNote || t.statusRejected}</span>
                         </div>
@@ -584,7 +618,7 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
                             type="button"
                             disabled={isBusy}
                             onClick={() => void handleQuickUnlockWithApprovedCode(req)}
-                            className="h-8 px-3 rounded-lg bg-[#047857] text-white text-xs font-extrabold cursor-pointer"
+                            className="min-h-[36px] px-3 rounded-lg bg-[#047857] text-white text-xs font-extrabold cursor-pointer"
                           >
                             {t.useThisCodeBtn}
                           </button>
@@ -593,12 +627,17 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
                     </div>
                   );
                 })}
-              </div>
+              </section>
             )}
           </div>
         ) : (
-          <form onSubmit={(e) => void handleCodeSubmit(e)} className="space-y-3.5">
-            <p className="text-xs text-[#475569] dark:text-[#94A3B8]">{t.useCodeSubtitle}</p>
+          <form
+            onSubmit={(e) => void handleCodeSubmit(e)}
+            className="rounded-2xl bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] p-4 space-y-4 shadow-sm"
+          >
+            <p className="text-xs sm:text-sm text-[#475569] dark:text-[#94A3B8] leading-relaxed">
+              {t.useCodeSubtitle}
+            </p>
 
             <div>
               <label
@@ -635,14 +674,14 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
             <button
               type="submit"
               disabled={isBusy}
-              className="w-full h-12 rounded-xl bg-[#1E3A8A] hover:bg-[#172554] dark:bg-[#2563EB] text-white text-sm font-extrabold flex items-center justify-center gap-2 transition-colors disabled:opacity-60 cursor-pointer"
+              className="w-full min-h-[52px] rounded-xl bg-[#1E3A8A] hover:bg-[#172554] dark:bg-[#2563EB] text-white text-sm font-extrabold flex items-center justify-center gap-2 transition-colors disabled:opacity-60 cursor-pointer"
             >
               <LockOpen className="h-4 w-4" />
               <span>{isBusy ? t.redeemingBtn : t.redeemNowBtn}</span>
             </button>
           </form>
         )}
-      </div>
+      </main>
     </div>
   );
 };

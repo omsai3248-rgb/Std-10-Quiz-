@@ -1,18 +1,24 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useState } from 'react';
 import {
-  RecaptchaVerifier,
-  signInWithPhoneNumber,
-  signOut,
-  type ConfirmationResult,
-} from 'firebase/auth';
-import { Lock, LogIn, MessageSquare, ShieldAlert, ShieldCheck, Smartphone } from 'lucide-react';
-import { auth } from '../firebase';
+  Eye,
+  EyeOff,
+  Lock,
+  LogIn,
+  ShieldAlert,
+  ShieldCheck,
+  Smartphone,
+} from 'lucide-react';
 import { useTranslation } from '../i18n/translations';
-import { ADMIN_PHONE_TEN_DIGITS } from '../services/quizRepository';
+import { extractReadableErrorMessage } from '../services/firestoreErrorHandler';
+import {
+  ADMIN_PHONE_TEN_DIGITS,
+  signInAdminWithGoogle,
+  signInAsAdminWithPasscode,
+} from '../services/quizRepository';
 import { normalizeIndianMobileInput } from '../utils/imageUtils';
 
 interface AdminPhoneLoginScreenProps {
-  onAdminAuthenticated: () => void;
+  onAdminAuthenticated: (mode: 'firebase' | 'local') => void;
 }
 
 export const AdminPhoneLoginScreen: React.FC<AdminPhoneLoginScreenProps> = ({
@@ -20,132 +26,64 @@ export const AdminPhoneLoginScreen: React.FC<AdminPhoneLoginScreenProps> = ({
 }) => {
   const { lang, t } = useTranslation();
 
-  const [phoneInput, setPhoneInput] = useState(ADMIN_PHONE_TEN_DIGITS);
-  const [otpInput, setOtpInput] = useState('');
-  const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | null>(null);
+  const [phoneInput, setPhoneInput] = useState('');
+  const [passwordInput, setPasswordInput] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const recaptchaRef = useRef<RecaptchaVerifier | null>(null);
-  const recaptchaContainerRef = useRef<HTMLDivElement | null>(null);
+  const cleanDigits = phoneInput.replace(/\D/g, '');
+  const isAdminNumberTyped = cleanDigits === ADMIN_PHONE_TEN_DIGITS;
 
-  const clearRecaptcha = () => {
-    try {
-      recaptchaRef.current?.clear();
-    } catch {
-      // Ignore cleanup errors
-    }
-    recaptchaRef.current = null;
-  };
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isLoading) return;
+    setErrorMessage(null);
 
-  useEffect(() => {
-    return () => {
-      clearRecaptcha();
-    };
-  }, []);
-
-  const handleSendOtp = async () => {
-    const digits = phoneInput.replace(/\D/g, '').slice(-10);
-    if (digits !== ADMIN_PHONE_TEN_DIGITS) {
+    if (!isAdminNumberTyped) {
       setErrorMessage(t.onlyAdminAllowedError);
+      return;
+    }
+    if (!passwordInput) {
+      setErrorMessage(t.errWrongAdminPassword);
       return;
     }
 
     setIsLoading(true);
-    setErrorMessage(null);
     try {
-      clearRecaptcha();
-      if (!recaptchaContainerRef.current) {
-        throw new Error('reCAPTCHA container unavailable');
-      }
-      const verifier = new RecaptchaVerifier(auth, recaptchaContainerRef.current, {
-        size: 'invisible',
-      });
-      recaptchaRef.current = verifier;
-
-      const result = await signInWithPhoneNumber(auth, `+91${ADMIN_PHONE_TEN_DIGITS}`, verifier);
-      setConfirmationResult(result);
+      const mode = await signInAsAdminWithPasscode(cleanDigits, passwordInput);
+      setPasswordInput('');
+      onAdminAuthenticated(mode);
     } catch (err: unknown) {
-      clearRecaptcha();
-      const code = (err as { code?: string })?.code ?? '';
-      if (code === 'auth/operation-not-allowed') {
-        setErrorMessage(
-          lang === 'en'
-            ? 'Firebase Phone Auth is disabled. Enable Phone sign-in in Firebase Console → Authentication → Sign-in method.'
-            : 'Firebase Phone Auth બંધ છે. Firebase Console → Authentication → Sign-in method માં Phone ચાલુ કરો.'
-        );
-      } else if (code === 'auth/unauthorized-domain') {
-        setErrorMessage(
-          lang === 'en'
-            ? 'This domain is not authorized for Phone OTP. Add it in Firebase Console → Authentication → Settings → Authorized domains.'
-            : 'આ ડોમેન Authorized નથી. Firebase Console → Authentication → Settings → Authorized domains માં ઉમેરો.'
-        );
-      } else if (code === 'auth/too-many-requests') {
-        setErrorMessage(
-          lang === 'en'
-            ? 'Too many OTP requests. Please wait a bit before retrying.'
-            : 'ઘણી બધી OTP વિનંતીઓ થઈ છે. થોડી વાર પછી ફરી પ્રયાસ કરો.'
-        );
-      } else if (code === 'auth/captcha-check-failed') {
-        setErrorMessage(
-          lang === 'en'
-            ? 'reCAPTCHA verification failed. Please reload and try again.'
-            : 'reCAPTCHA ચકાસણી નિષ્ફળ ગઈ. કૃપા કરીને ફરી પ્રયાસ કરો.'
-        );
+      const msg = err instanceof Error ? err.message : '';
+      if (msg === 'INVALID_ADMIN_PASSWORD') {
+        setErrorMessage(t.errWrongAdminPassword);
+      } else if (msg === 'ONLY_ADMIN_NUMBER') {
+        setErrorMessage(t.onlyAdminAllowedError);
       } else {
-        setErrorMessage(
-          err instanceof Error
-            ? err.message
-            : lang === 'en'
-              ? 'Failed to send OTP.'
-              : 'OTP મોકલવામાં ભૂલ આવી.'
-        );
+        setErrorMessage(extractReadableErrorMessage(err, lang));
       }
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleVerifyOtp = async () => {
-    if (!confirmationResult || otpInput.length !== 6) return;
+  const handleGoogleSignIn = async () => {
+    if (isLoading) return;
     setIsLoading(true);
     setErrorMessage(null);
     try {
-      const cred = await confirmationResult.confirm(otpInput);
-      const signedInPhone = cred.user.phoneNumber ?? '';
-      if (signedInPhone !== `+91${ADMIN_PHONE_TEN_DIGITS}`) {
-        await signOut(auth);
-        setErrorMessage(t.onlyAdminAllowedError);
-        return;
-      }
-      onAdminAuthenticated();
+      await signInAdminWithGoogle();
+      onAdminAuthenticated('firebase');
     } catch (err: unknown) {
-      const code = (err as { code?: string })?.code ?? '';
-      if (code === 'auth/code-expired') {
-        setErrorMessage(
-          lang === 'en'
-            ? 'OTP has expired. Please tap Resend OTP.'
-            : 'OTP ની સમયમર્યાદા પૂરી થઈ ગઈ છે. ફરી OTP મોકલો.'
-        );
+      const msg = err instanceof Error ? err.message : '';
+      if (msg === 'ONLY_ADMIN_GOOGLE_EMAIL') {
+        setErrorMessage(t.errWrongAdminGoogleAccount);
       } else {
-        setErrorMessage(
-          lang === 'en'
-            ? 'Invalid or expired 6-digit OTP.'
-            : 'ખોટો અથવા સમાપ્ત થયેલ ૬-અંકનો OTP.'
-        );
+        setErrorMessage(extractReadableErrorMessage(err, lang));
       }
     } finally {
       setIsLoading(false);
-    }
-  };
-
-  const handleFormSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (isLoading) return;
-    if (!confirmationResult) {
-      if (phoneInput.length === 10) void handleSendOtp();
-    } else if (otpInput.length === 6) {
-      void handleVerifyOtp();
     }
   };
 
@@ -167,7 +105,7 @@ export const AdminPhoneLoginScreen: React.FC<AdminPhoneLoginScreenProps> = ({
           <span>{t.adminOnlyNumberNote}</span>
         </div>
 
-        <form onSubmit={handleFormSubmit} className="space-y-3">
+        <form onSubmit={(e) => void handleSubmit(e)} className="space-y-3.5">
           <div>
             <label
               htmlFor="admin-phone-input"
@@ -185,65 +123,52 @@ export const AdminPhoneLoginScreen: React.FC<AdminPhoneLoginScreenProps> = ({
                 type="tel"
                 inputMode="numeric"
                 maxLength={10}
-                disabled={Boolean(confirmationResult) || isLoading}
+                disabled={isLoading}
                 value={phoneInput}
                 onChange={(e) => {
-                  setPhoneInput(normalizeIndianMobileInput(e.target.value));
+                  const next = normalizeIndianMobileInput(e.target.value);
+                  setPhoneInput(next);
+                  if (next !== ADMIN_PHONE_TEN_DIGITS) {
+                    setPasswordInput('');
+                  }
                   setErrorMessage(null);
                 }}
-                className="w-full bg-transparent text-sm font-extrabold tabular-nums outline-none"
+                placeholder={t.fieldMobilePlaceholder}
+                className="w-full bg-transparent text-base font-extrabold tabular-nums outline-none"
               />
             </div>
           </div>
 
-          {confirmationResult && (
-            <div className="space-y-2">
-              <div className="rounded-lg bg-[#D1FAE5]/60 dark:bg-[#064E3B]/50 px-3 py-1.5 text-xs font-bold text-[#064E3B] dark:text-[#D1FAE5]">
-                {t.otpSentBanner}
-              </div>
+          {isAdminNumberTyped && (
+            <div className="space-y-1.5">
               <label
-                htmlFor="admin-otp-input"
-                className="block text-xs font-bold text-slate-700 dark:text-slate-300"
+                htmlFor="admin-password-input"
+                className="block text-xs font-bold text-[#047857] dark:text-[#6EE7B7]"
               >
-                {t.enterOtpLabel}
+                {t.adminPasswordLabel}
               </label>
-              <div className="flex items-center rounded-xl border border-[#CBD5E1] dark:border-[#334155] bg-[#FAF9F5] dark:bg-[#0F172A] px-3.5 h-12 focus-within:border-[#047857]">
-                <Lock className="h-4 w-4 text-slate-400 mr-2 shrink-0" />
+              <div className="flex items-center rounded-xl border border-[#047857] dark:border-[#10B981] bg-[#FAF9F5] dark:bg-[#0F172A] pl-3.5 pr-1 h-12">
+                <Lock className="h-4 w-4 text-[#047857] dark:text-[#6EE7B7] mr-2 shrink-0" />
                 <input
-                  id="admin-otp-input"
-                  type="text"
-                  inputMode="numeric"
-                  maxLength={6}
+                  id="admin-password-input"
+                  type={showPassword ? 'text' : 'password'}
+                  autoComplete="current-password"
                   disabled={isLoading}
-                  value={otpInput}
+                  value={passwordInput}
                   onChange={(e) => {
-                    setOtpInput(e.target.value.replace(/\D/g, '').slice(0, 6));
+                    setPasswordInput(e.target.value);
                     setErrorMessage(null);
                   }}
-                  placeholder="123456"
-                  className="w-full bg-transparent text-base font-extrabold tracking-widest outline-none tabular-nums"
+                  placeholder={t.adminPasswordPlaceholder}
+                  className="w-full bg-transparent text-sm font-bold outline-none"
                 />
-              </div>
-              <div className="flex items-center justify-between text-xs">
                 <button
                   type="button"
-                  disabled={isLoading}
-                  onClick={() => {
-                    setConfirmationResult(null);
-                    setOtpInput('');
-                    setErrorMessage(null);
-                  }}
-                  className="font-bold text-[#1E3A8A] dark:text-[#93C5FD] hover:underline cursor-pointer"
+                  onClick={() => setShowPassword((prev) => !prev)}
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  className="h-11 min-w-[44px] flex items-center justify-center text-slate-500 hover:text-slate-700 dark:text-slate-400 cursor-pointer"
                 >
-                  {t.changeNumberBtn}
-                </button>
-                <button
-                  type="button"
-                  disabled={isLoading}
-                  onClick={() => void handleSendOtp()}
-                  className="font-bold text-[#1E3A8A] dark:text-[#93C5FD] hover:underline cursor-pointer"
-                >
-                  {t.resendOtpBtn}
+                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
               </div>
             </div>
@@ -258,28 +183,29 @@ export const AdminPhoneLoginScreen: React.FC<AdminPhoneLoginScreenProps> = ({
             </div>
           )}
 
-          {!confirmationResult ? (
+          {isAdminNumberTyped && (
             <button
               type="submit"
-              disabled={isLoading || phoneInput.length !== 10}
+              disabled={isLoading}
               className="w-full h-12 rounded-xl bg-[#047857] hover:bg-[#065F46] text-white text-sm font-extrabold flex items-center justify-center gap-2 transition-colors disabled:opacity-55 cursor-pointer"
             >
-              <MessageSquare className="h-4 w-4" />
-              <span>{isLoading ? t.sendingOtpBtn : t.sendOtpBtn}</span>
-            </button>
-          ) : (
-            <button
-              type="submit"
-              disabled={isLoading || otpInput.length !== 6}
-              className="w-full h-12 rounded-xl bg-[#1E3A8A] hover:bg-[#172554] text-white text-sm font-extrabold flex items-center justify-center gap-2 transition-colors disabled:opacity-55 cursor-pointer"
-            >
               <LogIn className="h-4 w-4" />
-              <span>{isLoading ? t.verifyingOtpBtn : t.verifyOtpBtn}</span>
+              <span>{isLoading ? t.loggingInBtn : t.adminLoginBtn}</span>
             </button>
           )}
         </form>
 
-        <div ref={recaptchaContainerRef} />
+        <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
+          <button
+            type="button"
+            disabled={isLoading}
+            onClick={() => void handleGoogleSignIn()}
+            className="w-full min-h-[48px] py-2 px-3 rounded-xl border border-[#CBD5E1] dark:border-[#334155] bg-[#FAF9F5] dark:bg-[#0F172A] hover:bg-slate-100 dark:hover:bg-slate-800 text-xs sm:text-sm font-bold flex items-center justify-center gap-2 transition-colors disabled:opacity-55 cursor-pointer"
+          >
+            <ShieldCheck className="h-4 w-4 text-[#1E3A8A] dark:text-[#93C5FD] shrink-0" />
+            <span>{t.connectFirebaseGoogleBtn}</span>
+          </button>
+        </div>
       </div>
     </div>
   );

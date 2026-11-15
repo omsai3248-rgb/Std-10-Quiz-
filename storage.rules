@@ -8,10 +8,12 @@ service firebase.storage {
                        request.resource.size < 5 * 1024 * 1024 &&
                        request.resource.contentType.matches('image/.*');
 
-      // Only the submitting user or the Admin (+919099592283) can read the payment screenshot
+      // Only the submitting user or Admin can read the payment screenshot
       allow read: if request.auth != null && (
         request.auth.uid == userId ||
-        request.auth.token.phone_number == '+919099592283'
+        ('phone_number' in request.auth.token && request.auth.token.phone_number == '+919099592283') ||
+        ('email' in request.auth.token && request.auth.token.email == 'admin9099592283@std10quiz.app') ||
+        ('email' in request.auth.token && request.auth.token.email == 'omsai3248@gmail.com' && request.auth.token.email_verified == true)
       );
 
       allow update, delete: if false;

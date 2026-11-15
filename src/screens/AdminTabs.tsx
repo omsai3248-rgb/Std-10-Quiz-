@@ -708,50 +708,81 @@ export const AdminFirebaseSetupTab: React.FC<{
   currentVersionName: string;
   isBusy: boolean;
   isCheckingUpdate: boolean;
+  isFirebaseConnected: boolean;
+  onConnectFirebaseGoogle: () => void;
   onSaveGithubRepo: (ownerRepo: string, releaseNotes: string) => void;
   onTestUpdateCheck: () => void;
 }> = (props) => {
-  const { lang } = useTranslation();
+  const { lang, t } = useTranslation();
+  const { isBusy, isFirebaseConnected, onConnectFirebaseGoogle } = props;
 
   return (
     <div className="space-y-4">
       <div className="p-3 sm:p-4 max-w-3xl mx-auto">
-        <div className="rounded-2xl bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] p-5 space-y-3">
-          <div className="flex items-center gap-2">
-            <FolderKanban className="h-5 w-5 text-[#1E3A8A] dark:text-[#93C5FD]" />
-            <h2 className="text-base font-extrabold">
-              {lang === 'gu'
-                ? 'Firebase સેટઅપ ચેકલિસ્ટ (Admin: 9099592283)'
-                : 'Firebase Setup Checklist (Admin: 9099592283)'}
-            </h2>
+        <div className="rounded-2xl bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] p-5 space-y-3.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <FolderKanban className="h-5 w-5 text-[#1E3A8A] dark:text-[#93C5FD]" />
+              <h2 className="text-base font-extrabold">
+                {lang === 'gu'
+                  ? 'Firebase સેટઅપ અને લાઇવ કનેક્શન'
+                  : 'Firebase Setup & Live Connection'}
+              </h2>
+            </div>
+
+            <span
+              className={`rounded-full px-3 py-1 text-xs font-extrabold ${
+                isFirebaseConnected
+                  ? 'bg-[#D1FAE5] text-[#064E3B] dark:bg-[#064E3B] dark:text-[#D1FAE5]'
+                  : 'bg-[#FEF3C7] text-[#92400E] dark:bg-[#451A03] dark:text-[#FDE68A]'
+              }`}
+            >
+              {isFirebaseConnected
+                ? t.firebaseConnectedBadge
+                : lang === 'gu'
+                  ? 'એડમિન લૉગિન બાકી'
+                  : 'Auth Pending'}
+            </span>
+          </div>
+
+          <div className="rounded-xl bg-[#EFF4FA] dark:bg-[#0F172A] p-3 text-xs space-y-1 font-mono break-all">
+            <p>Project ID: cobalt-heuristic-lbcxw</p>
+            <p>Database: ai-studio-quickbookbykiran-476dca03-cd47-421b-8654-39026cc817b1</p>
+            <p>Admin: 9099592283 / omsai3248@gmail.com</p>
           </div>
 
           <ol className="list-decimal pl-5 space-y-2 text-xs leading-relaxed text-[#334155] dark:text-[#CBD5E1]">
             <li>
-              <strong>Firebase Authentication → Sign-in method:</strong>{' '}
+              <strong>Google Sign-In (Web / Preview):</strong>{' '}
               {lang === 'gu'
-                ? 'Anonymous (પબ્લિક યુઝર્સ માટે) અને Phone (એડમિન +919099592283 OTP લૉગિન માટે) બંને ચાલુ કરો.'
-                : 'Enable both Anonymous (for public users) and Phone (for admin +919099592283 OTP login).'}
+                ? 'બ્રાઉઝર/પ્રીવ્યુમાં 1-ક્લિકમાં Firebase ચાલુ કરવા નીચેના Google બટનથી omsai3248@gmail.com વડે સાઇન-ઇન કરો.'
+                : 'Sign in with omsai3248@gmail.com using the Google button below for instant live Firebase admin sync.'}
             </li>
             <li>
-              <strong>Phone Auth Testing:</strong>{' '}
+              <strong>Email/Password (Android APK માટે):</strong>{' '}
               {lang === 'gu'
-                ? 'ટેસ્ટિંગ માટે Firebase Console → Phone → "Phone numbers for testing" માં +919099592283 અને ટેસ્ટ OTP (દા.ત. 123456) ઉમેરી શકો છો.'
-                : 'Add +919099592283 with a 6-digit test OTP under Authentication → Sign-in method → Phone → Phone numbers for testing.'}
+                ? 'APK ની અંદર 9099592283 + Kiran@0602 વડે સીધો Firebase એડમિન સિંક ચલાવવા Firebase Console → Authentication → Sign-in method માં Email/Password ચાલુ કરો.'
+                : 'Enable Email/Password under Firebase Console → Authentication → Sign-in method so 9099592283 + Kiran@0602 signs into Firebase directly inside the APK.'}
             </li>
             <li>
-              <strong>Authorized Domains:</strong>{' '}
+              <strong>Public UPI Payments &amp; Access Codes:</strong>{' '}
               {lang === 'gu'
-                ? 'Authentication → Settings → Authorized domains માં તમારું હોસ્ટિંગ ડોમેન ઉમેરો.'
-                : 'Add your deployed domain under Authentication → Settings → Authorized domains for reCAPTCHA.'}
-            </li>
-            <li>
-              <strong>Firestore &amp; Storage Rules:</strong>{' '}
-              {lang === 'gu'
-                ? 'આ પ્રોજેક્ટમાં આપેલ firestore.rules અને storage.rules ડિપ્લોય કરો જેથી માત્ર +919099592283 જ એડમિન તરીકે ડેટા મેનેજ કરી શકે અને ડુપ્લીકેટ UTR/કોડ અટકે.'
-                : 'Deploy firestore.rules and storage.rules from the project root so only +919099592283 has admin access and duplicate UTRs/code reuse are blocked.'}
+                ? 'વિદ્યાર્થીઓ મોબાઇલ નંબરથી લૉગિન કરી Anonymous Auth વગર પણ સીધા Firestore માં UPI પેમેન્ટ અને 8-અક્ષરનો કોડ વાપરી શકે છે.'
+                : 'Students submit UPI payments and redeem 8-character codes directly to Firestore without requiring Anonymous Auth.'}
             </li>
           </ol>
+
+          {!isFirebaseConnected && (
+            <button
+              type="button"
+              disabled={isBusy}
+              onClick={onConnectFirebaseGoogle}
+              className="w-full sm:w-auto min-h-[44px] px-4 py-2 rounded-xl bg-[#1E3A8A] hover:bg-[#172554] text-white text-xs sm:text-sm font-extrabold inline-flex items-center justify-center gap-2 transition-colors disabled:opacity-60 cursor-pointer"
+            >
+              <ShieldCheck className="h-4 w-4" />
+              <span>{t.connectFirebaseGoogleBtn}</span>
+            </button>
+          )}
         </div>
       </div>
 

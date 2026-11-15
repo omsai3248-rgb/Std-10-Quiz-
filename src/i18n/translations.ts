@@ -93,14 +93,16 @@ export interface Translations {
   adminLoginSubtitle: string;
   adminOnlyNumberNote: string;
   adminPhoneLabel: string;
-  sendOtpBtn: string;
-  sendingOtpBtn: string;
-  enterOtpLabel: string;
-  verifyOtpBtn: string;
-  verifyingOtpBtn: string;
-  changeNumberBtn: string;
-  resendOtpBtn: string;
-  otpSentBanner: string;
+  adminPasswordLabel: string;
+  adminPasswordPlaceholder: string;
+  adminLoginBtn: string;
+  loggingInBtn: string;
+  errWrongAdminPassword: string;
+  errWrongAdminGoogleAccount: string;
+  connectFirebaseGoogleBtn: string;
+  firebaseConnectedBadge: string;
+  firebaseNeedsAuthTitle: string;
+  firebaseNeedsAuthDesc: string;
   onlyAdminAllowedError: string;
   signOutBtn: string;
 
@@ -185,7 +187,7 @@ const GU: Translations = {
   loginSubtitle: 'તમારું નામ અને ૧૦ અંકનો મોબાઇલ નંબર દાખલ કરી ધોરણ ૧૦ ક્વિઝ પ્લેટફોર્મ ખોલો.',
   loginBtn: 'લૉગિન કરી ક્વિઝ શરૂ કરો',
   switchAccountBtn: 'નંબર બદલો',
-  adminNumberLoginHint: 'આ એડમિન નંબર છે — કૃપા કરીને ઉપરના "એડમિન" વિભાગમાં OTP થી લૉગિન કરો.',
+  adminNumberLoginHint: 'આ એડમિન નંબર છે — કૃપા કરીને પાસવર્ડથી એડમિન પેનલમાં લૉગિન કરો.',
   unlockSingleSubjectLabel: 'માત્ર આ વિષય',
   unlockAllSubjectsLabel: 'બધા વિષયો (ગણિત + વિજ્ઞાન + સા.વિ.)',
   fixedPriceBadge: 'ફિક્સ ફી',
@@ -248,18 +250,21 @@ const GU: Translations = {
   recentAttemptsTitle: 'તાજેતરના ક્વિઝ પરિણામો',
   unlockAnotherSubject: 'બીજો કોડ નાખો',
 
-  adminLoginTitle: 'એડમિન OTP લૉગિન',
-  adminLoginSubtitle: 'સુરક્ષા માટે માત્ર અધિકૃત એડમિન નંબર +91 9099592283 જ લૉગિન કરી શકે છે.',
+  adminLoginTitle: 'એડમિન લૉગિન',
+  adminLoginSubtitle: 'સુરક્ષા માટે માત્ર અધિકૃત એડમિન નંબર +91 9099592283 નાખવાથી જ પાસવર્ડનું બોક્સ ખુલશે.',
   adminOnlyNumberNote: 'અન્ય કોઈ પણ નંબરથી એડમિન પેનલ ખૂલી શકશે નહીં.',
-  adminPhoneLabel: 'એડમિન મોબાઇલ નંબર',
-  sendOtpBtn: 'OTP મોકલો',
-  sendingOtpBtn: 'OTP મોકલાઈ રહ્યો છે...',
-  enterOtpLabel: '૬ અંકનો OTP નાખો',
-  verifyOtpBtn: 'OTP ચકાસી એડમિન પેનલ ખોલો',
-  verifyingOtpBtn: 'ચકાસણી થઈ રહી છે...',
-  changeNumberBtn: 'ફરી શરૂ કરો',
-  resendOtpBtn: 'ફરી OTP મોકલો',
-  otpSentBanner: '+91 9099592283 પર OTP મોકલવામાં આવ્યો છે.',
+  adminPhoneLabel: 'મોબાઇલ નંબર (૧૦ અંક)',
+  adminPasswordLabel: 'એડમિન પાસવર્ડ *',
+  adminPasswordPlaceholder: 'પાસવર્ડ દાખલ કરો',
+  adminLoginBtn: 'પાસવર્ડ ચકાસી એડમિન પેનલ ખોલો',
+  loggingInBtn: 'લૉગિન થઈ રહ્યું છે...',
+  errWrongAdminPassword: 'ખોટો પાસવર્ડ! કૃપા કરીને સાચો એડમિન પાસવર્ડ દાખલ કરો.',
+  errWrongAdminGoogleAccount: 'માત્ર અધિકૃત એડમિન Google એકાઉન્ટ (omsai3248@gmail.com) જ માન્ય છે!',
+  connectFirebaseGoogleBtn: 'Google વડે Firebase ચાલુ કરો (omsai3248@gmail.com)',
+  firebaseConnectedBadge: 'Firebase ચાલુ છે',
+  firebaseNeedsAuthTitle: 'લાઇવ Firebase સિંક ચાલુ કરો',
+  firebaseNeedsAuthDesc:
+    'પેમેન્ટ વિનંતીઓ જોવા અને કોડ એપ્રુવ કરવા નીચેના બટનથી Google (omsai3248@gmail.com) વડે Firebase ચાલુ કરો, અથવા Firebase Console → Authentication → Sign-in method માં Email/Password ચાલુ કરો.',
   onlyAdminAllowedError: 'માત્ર 9099592283 નંબર જ એડમિન લૉગિન માટે માન્ય છે!',
   signOutBtn: 'એડમિન લૉગ આઉટ',
 
@@ -342,7 +347,7 @@ const EN: Translations = {
   loginSubtitle: 'Enter your name and 10-digit mobile number to open the Std 10 Quiz platform.',
   loginBtn: 'Login & Open Quiz Platform',
   switchAccountBtn: 'Switch',
-  adminNumberLoginHint: 'This is the Admin number — please use the Admin OTP tab above.',
+  adminNumberLoginHint: 'This is the Admin number — please sign in with your Admin password.',
   unlockSingleSubjectLabel: 'Single Subject Only',
   unlockAllSubjectsLabel: 'All Subjects (Maths + Science + SS)',
   fixedPriceBadge: 'Fixed Price',
@@ -405,19 +410,22 @@ const EN: Translations = {
   recentAttemptsTitle: 'Recent Quiz Results',
   unlockAnotherSubject: 'Redeem Another Code',
 
-  adminLoginTitle: 'Admin OTP Login',
+  adminLoginTitle: 'Admin Login',
   adminLoginSubtitle:
-    'Only the authorized admin phone number +91 9099592283 can log into the Admin Panel.',
+    'Enter authorized number 9099592283 to reveal the Admin password field.',
   adminOnlyNumberNote: 'All other phone numbers are strictly blocked.',
-  adminPhoneLabel: 'Admin Mobile Number',
-  sendOtpBtn: 'Send OTP',
-  sendingOtpBtn: 'Sending OTP...',
-  enterOtpLabel: 'Enter 6-Digit OTP',
-  verifyOtpBtn: 'Verify OTP & Open Admin Panel',
-  verifyingOtpBtn: 'Verifying...',
-  changeNumberBtn: 'Reset',
-  resendOtpBtn: 'Resend OTP',
-  otpSentBanner: 'OTP sent to +91 9099592283.',
+  adminPhoneLabel: 'Mobile Number (10 digits)',
+  adminPasswordLabel: 'Admin Password *',
+  adminPasswordPlaceholder: 'Enter admin password',
+  adminLoginBtn: 'Verify Password & Open Admin Panel',
+  loggingInBtn: 'Signing in...',
+  errWrongAdminPassword: 'Incorrect admin password. Please try again.',
+  errWrongAdminGoogleAccount: 'Only authorized owner Google account (omsai3248@gmail.com) is allowed!',
+  connectFirebaseGoogleBtn: 'Turn On Firebase via Google (omsai3248@gmail.com)',
+  firebaseConnectedBadge: 'Firebase Active',
+  firebaseNeedsAuthTitle: 'Connect Live Firebase Sync',
+  firebaseNeedsAuthDesc:
+    'Tap below to activate live Firebase reads/approvals with Google (omsai3248@gmail.com), or enable Email/Password under Firebase Console → Authentication → Sign-in method.',
   onlyAdminAllowedError: 'Only 9099592283 is allowed for Admin Login!',
   signOutBtn: 'Admin Sign Out',
 

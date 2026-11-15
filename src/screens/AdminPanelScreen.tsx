@@ -56,6 +56,7 @@ interface AdminPanelScreenProps {
   currentVersionName: string;
   isBusy: boolean;
   isCheckingUpdate: boolean;
+  isFirebaseConnected: boolean;
   approvedConfirmation?: PaymentRequest | null;
   onDismissApprovedConfirmation?: () => void;
   onBackToPublic: () => void;
@@ -63,6 +64,7 @@ interface AdminPanelScreenProps {
   onToggleSound: () => void;
   onClearAlerts: () => void;
   onSignOut: () => void;
+  onConnectFirebaseGoogle: () => void;
   onGenerateBulkCodes: (count: number, batchName: string, subjectId: string) => void;
   onApprovePayment: (req: PaymentRequest, adminNote: string, subjectId: string) => void;
   onRejectPayment: (req: PaymentRequest, reason: string) => void;
@@ -82,6 +84,7 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
   currentVersionName,
   isBusy,
   isCheckingUpdate,
+  isFirebaseConnected,
   approvedConfirmation = null,
   onDismissApprovedConfirmation,
   onBackToPublic,
@@ -89,6 +92,7 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
   onToggleSound,
   onClearAlerts,
   onSignOut,
+  onConnectFirebaseGoogle,
   onGenerateBulkCodes,
   onApprovePayment,
   onRejectPayment,
@@ -302,6 +306,23 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
       </header>
 
       <main className="flex-1 max-w-6xl w-full mx-auto">
+        {!isFirebaseConnected && (
+          <div className="p-3 sm:p-4 pb-0">
+            <div className="rounded-2xl bg-[#FEF3C7] dark:bg-[#451A03] border border-[#F59E0B]/45 p-4 space-y-2.5 text-[#92400E] dark:text-[#FDE68A] shadow-sm">
+              <p className="text-sm font-extrabold">{t.firebaseNeedsAuthTitle}</p>
+              <p className="text-xs leading-relaxed opacity-90">{t.firebaseNeedsAuthDesc}</p>
+              <button
+                type="button"
+                disabled={isBusy}
+                onClick={onConnectFirebaseGoogle}
+                className="min-h-[44px] px-4 py-2 rounded-xl bg-[#1E3A8A] hover:bg-[#172554] text-white text-xs sm:text-sm font-extrabold inline-flex items-center gap-2 transition-colors disabled:opacity-60 cursor-pointer"
+              >
+                <Radio className="h-4 w-4" />
+                <span>{t.connectFirebaseGoogleBtn}</span>
+              </button>
+            </div>
+          </div>
+        )}
         {selectedTab === 'requests' && (
           <AdminRequestsTab
             payments={payments}
@@ -332,6 +353,8 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
             currentVersionName={currentVersionName}
             isBusy={isBusy}
             isCheckingUpdate={isCheckingUpdate}
+            isFirebaseConnected={isFirebaseConnected}
+            onConnectFirebaseGoogle={onConnectFirebaseGoogle}
             onSaveGithubRepo={onSaveGithubRepo}
             onTestUpdateCheck={onTestUpdateCheck}
           />
