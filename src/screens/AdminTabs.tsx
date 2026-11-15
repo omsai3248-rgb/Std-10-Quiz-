@@ -32,6 +32,7 @@ import {
   buildPaymentApprovalWhatsAppHref,
   exportAccessCodesToCsv,
   formatTimestampLabel,
+  launchExternalUrl,
   resolvePaymentImageSrc,
 } from '../utils/imageUtils';
 import { AdminUpdateSettingsTab } from './AdminUpdateSettingsTab';
@@ -227,15 +228,14 @@ const PaymentRequestCard: React.FC<{
                   <span>{t.copyCode}</span>
                 </button>
               </div>
-              <a
-                href={buildPaymentApprovalWhatsAppHref(req, lang)}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="w-full h-10 rounded-xl bg-[#047857] hover:bg-[#065F46] text-white text-xs font-extrabold flex items-center justify-center gap-1.5 transition-colors"
+              <button
+                type="button"
+                onClick={() => launchExternalUrl(buildPaymentApprovalWhatsAppHref(req, lang))}
+                className="w-full h-10 rounded-xl bg-[#047857] hover:bg-[#065F46] text-white text-xs font-extrabold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
               >
                 <Send className="h-3.5 w-3.5" />
                 <span>{t.sendOnWhatsAppBtn}</span>
-              </a>
+              </button>
             </div>
           )}
         </div>

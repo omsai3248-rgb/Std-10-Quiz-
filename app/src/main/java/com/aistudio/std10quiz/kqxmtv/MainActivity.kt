@@ -1,6 +1,7 @@
 package com.aistudio.std10quiz.kqxmtv
 
 import android.annotation.SuppressLint
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -116,6 +117,88 @@ private class AndroidExportBridge(
             }
         }
     }
+
+    @JavascriptInterface
+    fun openUpiPayment(upiUrl: String, fallbackUpiUrl: String) {
+        activity.runOnUiThread {
+            launchUpiUriWithFallback(activity, upiUrl, fallbackUpiUrl)
+        }
+    }
+
+    @JavascriptInterface
+    fun openExternalUrl(url: String) {
+        activity.runOnUiThread {
+            try {
+                val parsed = Uri.parse(url)
+                val scheme = parsed.scheme.orEmpty().lowercase()
+                if (scheme !in setOf("https", "http", "whatsapp")) {
+                    return@runOnUiThread
+                }
+                val intent = Intent(Intent.ACTION_VIEW, parsed).apply {
+                    addCategory(Intent.CATEGORY_BROWSABLE)
+                }
+                activity.startActivity(intent)
+            } catch (_: Exception) {
+                Toast.makeText(
+                    activity,
+                    activity.getString(R.string.error_no_app),
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+    }
+}
+
+private fun launchUpiUriWithFallback(
+    context: android.content.Context,
+    primaryUrl: String,
+    fallbackUrl: String
+) {
+    val primaryUri = Uri.parse(primaryUrl)
+    val scheme = primaryUri.scheme.orEmpty().lowercase()
+    val allowedSchemes = setOf("upi", "tez", "phonepe", "paytmmp")
+    if (scheme !in allowedSchemes) {
+        Toast.makeText(context, context.getString(R.string.error_no_upi_app), Toast.LENGTH_SHORT).show()
+        return
+    }
+
+    val primaryIntent = Intent(Intent.ACTION_VIEW, primaryUri).apply {
+        addCategory(Intent.CATEGORY_BROWSABLE)
+    }
+
+    try {
+        if (scheme == "upi") {
+            context.startActivity(
+                Intent.createChooser(primaryIntent, context.getString(R.string.upi_chooser_title))
+            )
+        } else {
+            context.startActivity(primaryIntent)
+        }
+        return
+    } catch (_: ActivityNotFoundException) {
+        // Fall through to generic upi:// chooser if the specific app isn't installed
+    } catch (_: Exception) {
+        // Fall through to generic upi:// chooser
+    }
+
+    if (fallbackUrl.isNotBlank() && fallbackUrl != primaryUrl) {
+        val fallbackUri = Uri.parse(fallbackUrl)
+        if (fallbackUri.scheme.orEmpty().lowercase() == "upi") {
+            try {
+                val fallbackIntent = Intent(Intent.ACTION_VIEW, fallbackUri).apply {
+                    addCategory(Intent.CATEGORY_BROWSABLE)
+                }
+                context.startActivity(
+                    Intent.createChooser(fallbackIntent, context.getString(R.string.upi_chooser_title))
+                )
+                return
+            } catch (_: Exception) {
+                // Handled below
+            }
+        }
+    }
+
+    Toast.makeText(context, context.getString(R.string.error_no_upi_app), Toast.LENGTH_LONG).show()
 }
 
 @SuppressLint("SetJavaScriptEnabled")
@@ -214,8 +297,38 @@ private fun PortalWebContainer() {
                                     return false
                                 }
 
+                                if (scheme in setOf("upi", "tez", "phonepe", "paytmmp")) {
+                                    launchUpiUriWithFallback(ctx, uri.toString(), "")
+                                    return true
+                                }
+
+                                if (scheme == "intent") {
+                                    return try {
+                                        val parsedIntent = Intent.parseUri(uri.toString(), Intent.URI_INTENT_SCHEME)
+                                        try {
+                                            ctx.startActivity(parsedIntent)
+                                        } catch (_: ActivityNotFoundException) {
+                                            val fallbackUrl = parsedIntent.getStringExtra("browser_fallback_url")
+                                            if (!fallbackUrl.isNullOrBlank()) {
+                                                view?.loadUrl(fallbackUrl)
+                                            } else {
+                                                Toast.makeText(
+                                                    ctx,
+                                                    ctx.getString(R.string.error_no_upi_app),
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                            }
+                                        }
+                                        true
+                                    } catch (_: Exception) {
+                                        true
+                                    }
+                                }
+
                                 return try {
-                                    val intent = Intent(Intent.ACTION_VIEW, uri)
+                                    val intent = Intent(Intent.ACTION_VIEW, uri).apply {
+                                        addCategory(Intent.CATEGORY_BROWSABLE)
+                                    }
                                     ctx.startActivity(intent)
                                     true
                                 } catch (_: Exception) {

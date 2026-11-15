@@ -1,12 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { onAuthStateChanged, signInAnonymously, signOut, type User } from 'firebase/auth';
-import { AlertTriangle, X } from 'lucide-react';
+import { onAuthStateChanged, signOut, type User } from 'firebase/auth';
+import { X } from 'lucide-react';
 import { auth } from './firebase';
 import { findChapter, findSubject } from './data/curriculum/std10Curriculum';
 import { TopNavHeader, type PublicTabId } from './components/TopNavHeader';
 import { UpdateAvailableModal } from './components/AppUpdateComponents';
 import { useTranslation } from './i18n/translations';
-import { PublicPaymentScreen } from './screens/PublicPaymentScreen';
+import { StudentMobileLoginScreen } from './screens/StudentMobileLoginScreen';
 import { UseCodeScreen } from './screens/UseCodeScreen';
 import { AdminPhoneLoginScreen } from './screens/AdminPhoneLoginScreen';
 import { AdminPanelScreen, type AdminLiveAlert } from './screens/AdminPanelScreen';
@@ -18,15 +18,18 @@ import {
   approvePaymentAndAssignCode,
   generateBulkAccessCodes,
   isAdminAccount,
+  loadMyPaymentRequestIds,
   observeAllAccessCodes,
   observeAllPaymentRequests,
   observeMyPaymentRequests,
   observeMyQuizAttempts,
+  observePaymentRequestsByIds,
   observeReleaseConfig,
   observeStudentProfile,
   recordQuizAttempt,
   redeemAccessCodePublic,
   rejectPaymentRequest,
+  saveMyPaymentRequestId,
   saveReleaseConfig,
   submitPaymentRequest,
 } from './services/quizRepository';
@@ -48,6 +51,7 @@ import {
   type StudentProfile,
   type SubjectId,
 } from './types/models';
+import { buildPaymentApprovalWhatsAppHref, launchExternalUrl } from './utils/imageUtils';
 
 type AppRoute =
   | { name: 'public'; tab: PublicTabId }
@@ -57,9 +61,13 @@ type AppRoute =
 const LOCAL_UNLOCKS_KEY = 'std10_unlocked_subjects_v2';
 const LOCAL_USER_META_KEY = 'std10_public_user_meta_v2';
 
-function loadSavedUnlockedSubjects(): string[] {
+function loadSavedUnlockedSubjects(mobileNumber = ''): string[] {
+  const cleanMob = mobileNumber.replace(/\D/g, '').slice(-10);
+  const scopedKey = cleanMob ? `${LOCAL_UNLOCKS_KEY}_${cleanMob}` : LOCAL_UNLOCKS_KEY;
   try {
-    const raw = localStorage.getItem(LOCAL_UNLOCKS_KEY);
+    const raw =
+      localStorage.getItem(scopedKey) ??
+      (cleanMob ? localStorage.getItem(LOCAL_UNLOCKS_KEY) : null);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed.map((x) => String(x)) : [];
@@ -73,7 +81,10 @@ function loadSavedUserMeta(): { name: string; mobile: string } {
     const raw = localStorage.getItem(LOCAL_USER_META_KEY);
     if (!raw) return { name: '', mobile: '' };
     const parsed = JSON.parse(raw) as { name?: string; mobile?: string };
-    return { name: parsed.name ?? '', mobile: parsed.mobile ?? '' };
+    return {
+      name: (parsed.name ?? '').trim(),
+      mobile: (parsed.mobile ?? '').replace(/\D/g, '').slice(0, 10),
+    };
   } catch {
     return { name: '', mobile: '' };
   }
@@ -84,16 +95,18 @@ export const App: React.FC = () => {
 
   const [authUser, setAuthUser] = useState<User | null>(null);
   const [authInitialized, setAuthInitialized] = useState(false);
-  const [anonAuthBlocked, setAnonAuthBlocked] = useState(false);
 
   const [student, setStudent] = useState<StudentProfile | null>(null);
-  const [localUnlockedSubjects, setLocalUnlockedSubjects] = useState<string[]>(
-    loadSavedUnlockedSubjects
-  );
   const [savedUserMeta, setSavedUserMeta] = useState<{ name: string; mobile: string }>(
     loadSavedUserMeta
   );
-  const [prefilledCode, setPrefilledCode] = useState('');
+  const [localUnlockedSubjects, setLocalUnlockedSubjects] = useState<string[]>(() =>
+    loadSavedUnlockedSubjects(loadSavedUserMeta().mobile)
+  );
+  const [myPaymentIds, setMyPaymentIds] = useState<string[]>(() =>
+    loadMyPaymentRequestIds(loadSavedUserMeta().mobile)
+  );
+  const [prefilledCode] = useState('');
 
   const [myPayments, setMyPayments] = useState<PaymentRequest[]>([]);
   const [myAttempts, setMyAttempts] = useState<QuizAttempt[]>([]);
@@ -102,12 +115,13 @@ export const App: React.FC = () => {
   const [releaseConfig, setReleaseConfig] = useState<AppReleaseConfig | null>(null);
 
   const [syncVersion, setSyncVersion] = useState(0);
-  const [route, setRoute] = useState<AppRoute>({ name: 'public', tab: 'payment' });
+  const [route, setRoute] = useState<AppRoute>({ name: 'public', tab: 'quiz' });
   const [isBusy, setIsBusy] = useState(false);
   const [banner, setBanner] = useState<ActionBanner | null>(null);
   const [lastGeneratedBatch, setLastGeneratedBatch] = useState<string[]>([]);
   const [liveAlerts, setLiveAlerts] = useState<AdminLiveAlert[]>([]);
   const [isSoundEnabled, setIsSoundEnabled] = useState(true);
+  const [approvedConfirmation, setApprovedConfirmation] = useState<PaymentRequest | null>(null);
 
   const [availableUpdate, setAvailableUpdate] = useState<GitHubReleaseInfo | null>(null);
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
@@ -124,6 +138,11 @@ export const App: React.FC = () => {
   useEffect(() => {
     langRef.current = lang;
   }, [lang]);
+
+  const isStudentLoggedIn = useMemo(
+    () => savedUserMeta.name.trim().length > 0 && /^[0-9]{10}$/.test(savedUserMeta.mobile),
+    [savedUserMeta]
+  );
 
   const formatAppError = useCallback(
     (err: unknown, fallback?: string): string => {
@@ -185,32 +204,13 @@ export const App: React.FC = () => {
     }
   }, [isDarkTheme]);
 
-  // Ensure every public visitor silently gets a Firebase Auth session (Anonymous)
-  // while preserving Admin Phone OTP session (+919099592283) across refreshes.
+  // Observe Firebase Auth state (used for Admin Phone OTP +919099592283); public students log in
+  // via their mobile number locally and submit/redeem directly using persistent cryptographic IDs.
   useEffect(() => {
-    let isMounted = true;
-    const unsub = onAuthStateChanged(auth, async (user) => {
-      if (!isMounted) return;
+    const unsub = onAuthStateChanged(auth, (user) => {
       if (!user) {
-        try {
-          const cred = await signInAnonymously(auth);
-          if (!isMounted) return;
-          setAuthUser(cred.user);
-          setAnonAuthBlocked(false);
-        } catch (err: unknown) {
-          const code = (err as { code?: string })?.code ?? '';
-          if (
-            code === 'auth/operation-not-allowed' ||
-            code === 'auth/admin-restricted-operation'
-          ) {
-            setAnonAuthBlocked(true);
-          }
-          setAuthUser(null);
-        } finally {
-          if (isMounted) setAuthInitialized(true);
-        }
+        setAuthUser(null);
         setStudent(null);
-        setMyPayments([]);
         setMyAttempts([]);
         setAllPayments([]);
         setAllCodes([]);
@@ -218,14 +218,10 @@ export const App: React.FC = () => {
         knownUsedCodesRef.current = null;
       } else {
         setAuthUser(user);
-        setAnonAuthBlocked(false);
-        setAuthInitialized(true);
       }
+      setAuthInitialized(true);
     });
-    return () => {
-      isMounted = false;
-      unsub();
-    };
+    return () => unsub();
   }, []);
 
   const isAdmin = useMemo(() => {
@@ -233,7 +229,6 @@ export const App: React.FC = () => {
     return isAdminAccount(authUser.phoneNumber ?? '');
   }, [authUser]);
 
-  // Combined unlocked subjects (local persistence + optional Firestore student record)
   const effectiveUnlockedSubjects = useMemo(() => {
     const set = new Set<string>(localUnlockedSubjects);
     if (student?.hasQuizAccess) {
@@ -246,8 +241,6 @@ export const App: React.FC = () => {
 
   // Realtime Firestore listeners
   useEffect(() => {
-    if (!authUser) return;
-
     if (!isAdmin) {
       knownPendingIdsRef.current = null;
       knownUsedCodesRef.current = null;
@@ -255,18 +248,23 @@ export const App: React.FC = () => {
       setAllCodes([]);
     }
 
-    const unsubs = [
-      observeStudentProfile(
-        authUser.uid,
-        (profile) => setStudent(profile),
-        () => {}
-      ),
-      observeMyPaymentRequests(authUser.uid, (items) => {
-        setMyPayments(items);
-      }),
-      observeMyQuizAttempts(authUser.uid, setMyAttempts),
-      observeReleaseConfig(setReleaseConfig),
-    ];
+    const unsubs = [observeReleaseConfig(setReleaseConfig)];
+
+    if (authUser) {
+      unsubs.push(
+        observeStudentProfile(
+          authUser.uid,
+          (profile) => setStudent(profile),
+          () => {}
+        ),
+        observeMyPaymentRequests(authUser.uid, (items) => {
+          setMyPayments(items);
+        }),
+        observeMyQuizAttempts(authUser.uid, setMyAttempts)
+      );
+    } else {
+      unsubs.push(observePaymentRequestsByIds(myPaymentIds, setMyPayments));
+    }
 
     if (isAdmin) {
       const onAdminListenerError = (err: unknown) => {
@@ -368,7 +366,7 @@ export const App: React.FC = () => {
     return () => {
       unsubs.forEach((u) => u());
     };
-  }, [authUser, isAdmin, syncVersion]);
+  }, [authUser, isAdmin, myPaymentIds, syncVersion]);
 
   useEffect(() => {
     if (!banner) return;
@@ -417,16 +415,40 @@ export const App: React.FC = () => {
   );
 
   const persistUserMeta = (name: string, mobile: string) => {
-    const next = { name: name.trim(), mobile: mobile.replace(/\D/g, '').slice(0, 10) };
+    const cleanMobile = mobile.replace(/\D/g, '').slice(0, 10);
+    const next = { name: name.trim().slice(0, 60), mobile: cleanMobile };
     setSavedUserMeta(next);
     try {
       localStorage.setItem(LOCAL_USER_META_KEY, JSON.stringify(next));
     } catch {
       // Ignore
     }
+    setLocalUnlockedSubjects(loadSavedUnlockedSubjects(cleanMobile));
+    setMyPaymentIds(loadMyPaymentRequestIds(cleanMobile));
   };
 
-  const persistUnlockedSubject = (subjectId: string) => {
+  const handleStudentLogin = (name: string, mobile: string) => {
+    persistUserMeta(name, mobile);
+    setRoute({ name: 'public', tab: 'quiz' });
+  };
+
+  const handleStudentLogout = () => {
+    const empty = { name: '', mobile: '' };
+    setSavedUserMeta(empty);
+    setLocalUnlockedSubjects([]);
+    setMyPaymentIds([]);
+    setMyPayments([]);
+    try {
+      localStorage.removeItem(LOCAL_USER_META_KEY);
+    } catch {
+      // Ignore
+    }
+    setRoute({ name: 'public', tab: 'quiz' });
+  };
+
+  const persistUnlockedSubject = (subjectId: string, mobile = savedUserMeta.mobile) => {
+    const cleanMob = mobile.replace(/\D/g, '').slice(-10);
+    const scopedKey = cleanMob ? `${LOCAL_UNLOCKS_KEY}_${cleanMob}` : LOCAL_UNLOCKS_KEY;
     setLocalUnlockedSubjects((prev) => {
       const next = new Set(prev);
       if (subjectId === 'all') {
@@ -437,7 +459,7 @@ export const App: React.FC = () => {
       }
       const arr = Array.from(next);
       try {
-        localStorage.setItem(LOCAL_UNLOCKS_KEY, JSON.stringify(arr));
+        localStorage.setItem(scopedKey, JSON.stringify(arr));
       } catch {
         // Ignore
       }
@@ -459,6 +481,7 @@ export const App: React.FC = () => {
     persistUserMeta(params.studentName, params.mobileNumber);
     try {
       const reqId = await submitPaymentRequest(params);
+      setMyPaymentIds(saveMyPaymentRequestId(reqId, params.mobileNumber));
       setBanner({ isError: false, message: t.requestSentTitle });
       return reqId;
     } finally {
@@ -482,7 +505,7 @@ export const App: React.FC = () => {
         mobileNumber: params.mobile,
         expectedSubjectId: params.expectedSubjectId,
       });
-      persistUnlockedSubject(res.subjectId);
+      persistUnlockedSubject(res.subjectId, params.mobile);
       setBanner({
         isError: false,
         message: `${t.codeSuccessTitle} (${res.code})`,
@@ -501,12 +524,21 @@ export const App: React.FC = () => {
     if (!isAdmin) return;
     setIsBusy(true);
     setBanner(null);
+    const resolvedSub = subjectId || resolvePaymentSubjectId(req);
     try {
       const code = await approvePaymentAndAssignCode({
         paymentRequest: req,
         adminNote,
-        approvedSubjectId: subjectId || resolvePaymentSubjectId(req),
+        approvedSubjectId: resolvedSub,
       });
+      const approvedReq: PaymentRequest = {
+        ...req,
+        status: 'approved',
+        assignedCode: code,
+        subjectId: resolvedSub,
+        adminNote: adminNote.trim() || req.adminNote,
+      };
+      setApprovedConfirmation(approvedReq);
       setBanner({
         isError: false,
         message:
@@ -514,6 +546,8 @@ export const App: React.FC = () => {
             ? `Approved! Generated 8-char code: ${code}`
             : `મંજૂર! 8-અક્ષરનો કોડ જનરેટ થયો: ${code}`,
       });
+      // Immediately launch WhatsApp with the student's details & generated code
+      launchExternalUrl(buildPaymentApprovalWhatsAppHref(approvedReq, lang));
     } catch (err) {
       setBanner({
         isError: true,
@@ -584,7 +618,8 @@ export const App: React.FC = () => {
   const handleAdminSignOut = async () => {
     try {
       await signOut(auth);
-      setRoute({ name: 'public', tab: 'payment' });
+      setApprovedConfirmation(null);
+      setRoute({ name: 'public', tab: 'quiz' });
     } catch (err) {
       setBanner({
         isError: true,
@@ -617,7 +652,9 @@ export const App: React.FC = () => {
         currentVersionName={APP_VERSION_NAME}
         isBusy={isBusy}
         isCheckingUpdate={isCheckingUpdate}
-        onBackToPublic={() => setRoute({ name: 'public', tab: 'payment' })}
+        approvedConfirmation={approvedConfirmation}
+        onDismissApprovedConfirmation={() => setApprovedConfirmation(null)}
+        onBackToPublic={() => setRoute({ name: 'public', tab: 'quiz' })}
         onForceSync={() => setSyncVersion((v) => v + 1)}
         onToggleSound={() => setIsSoundEnabled((prev) => !prev)}
         onClearAlerts={() => setLiveAlerts([])}
@@ -630,7 +667,7 @@ export const App: React.FC = () => {
         onNotify={(msg) => setBanner({ isError: false, message: msg })}
       />
     );
-  } else if (route.name === 'subject') {
+  } else if (route.name === 'subject' && isStudentLoggedIn) {
     const subject = findSubject(route.subjectId);
     if (!subject) {
       bodyNode = null;
@@ -642,48 +679,21 @@ export const App: React.FC = () => {
         <SubjectChaptersScreen
           subject={subject}
           hasQuizAccess={hasAccess}
+          studentName={savedUserMeta.name}
           studentMobile={savedUserMeta.mobile}
+          myPayments={myPayments}
           isBusy={isBusy}
-          onBack={() => setRoute({ name: 'public', tab: 'use_code' })}
+          onBack={() => setRoute({ name: 'public', tab: 'quiz' })}
           onStartChapterQuiz={(ch) =>
             setRoute({ name: 'quiz', subjectId: subject.id, chapterId: ch.id })
           }
-          onRedeemCode={(code, onUnlocked) => {
-            if (!savedUserMeta.name || savedUserMeta.mobile.length !== 10) {
-              setPrefilledCode(code);
-              onUnlocked();
-              setRoute({ name: 'public', tab: 'use_code' });
-              setBanner({
-                isError: false,
-                message:
-                  lang === 'en'
-                    ? 'Please enter your name & mobile number to activate the code.'
-                    : 'કોડ ચાલુ કરવા કૃપા કરીને તમારું નામ અને મોબાઇલ નંબર લખો.',
-              });
-              return;
-            }
-            void handleRedeemCode({
-              code,
-              name: savedUserMeta.name,
-              mobile: savedUserMeta.mobile,
-              expectedSubjectId: subject.id,
-            })
-              .then((res) => {
-                if (res) onUnlocked();
-              })
-              .catch((err) => {
-                setBanner({
-                  isError: true,
-                  message: formatAppError(err, t.errCodeNotFound),
-                });
-              });
-          }}
-          onOpenUnlock={() => setRoute({ name: 'public', tab: 'payment' })}
-          onNotify={(msg) => setBanner({ isError: false, message: msg })}
+          onSubmitPayment={handleSubmitPayment}
+          onRedeemCode={handleRedeemCode}
+          onNotify={(msg, isErr) => setBanner({ isError: Boolean(isErr), message: msg })}
         />
       );
     }
-  } else if (route.name === 'quiz') {
+  } else if (route.name === 'quiz' && isStudentLoggedIn) {
     const subject = findSubject(route.subjectId);
     const chapter = findChapter(route.subjectId, route.chapterId);
     if (!subject || !chapter) {
@@ -710,62 +720,47 @@ export const App: React.FC = () => {
       );
     }
   } else {
-    const activeTab: PublicTabId = route.name === 'public' ? route.tab : 'payment';
+    const activeTab: PublicTabId = route.name === 'public' ? route.tab : 'quiz';
     const pendingBadge = allPayments.filter((p) => p.status === 'pending').length;
 
     bodyNode = (
       <div className="min-h-screen bg-[#FAF9F5] dark:bg-[#0B1120] text-[#0F172A] dark:text-[#F8FAFC] flex flex-col">
         <TopNavHeader
           activeTab={activeTab}
+          isStudentLoggedIn={isStudentLoggedIn}
+          studentName={savedUserMeta.name}
+          studentMobile={savedUserMeta.mobile}
           isAdmin={isAdmin}
           adminBadgeCount={liveAlerts.length || pendingBadge}
           isDarkTheme={isDarkTheme}
           onSelectTab={(tab) => setRoute({ name: 'public', tab })}
+          onStudentLogout={handleStudentLogout}
           onToggleTheme={() => setIsDarkTheme((prev) => !prev)}
         />
 
-        {anonAuthBlocked && activeTab !== 'admin' && (
-          <div className="max-w-2xl mx-auto w-full px-3 sm:px-4 pt-4">
-            <div className="rounded-2xl bg-[#FEF3C7] dark:bg-[#451A03] border border-[#F59E0B]/40 p-3.5 flex items-start gap-2.5 text-[#92400E] dark:text-[#FDE68A]">
-              <AlertTriangle className="h-5 w-5 shrink-0 mt-0.5" />
-              <div className="text-xs space-y-0.5">
-                <p className="font-extrabold">{t.authSetupWarningTitle}</p>
-                <p>{t.authSetupWarningDesc}</p>
-              </div>
-            </div>
-          </div>
-        )}
-
         <main className="flex-1 pb-14">
-          {activeTab === 'payment' && (
-            <PublicPaymentScreen
-              userId={authUser?.uid ?? ''}
-              myPayments={myPayments}
-              isAuthReady={Boolean(authUser)}
-              isBusy={isBusy}
+          {activeTab === 'quiz' && !isStudentLoggedIn && (
+            <StudentMobileLoginScreen
               initialName={savedUserMeta.name}
               initialMobile={savedUserMeta.mobile}
-              onSubmitPayment={handleSubmitPayment}
-              onUseCodeClick={(code, name, mobile) => {
-                setPrefilledCode(code);
-                persistUserMeta(name, mobile);
-                setRoute({ name: 'public', tab: 'use_code' });
-              }}
-              onNotify={(msg, isErr) => setBanner({ isError: Boolean(isErr), message: msg })}
+              onLoginSuccess={handleStudentLogin}
+              onOpenAdminLogin={() => setRoute({ name: 'public', tab: 'admin' })}
             />
           )}
 
-          {activeTab === 'use_code' && (
+          {activeTab === 'quiz' && isStudentLoggedIn && (
             <UseCodeScreen
+              studentName={savedUserMeta.name}
+              studentMobile={savedUserMeta.mobile}
               unlockedSubjects={effectiveUnlockedSubjects}
+              myPayments={myPayments}
               recentAttempts={myAttempts}
               prefilledCode={prefilledCode}
-              prefilledName={savedUserMeta.name}
-              prefilledMobile={savedUserMeta.mobile}
-              isAuthReady={Boolean(authUser)}
               isBusy={isBusy}
+              onSubmitPayment={handleSubmitPayment}
               onRedeemCode={handleRedeemCode}
               onOpenSubject={(sub) => setRoute({ name: 'subject', subjectId: sub.id })}
+              onNotify={(msg, isErr) => setBanner({ isError: Boolean(isErr), message: msg })}
             />
           )}
 

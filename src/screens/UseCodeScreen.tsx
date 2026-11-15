@@ -1,77 +1,85 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import {
   ArrowRight,
   CheckCircle2,
+  Clock,
+  Copy,
   Folder,
   History,
+  IndianRupee,
   KeyRound,
   Lock,
-  LockOpen,
-  Smartphone,
+  Radio,
   Trophy,
-  User,
+  XCircle,
 } from 'lucide-react';
 import { std10Subjects } from '../data/curriculum/std10Curriculum';
+import { SubjectPaymentModal } from '../components/SubjectPaymentModal';
 import { useTranslation } from '../i18n/translations';
-import { extractReadableErrorMessage } from '../services/firestoreErrorHandler';
 import {
   ALL_SUBJECT_IDS,
+  PRICE_ALL_SUBJECTS,
+  PRICE_SINGLE_SUBJECT,
   getSubjectDisplayName,
+  resolvePaymentSubjectId,
+  type PaymentRequest,
   type QuizAttempt,
   type QuizSubject,
   type SubjectId,
 } from '../types/models';
-import { normalizeIndianMobileInput } from '../utils/imageUtils';
+import { formatTimestampLabel, resolvePaymentImageSrc } from '../utils/imageUtils';
 
 interface UseCodeScreenProps {
+  studentName: string;
+  studentMobile: string;
   unlockedSubjects: string[];
+  myPayments: PaymentRequest[];
   recentAttempts: QuizAttempt[];
   prefilledCode?: string;
-  prefilledName?: string;
-  prefilledMobile?: string;
-  isAuthReady: boolean;
   isBusy: boolean;
+  onSubmitPayment: (params: {
+    studentName: string;
+    mobileNumber: string;
+    amountRupees: number;
+    upiTransactionRef: string;
+    imageBlob: Blob;
+    fallbackBase64: string;
+    subjectId: string;
+  }) => Promise<string | undefined>;
   onRedeemCode: (params: {
     code: string;
     name: string;
     mobile: string;
+    expectedSubjectId?: string;
   }) => Promise<{ code: string; subjectId: string } | undefined>;
   onOpenSubject: (subject: QuizSubject) => void;
+  onNotify?: (message: string, isError?: boolean) => void;
 }
 
 export const UseCodeScreen: React.FC<UseCodeScreenProps> = ({
+  studentName,
+  studentMobile,
   unlockedSubjects,
+  myPayments,
   recentAttempts,
   prefilledCode = '',
-  prefilledName = '',
-  prefilledMobile = '',
-  isAuthReady,
   isBusy,
+  onSubmitPayment,
   onRedeemCode,
   onOpenSubject,
+  onNotify,
 }) => {
   const { lang, t } = useTranslation();
 
-  const [codeInput, setCodeInput] = useState(prefilledCode);
-  const [nameInput, setNameInput] = useState(prefilledName);
-  const [mobileInput, setMobileInput] = useState(prefilledMobile);
-  const [localError, setLocalError] = useState<string | null>(null);
-  const [lastUnlockedResult, setLastUnlockedResult] = useState<{
+  const [unlockModalState, setUnlockModalState] = useState<{
+    isOpen: boolean;
+    mode: 'pay' | 'code';
     code: string;
-    subjectId: string;
-  } | null>(null);
-
-  useEffect(() => {
-    if (prefilledCode) setCodeInput(prefilledCode);
-  }, [prefilledCode]);
-
-  useEffect(() => {
-    if (prefilledName) setNameInput((prev) => prev || prefilledName);
-  }, [prefilledName]);
-
-  useEffect(() => {
-    if (prefilledMobile) setMobileInput((prev) => prev || prefilledMobile);
-  }, [prefilledMobile]);
+  }>({
+    isOpen: false,
+    mode: 'pay',
+    code: prefilledCode,
+  });
 
   const hasSubjectAccess = (subjectId: SubjectId): boolean => {
     return unlockedSubjects.includes('all') || unlockedSubjects.includes(subjectId);
@@ -80,185 +88,22 @@ export const UseCodeScreen: React.FC<UseCodeScreenProps> = ({
   const allUnlocked = ALL_SUBJECT_IDS.every((id) => hasSubjectAccess(id));
   const anyUnlocked = ALL_SUBJECT_IDS.some((id) => hasSubjectAccess(id));
 
-  const mapError = (err: unknown): string => {
-    const msg = err instanceof Error ? err.message : '';
-    if (msg === 'INVALID_CODE_FORMAT') return t.errInvalidCodeFormat;
-    if (msg === 'INVALID_NAME') return t.errInvalidName;
-    if (msg === 'INVALID_MOBILE') return t.errInvalidMobile;
-    if (msg === 'CODE_NOT_FOUND') return t.errCodeNotFound;
-    if (msg === 'CODE_ALREADY_USED') return t.errCodeAlreadyUsed;
-    if (msg.startsWith('SUBJECT_MISMATCH:')) {
-      const codeSub = msg.split(':')[1] ?? 'all';
-      const subName = getSubjectDisplayName(codeSub, lang);
-      return lang === 'en'
-        ? `This code is valid for ${subName}.`
-        : `આ કોડ ${subName} માટે છે.`;
-    }
-    return extractReadableErrorMessage(err, lang);
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLocalError(null);
-
-    const cleanCode = codeInput.trim().toUpperCase();
-    const cleanName = nameInput.trim();
-    const cleanMobile = mobileInput.replace(/\D/g, '');
-
-    if (!/^[A-Z0-9_-]{4,32}$/.test(cleanCode)) {
-      setLocalError(t.errInvalidCodeFormat);
-      return;
-    }
-    if (!cleanName) {
-      setLocalError(t.errInvalidName);
-      return;
-    }
-    if (!/^[0-9]{10}$/.test(cleanMobile)) {
-      setLocalError(t.errInvalidMobile);
-      return;
-    }
-
+  const handleCopyCode = async (code: string) => {
     try {
-      const res = await onRedeemCode({
-        code: cleanCode,
-        name: cleanName,
-        mobile: cleanMobile,
-      });
-      if (res) {
-        setLastUnlockedResult(res);
-        setCodeInput('');
-      }
-    } catch (err) {
-      setLocalError(mapError(err));
+      await navigator.clipboard.writeText(code);
+      onNotify?.(`${t.payUpiCopied}: ${code}`);
+    } catch {
+      onNotify?.(code);
     }
   };
 
   return (
     <div className="max-w-2xl mx-auto px-3 sm:px-4 py-5 space-y-5">
-      {/* Code Redemption Card */}
-      <section className="rounded-2xl bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] shadow-sm p-4 sm:p-6 space-y-4">
-        <div className="flex items-center gap-2.5">
-          <div className="h-10 w-10 rounded-xl bg-[#DBEAFE] dark:bg-[#1E3A5F] flex items-center justify-center text-[#1E3A8A] dark:text-[#93C5FD] shrink-0">
-            <KeyRound className="h-5 w-5" />
-          </div>
-          <div>
-            <h2 className="text-base sm:text-lg font-extrabold">{t.useCodeTitle}</h2>
-            <p className="text-xs text-[#475569] dark:text-[#94A3B8]">{t.useCodeSubtitle}</p>
-          </div>
-        </div>
-
-        <form onSubmit={(e) => void handleSubmit(e)} className="space-y-3">
-          <div>
-            <label
-              htmlFor="redeem-code-input"
-              className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1"
-            >
-              {t.fieldCodeLabel}
-            </label>
-            <input
-              id="redeem-code-input"
-              type="text"
-              maxLength={32}
-              value={codeInput}
-              onChange={(e) => {
-                setCodeInput(e.target.value.toUpperCase().replace(/[^A-Z0-9_-]/g, '').slice(0, 32));
-                setLocalError(null);
-              }}
-              placeholder={t.fieldCodePlaceholder}
-              className="w-full h-12 rounded-xl border border-[#CBD5E1] dark:border-[#334155] bg-[#FAF9F5] dark:bg-[#0F172A] px-3.5 text-base font-extrabold font-mono tracking-widest outline-none focus:border-[#1E3A8A]"
-            />
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label
-                htmlFor="redeem-name-input"
-                className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1"
-              >
-                {t.fieldFullName}
-              </label>
-              <div className="flex items-center rounded-xl border border-[#CBD5E1] dark:border-[#334155] bg-[#FAF9F5] dark:bg-[#0F172A] px-3 h-11">
-                <User className="h-4 w-4 text-slate-400 mr-2 shrink-0" />
-                <input
-                  id="redeem-name-input"
-                  type="text"
-                  maxLength={60}
-                  value={nameInput}
-                  onChange={(e) => {
-                    setNameInput(e.target.value);
-                    setLocalError(null);
-                  }}
-                  placeholder={t.fieldFullNamePlaceholder}
-                  className="w-full bg-transparent text-sm font-medium outline-none"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label
-                htmlFor="redeem-mobile-input"
-                className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1"
-              >
-                {t.fieldMobile}
-              </label>
-              <div className="flex items-center rounded-xl border border-[#CBD5E1] dark:border-[#334155] bg-[#FAF9F5] dark:bg-[#0F172A] px-3 h-11">
-                <Smartphone className="h-4 w-4 text-slate-400 mr-2 shrink-0" />
-                <span className="text-xs font-bold text-slate-500 mr-1.5">+91</span>
-                <input
-                  id="redeem-mobile-input"
-                  type="tel"
-                  inputMode="numeric"
-                  maxLength={10}
-                  value={mobileInput}
-                  onChange={(e) => {
-                    setMobileInput(normalizeIndianMobileInput(e.target.value));
-                    setLocalError(null);
-                  }}
-                  placeholder={t.fieldMobilePlaceholder}
-                  className="w-full bg-transparent text-sm font-semibold tabular-nums outline-none"
-                />
-              </div>
-            </div>
-          </div>
-
-          {localError && (
-            <div
-              role="alert"
-              className="rounded-xl bg-red-50 dark:bg-red-950/60 border border-red-200 dark:border-red-900 p-3 text-xs font-semibold text-red-700 dark:text-red-300"
-            >
-              {localError}
-            </div>
-          )}
-
-          <button
-            type="submit"
-            disabled={isBusy || !isAuthReady}
-            className="w-full h-12 rounded-xl bg-[#1E3A8A] hover:bg-[#172554] dark:bg-[#2563EB] text-white text-sm font-extrabold flex items-center justify-center gap-2 transition-colors disabled:opacity-60 cursor-pointer"
-          >
-            <LockOpen className="h-4.5 w-4.5" />
-            <span>{isBusy ? t.redeemingBtn : t.redeemNowBtn}</span>
-          </button>
-        </form>
-
-        {lastUnlockedResult && (
-          <div className="rounded-xl bg-[#D1FAE5] dark:bg-[#064E3B] p-3.5 flex items-start gap-2.5 text-[#064E3B] dark:text-[#D1FAE5]">
-            <CheckCircle2 className="h-5 w-5 shrink-0 mt-0.5" />
-            <div className="space-y-0.5">
-              <p className="text-sm font-extrabold">{t.codeSuccessTitle}</p>
-              <p className="text-xs">
-                {t.codeSuccessDesc} ({lastUnlockedResult.code} •{' '}
-                {getSubjectDisplayName(lastUnlockedResult.subjectId, lang)})
-              </p>
-            </div>
-          </div>
-        )}
-      </section>
-
-      {/* Protected Content: Std 10 Quiz Folders */}
+      {/* Quiz Platform Hero / Subject Folders */}
       <section className="space-y-3.5">
         <div className="flex items-center justify-between gap-2">
           <div>
-            <h3 className="text-base sm:text-lg font-extrabold">{t.unlockedContentTitle}</h3>
+            <h2 className="text-base sm:text-lg font-extrabold">{t.unlockedContentTitle}</h2>
             <p className="text-xs text-[#475569] dark:text-[#94A3B8]">
               {t.unlockedContentSubtitle}
             </p>
@@ -280,6 +125,44 @@ export const UseCodeScreen: React.FC<UseCodeScreenProps> = ({
           </span>
         </div>
 
+        {/* All Subjects ₹49 Quick Unlock Strip */}
+        {!allUnlocked && (
+          <div className="rounded-2xl bg-gradient-to-r from-[#FEF3C7] to-[#FDE68A]/70 dark:from-[#451A03] dark:to-[#78350F]/60 border border-[#F59E0B]/35 p-4 text-[#92400E] dark:text-[#FDE68A] space-y-2.5">
+            <div className="space-y-0.5">
+              <h3 className="text-sm sm:text-base font-extrabold">{t.unlockAllBannerTitle}</h3>
+              <p className="text-xs opacity-90">{t.unlockAllBannerDesc}</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() =>
+                  setUnlockModalState({ isOpen: true, mode: 'pay', code: prefilledCode })
+                }
+                className="h-9 px-3.5 rounded-xl bg-[#1E3A8A] hover:bg-[#172554] text-white text-xs font-extrabold inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                <IndianRupee className="h-3.5 w-3.5" />
+                <span>
+                  {lang === 'en'
+                    ? `Pay ₹${PRICE_ALL_SUBJECTS} via UPI`
+                    : `₹${PRICE_ALL_SUBJECTS} UPI પેમેન્ટ કરો`}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() =>
+                  setUnlockModalState({ isOpen: true, mode: 'code', code: prefilledCode })
+                }
+                className="h-9 px-3.5 rounded-xl bg-white/85 dark:bg-black/30 hover:bg-white text-xs font-extrabold inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                <KeyRound className="h-3.5 w-3.5" />
+                <span>{t.codeTabLabel}</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Subject Folders List */}
         <div className="space-y-3.5">
           {std10Subjects.map((subject) => {
             const access = hasSubjectAccess(subject.id);
@@ -321,9 +204,16 @@ export const UseCodeScreen: React.FC<UseCodeScreenProps> = ({
                   </div>
 
                   <div className="flex-1 min-w-0 space-y-1">
-                    <h4 className="text-base sm:text-lg font-bold">
-                      {lang === 'en' ? `${subject.englishSubtitle} (${subject.title})` : subject.title}
-                    </h4>
+                    <div className="flex items-center justify-between gap-2">
+                      <h4 className="text-base sm:text-lg font-bold truncate">
+                        {lang === 'en' ? `${subject.englishSubtitle} (${subject.title})` : subject.title}
+                      </h4>
+                      {!access && (
+                        <span className="shrink-0 rounded-md bg-[#FEF3C7] dark:bg-[#451A03] text-[#92400E] dark:text-[#FDE68A] px-2 py-0.5 text-[11px] font-extrabold tabular-nums">
+                          ₹{PRICE_SINGLE_SUBJECT}
+                        </span>
+                      )}
+                    </div>
                     <p className="text-xs text-[#475569] dark:text-[#94A3B8] line-clamp-2">
                       {subject.description}
                     </p>
@@ -346,6 +236,121 @@ export const UseCodeScreen: React.FC<UseCodeScreenProps> = ({
         </div>
       </section>
 
+      {/* Live Submitted Payment Status (appears when user has submitted any screenshot) */}
+      {myPayments.length > 0 && (
+        <section className="space-y-3 pt-1">
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="text-base font-extrabold">{t.myRequestsTitle}</h3>
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-[#D1FAE5] dark:bg-[#064E3B] text-[#064E3B] dark:text-[#D1FAE5] px-2.5 py-0.5 text-[11px] font-bold">
+              <Radio className="h-3 w-3 animate-pulse" />
+              <span>{t.liveBadge}</span>
+            </span>
+          </div>
+
+          <div className="space-y-2.5">
+            {myPayments.map((req) => {
+              const thumbUrl = resolvePaymentImageSrc(req);
+              const subName = getSubjectDisplayName(resolvePaymentSubjectId(req), lang);
+              return (
+                <div
+                  key={req.id}
+                  className="rounded-2xl bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] p-3.5 space-y-2.5 shadow-sm"
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      {thumbUrl && (
+                        <img
+                          src={thumbUrl}
+                          alt={t.zoomModalTitle}
+                          className="h-11 w-11 rounded-xl border border-slate-200 dark:border-slate-700 object-cover shrink-0"
+                        />
+                      )}
+                      <div className="min-w-0">
+                        <p className="text-xs sm:text-sm font-extrabold truncate">
+                          ₹{req.amountRupees} • {subName}
+                        </p>
+                        <p className="text-[11px] text-[#64748B] dark:text-[#94A3B8] truncate">
+                          UTR: {req.upiTransactionRef} • {formatTimestampLabel(req.createdAt, lang)}
+                        </p>
+                      </div>
+                    </div>
+
+                    <span
+                      className={`shrink-0 rounded-lg px-2 py-1 text-[10px] font-extrabold ${
+                        req.status === 'approved'
+                          ? 'bg-[#D1FAE5] text-[#064E3B]'
+                          : req.status === 'rejected'
+                            ? 'bg-[#FEE2E2] text-[#7F1D1D]'
+                            : 'bg-[#FEF3C7] text-[#92400E]'
+                      }`}
+                    >
+                      {req.status === 'approved'
+                        ? t.statusApproved
+                        : req.status === 'rejected'
+                          ? t.statusRejected
+                          : t.statusPending}
+                    </span>
+                  </div>
+
+                  {req.status === 'pending' && (
+                    <div className="rounded-xl bg-[#FEF3C7]/60 dark:bg-[#451A03]/60 px-3 py-2 flex items-center gap-2 text-xs font-semibold text-[#92400E] dark:text-[#FDE68A]">
+                      <Clock className="h-4 w-4 shrink-0 animate-pulse" />
+                      <span>{t.waitingApprovalLive}</span>
+                    </div>
+                  )}
+
+                  {req.status === 'rejected' && (
+                    <div className="rounded-xl bg-[#FEE2E2]/70 dark:bg-[#7F1D1D]/50 px-3 py-2 flex items-start gap-2 text-xs font-semibold text-[#7F1D1D] dark:text-[#FEE2E2]">
+                      <XCircle className="h-4 w-4 shrink-0 mt-0.5" />
+                      <span>
+                        {t.adminNoteLabel} {req.adminNote || t.statusRejected}
+                      </span>
+                    </div>
+                  )}
+
+                  {req.status === 'approved' && req.assignedCode && (
+                    <div className="rounded-xl bg-[#D1FAE5] dark:bg-[#064E3B] p-3 flex flex-wrap items-center justify-between gap-2 text-[#064E3B] dark:text-[#D1FAE5]">
+                      <div className="flex items-center gap-2">
+                        <CheckCircle2 className="h-4.5 w-4.5 shrink-0" />
+                        <span className="text-base font-extrabold font-mono tracking-widest">
+                          {req.assignedCode}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => void handleCopyCode(req.assignedCode)}
+                          className="h-9 px-2.5 rounded-lg bg-white/80 dark:bg-black/30 text-xs font-bold inline-flex items-center gap-1 cursor-pointer"
+                        >
+                          <Copy className="h-3.5 w-3.5" />
+                          <span>{t.copyCode}</span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isBusy}
+                          onClick={() =>
+                            setUnlockModalState({
+                              isOpen: true,
+                              mode: 'code',
+                              code: req.assignedCode,
+                            })
+                          }
+                          className="h-9 px-3 rounded-lg bg-[#047857] text-white text-xs font-extrabold inline-flex items-center gap-1 cursor-pointer"
+                        >
+                          <KeyRound className="h-3.5 w-3.5" />
+                          <span>{t.useThisCodeBtn}</span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      {/* Recent Quiz Results */}
       {recentAttempts.length > 0 && (
         <section className="space-y-2.5 pt-2">
           <div className="flex items-center gap-2">
@@ -377,6 +382,21 @@ export const UseCodeScreen: React.FC<UseCodeScreenProps> = ({
           </div>
         </section>
       )}
+
+      <SubjectPaymentModal
+        isOpen={unlockModalState.isOpen}
+        defaultSubjectId="all"
+        initialMode={unlockModalState.mode}
+        initialCode={unlockModalState.code}
+        studentName={studentName}
+        studentMobile={studentMobile}
+        myPayments={myPayments}
+        isBusy={isBusy}
+        onClose={() => setUnlockModalState((prev) => ({ ...prev, isOpen: false }))}
+        onSubmitPayment={onSubmitPayment}
+        onRedeemCode={onRedeemCode}
+        onNotify={onNotify}
+      />
     </div>
   );
 };

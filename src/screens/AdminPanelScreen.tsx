@@ -2,11 +2,14 @@ import React, { useEffect, useState } from 'react';
 import {
   ArrowLeft,
   Bell,
+  CheckCircle2,
+  Copy,
   FolderKanban,
   Languages,
   LogOut,
   Radio,
   RefreshCw,
+  Send,
   Settings,
   UserCheck,
   Volume2,
@@ -15,7 +18,18 @@ import {
   X,
 } from 'lucide-react';
 import { useTranslation } from '../i18n/translations';
-import type { AccessCode, AppReleaseConfig, PaymentRequest } from '../types/models';
+import {
+  displayPaymentTransactionRef,
+  getSubjectDisplayName,
+  resolvePaymentSubjectId,
+  type AccessCode,
+  type AppReleaseConfig,
+  type PaymentRequest,
+} from '../types/models';
+import {
+  buildPaymentApprovalWhatsAppHref,
+  launchExternalUrl,
+} from '../utils/imageUtils';
 import {
   AdminAllCodesTab,
   AdminFirebaseSetupTab,
@@ -42,6 +56,8 @@ interface AdminPanelScreenProps {
   currentVersionName: string;
   isBusy: boolean;
   isCheckingUpdate: boolean;
+  approvedConfirmation?: PaymentRequest | null;
+  onDismissApprovedConfirmation?: () => void;
   onBackToPublic: () => void;
   onForceSync: () => void;
   onToggleSound: () => void;
@@ -66,6 +82,8 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
   currentVersionName,
   isBusy,
   isCheckingUpdate,
+  approvedConfirmation = null,
+  onDismissApprovedConfirmation,
   onBackToPublic,
   onForceSync,
   onToggleSound,
@@ -345,6 +363,91 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
                 type="button"
                 onClick={() => setZoomedScreenshotUrl(null)}
                 className="px-4 py-2 text-sm font-bold text-[#1E3A8A] dark:text-[#93C5FD] cursor-pointer"
+              >
+                {t.closeBtn}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Approval Confirmation + WhatsApp Send Modal */}
+      {approvedConfirmation && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => onDismissApprovedConfirmation?.()}
+        >
+          <div
+            className="w-full max-w-md rounded-3xl bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] p-5 space-y-4 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start gap-3">
+              <div className="h-11 w-11 rounded-2xl bg-[#D1FAE5] dark:bg-[#064E3B] text-[#047857] dark:text-[#6EE7B7] flex items-center justify-center shrink-0">
+                <CheckCircle2 className="h-6 w-6" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h3 className="text-base font-extrabold">{t.approvedModalTitle}</h3>
+                <p className="text-xs text-[#475569] dark:text-[#94A3B8]">
+                  {t.approvedModalDesc}
+                </p>
+              </div>
+            </div>
+
+            <div className="rounded-2xl bg-[#EFF4FA] dark:bg-[#0F172A] p-3.5 text-xs space-y-1">
+              <p className="font-extrabold text-sm">{approvedConfirmation.studentName}</p>
+              <p className="text-[#475569] dark:text-[#94A3B8] tabular-nums">
+                +91 {approvedConfirmation.mobileNumber} • ₹{approvedConfirmation.amountRupees}
+              </p>
+              <p className="text-[#475569] dark:text-[#94A3B8]">
+                {getSubjectDisplayName(resolvePaymentSubjectId(approvedConfirmation), lang)} • UTR:{' '}
+                {displayPaymentTransactionRef(approvedConfirmation) || '-'}
+              </p>
+            </div>
+
+            <div className="rounded-2xl bg-[#D1FAE5] dark:bg-[#064E3B] p-3.5 flex items-center justify-between gap-2 text-[#064E3B] dark:text-[#D1FAE5]">
+              <div>
+                <p className="text-[11px] font-bold opacity-85">{t.generatedCodeLabel}</p>
+                <p className="text-xl font-extrabold tracking-widest font-mono">
+                  {approvedConfirmation.assignedCode}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(approvedConfirmation.assignedCode);
+                    onNotify?.(`${t.payUpiCopied}: ${approvedConfirmation.assignedCode}`);
+                  } catch {
+                    onNotify?.(approvedConfirmation.assignedCode);
+                  }
+                }}
+                className="h-9 px-3 rounded-lg bg-white/80 dark:bg-black/30 text-xs font-bold flex items-center gap-1 cursor-pointer"
+              >
+                <Copy className="h-3.5 w-3.5" />
+                <span>{t.copyCode}</span>
+              </button>
+            </div>
+
+            <div className="space-y-2">
+              <button
+                type="button"
+                onClick={() =>
+                  launchExternalUrl(
+                    buildPaymentApprovalWhatsAppHref(approvedConfirmation, lang)
+                  )
+                }
+                className="w-full h-11 rounded-xl bg-[#047857] hover:bg-[#065F46] text-white text-sm font-extrabold flex items-center justify-center gap-2 transition-colors cursor-pointer"
+              >
+                <Send className="h-4 w-4" />
+                <span>{t.sendOnWhatsAppBtn}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onDismissApprovedConfirmation?.()}
+                className="w-full h-10 rounded-xl border border-[#CBD5E1] dark:border-[#334155] text-xs font-bold cursor-pointer"
               >
                 {t.closeBtn}
               </button>

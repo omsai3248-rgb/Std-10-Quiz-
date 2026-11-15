@@ -21,6 +21,22 @@ export interface Translations {
   payUpiCopy: string;
   payUpiCopied: string;
   payUpiOpenApp: string;
+  payUpiQuickTip: string;
+  loginTitle: string;
+  loginSubtitle: string;
+  loginBtn: string;
+  switchAccountBtn: string;
+  adminNumberLoginHint: string;
+  unlockSingleSubjectLabel: string;
+  unlockAllSubjectsLabel: string;
+  fixedPriceBadge: string;
+  payTabLabel: string;
+  codeTabLabel: string;
+  submitToAdminBtn: string;
+  unlockAllBannerTitle: string;
+  unlockAllBannerDesc: string;
+  approvedModalTitle: string;
+  approvedModalDesc: string;
   fieldFullName: string;
   fieldFullNamePlaceholder: string;
   fieldMobile: string;
@@ -163,7 +179,23 @@ const GU: Translations = {
   payUpiCardTitle: 'UPI દ્વારા પેમેન્ટ કરો',
   payUpiCopy: 'કોપી',
   payUpiCopied: 'કોપી થઈ ગયો',
-  payUpiOpenApp: 'UPI એપમાં તરત ચૂકવો',
+  payUpiOpenApp: 'UPI એપ દ્વારા ચૂકવો',
+  payUpiQuickTip: 'ફક્ત UPI દ્વારા પેમેન્ટ કરો, ત્યારબાદ UTR નંબર અને સ્ક્રીનશોટ સીધો એડમિન પેનલમાં મોકલો.',
+  loginTitle: 'મોબાઇલ નંબરથી લૉગિન કરો',
+  loginSubtitle: 'તમારું નામ અને ૧૦ અંકનો મોબાઇલ નંબર દાખલ કરી ધોરણ ૧૦ ક્વિઝ પ્લેટફોર્મ ખોલો.',
+  loginBtn: 'લૉગિન કરી ક્વિઝ શરૂ કરો',
+  switchAccountBtn: 'નંબર બદલો',
+  adminNumberLoginHint: 'આ એડમિન નંબર છે — કૃપા કરીને ઉપરના "એડમિન" વિભાગમાં OTP થી લૉગિન કરો.',
+  unlockSingleSubjectLabel: 'માત્ર આ વિષય',
+  unlockAllSubjectsLabel: 'બધા વિષયો (ગણિત + વિજ્ઞાન + સા.વિ.)',
+  fixedPriceBadge: 'ફિક્સ ફી',
+  payTabLabel: 'UPI પેમેન્ટ અને સ્ક્રીનશોટ',
+  codeTabLabel: 'મારી પાસે કોડ છે',
+  submitToAdminBtn: 'સ્ક્રીનશોટ એડમિન પેનલમાં મોકલો',
+  unlockAllBannerTitle: 'બધા જ વિષયો ફક્ત ₹49 માં અનલૉક કરો',
+  unlockAllBannerDesc: 'કોઈ એક વિષય ₹24 (Fix) અથવા બધા વિષયો ₹49 (Fix) — વિષયની અંદર જ UPI પેમેન્ટ કરો.',
+  approvedModalTitle: 'પેમેન્ટ મંજૂર અને કોડ તૈયાર છે!',
+  approvedModalDesc: 'વિદ્યાર્થીને WhatsApp પર પેમેન્ટ વિગત અને 8-અક્ષરનો કોડ તરત મોકલો.',
   fieldFullName: 'તમારું પૂરું નામ *',
   fieldFullNamePlaceholder: 'દા.ત. આરવ પટેલ',
   fieldMobile: 'મોબાઇલ નંબર (૧૦ અંક) *',
@@ -304,7 +336,23 @@ const EN: Translations = {
   payUpiCardTitle: 'Pay via UPI',
   payUpiCopy: 'Copy',
   payUpiCopied: 'Copied',
-  payUpiOpenApp: 'Pay via UPI App',
+  payUpiOpenApp: 'Pay via UPI',
+  payUpiQuickTip: 'Pay strictly via UPI, then upload the UTR ID and screenshot straight to the Admin Panel.',
+  loginTitle: 'Login with Mobile Number',
+  loginSubtitle: 'Enter your name and 10-digit mobile number to open the Std 10 Quiz platform.',
+  loginBtn: 'Login & Open Quiz Platform',
+  switchAccountBtn: 'Switch',
+  adminNumberLoginHint: 'This is the Admin number — please use the Admin OTP tab above.',
+  unlockSingleSubjectLabel: 'Single Subject Only',
+  unlockAllSubjectsLabel: 'All Subjects (Maths + Science + SS)',
+  fixedPriceBadge: 'Fixed Price',
+  payTabLabel: 'Pay via UPI & Screenshot',
+  codeTabLabel: 'I Have a Code',
+  submitToAdminBtn: 'Send Screenshot to Admin Panel',
+  unlockAllBannerTitle: 'Unlock All Subjects for Just ₹49',
+  unlockAllBannerDesc: 'Fixed ₹24 per subject or ₹49 for all subjects — pay via UPI inside any quiz.',
+  approvedModalTitle: 'Approved & Code Ready!',
+  approvedModalDesc: 'Send the payment details and 8-character access code to the student on WhatsApp.',
   fieldFullName: 'Full Name *',
   fieldFullNamePlaceholder: 'e.g. Aarav Patel',
   fieldMobile: 'Mobile Number (10 digits) *',

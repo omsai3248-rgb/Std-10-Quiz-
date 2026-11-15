@@ -150,6 +150,13 @@ export interface ActionBanner {
 
 export const ALL_SUBJECT_IDS: SubjectId[] = ['maths', 'science', 'social_science'];
 
+export const PRICE_SINGLE_SUBJECT = 24;
+export const PRICE_ALL_SUBJECTS = 49;
+
+export function getFixedPlanPrice(subjectId: string): number {
+  return subjectId === 'all' ? PRICE_ALL_SUBJECTS : PRICE_SINGLE_SUBJECT;
+}
+
 export function getSubjectDisplayName(subjectId: string, lang: 'gu' | 'en' = 'gu'): string {
   if (lang === 'en') {
     switch (subjectId) {

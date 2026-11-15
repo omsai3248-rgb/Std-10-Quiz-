@@ -1,24 +1,32 @@
 import React from 'react';
-import { KeyRound, Languages, Moon, ShieldCheck, Sun, Wallet } from 'lucide-react';
+import { BookOpen, Languages, LogOut, Moon, ShieldCheck, Smartphone, Sun } from 'lucide-react';
 import { useTranslation } from '../i18n/translations';
 
-export type PublicTabId = 'payment' | 'use_code' | 'admin';
+export type PublicTabId = 'quiz' | 'admin';
 
 interface TopNavHeaderProps {
   activeTab: PublicTabId;
+  isStudentLoggedIn: boolean;
+  studentName?: string;
+  studentMobile?: string;
   isAdmin: boolean;
   adminBadgeCount: number;
   isDarkTheme: boolean;
   onSelectTab: (tab: PublicTabId) => void;
+  onStudentLogout: () => void;
   onToggleTheme: () => void;
 }
 
 export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
   activeTab,
+  isStudentLoggedIn,
+  studentName = '',
+  studentMobile = '',
   isAdmin,
   adminBadgeCount,
   isDarkTheme,
   onSelectTab,
+  onStudentLogout,
   onToggleTheme,
 }) => {
   const { lang, toggleLang, t } = useTranslation();
@@ -64,35 +72,44 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
         </div>
       </div>
 
-      {/* Mobile-First 3-Tab Switcher */}
+      {/* Logged-in Student Strip */}
+      {isStudentLoggedIn && activeTab === 'quiz' && (
+        <div className="max-w-4xl mx-auto px-3 sm:px-4 py-1.5 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between gap-2 bg-[#FAF9F5]/80 dark:bg-[#0F172A]/60 text-xs">
+          <div className="flex items-center gap-1.5 min-w-0 font-bold text-[#0F172A] dark:text-[#F8FAFC]">
+            <Smartphone className="h-3.5 w-3.5 text-[#1E3A8A] dark:text-[#93C5FD] shrink-0" />
+            <span className="truncate">
+              {studentName} • +91 {studentMobile}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={onStudentLogout}
+            className="shrink-0 inline-flex items-center gap-1 rounded-lg border border-[#CBD5E1] dark:border-[#334155] px-2 py-1 text-[11px] font-bold text-[#475569] dark:text-[#94A3B8] hover:text-red-600 dark:hover:text-red-400 cursor-pointer"
+          >
+            <LogOut className="h-3 w-3" />
+            <span>{t.switchAccountBtn}</span>
+          </button>
+        </div>
+      )}
+
+      {/* Clean 2-Tab Navigation: Quiz Platform / Login vs Admin */}
       <nav
         aria-label="Primary Navigation"
-        className="max-w-4xl mx-auto px-2 sm:px-4 grid grid-cols-3 border-t border-slate-100 dark:border-slate-800"
+        className="max-w-4xl mx-auto px-2 sm:px-4 grid grid-cols-2 border-t border-slate-100 dark:border-slate-800"
       >
         <button
           type="button"
-          onClick={() => onSelectTab('payment')}
+          onClick={() => onSelectTab('quiz')}
           className={`h-11 flex items-center justify-center gap-1.5 text-xs sm:text-sm font-bold border-b-2 transition-colors cursor-pointer ${
-            activeTab === 'payment'
+            activeTab === 'quiz'
               ? 'border-[#1E3A8A] text-[#1E3A8A] dark:border-[#93C5FD] dark:text-[#93C5FD]'
               : 'border-transparent text-[#475569] dark:text-[#94A3B8] hover:text-[#0F172A] dark:hover:text-white'
           }`}
         >
-          <Wallet className="h-4 w-4 shrink-0" />
-          <span className="truncate">{t.navSubmitPayment}</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => onSelectTab('use_code')}
-          className={`h-11 flex items-center justify-center gap-1.5 text-xs sm:text-sm font-bold border-b-2 transition-colors cursor-pointer ${
-            activeTab === 'use_code'
-              ? 'border-[#1E3A8A] text-[#1E3A8A] dark:border-[#93C5FD] dark:text-[#93C5FD]'
-              : 'border-transparent text-[#475569] dark:text-[#94A3B8] hover:text-[#0F172A] dark:hover:text-white'
-          }`}
-        >
-          <KeyRound className="h-4 w-4 shrink-0" />
-          <span className="truncate">{t.navUseCode}</span>
+          <BookOpen className="h-4 w-4 shrink-0" />
+          <span className="truncate">
+            {isStudentLoggedIn ? (lang === 'en' ? 'Quiz Platform' : 'ક્વિઝ પ્લેટફોર્મ') : t.loginTitle}
+          </span>
         </button>
 
         <button

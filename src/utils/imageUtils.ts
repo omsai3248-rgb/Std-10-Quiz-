@@ -49,20 +49,57 @@ export function getDeviceBrowserInfo(): string {
   return [browser, os, screenSize].filter(Boolean).join(' • ').slice(0, 180);
 }
 
+interface AndroidBridgeApi {
+  saveExportedFile?: (suggestedName: string, dataUrl: string) => void;
+  openUpiPayment?: (upiUrl: string, fallbackUpiUrl: string) => void;
+  openExternalUrl?: (url: string) => void;
+}
+
+declare global {
+  interface Window {
+    AndroidBridge?: AndroidBridgeApi;
+  }
+}
+
 export function buildUpiPaymentHref(
   upiId: string,
   payeeName: string,
   amountRupees: number,
   studentMobile: string
 ): string {
-  const params = new URLSearchParams({
-    pa: upiId,
-    pn: payeeName,
-    am: String(amountRupees),
-    cu: 'INR',
-    tn: `Quiz Access ${studentMobile}`,
-  });
-  return `upi://pay?${params.toString()}`;
+  const cleanAmount = Math.max(1, Number(amountRupees) || 24).toFixed(2);
+  const cleanMob = studentMobile.replace(/\D/g, '').slice(-10);
+  const note = cleanMob ? `Std10Quiz-${cleanMob}` : 'Std10QuizFee';
+  const query = [
+    `pa=${encodeURIComponent(upiId.trim())}`,
+    `pn=${encodeURIComponent(payeeName.trim())}`,
+    `am=${encodeURIComponent(cleanAmount)}`,
+    'cu=INR',
+    `tn=${encodeURIComponent(note)}`,
+  ].join('&');
+
+  return `upi://pay?${query}`;
+}
+
+export function launchUpiPayment(upiUrl: string): void {
+  if (typeof window === 'undefined') return;
+  if (window.AndroidBridge?.openUpiPayment) {
+    window.AndroidBridge.openUpiPayment(upiUrl, upiUrl);
+    return;
+  }
+  window.location.href = upiUrl;
+}
+
+export function launchExternalUrl(url: string): void {
+  if (typeof window === 'undefined' || !url) return;
+  if (window.AndroidBridge?.openExternalUrl) {
+    window.AndroidBridge.openExternalUrl(url);
+    return;
+  }
+  const opened = window.open(url, '_blank', 'noopener,noreferrer');
+  if (!opened) {
+    window.location.href = url;
+  }
 }
 
 export function normalizeIndianMobileInput(raw: string): string {

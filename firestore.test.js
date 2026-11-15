@@ -87,11 +87,69 @@ beforeEach(async () => {
   }
 });
 
-test("Unauthenticated user cannot read or write any collection", async () => {
+test("Unauthenticated user cannot list any collection or read non-UUID/student/used docs", async () => {
   const unauthDb = testEnv.unauthenticatedContext().firestore();
+  await assertFails(unauthDb.collection("payment_requests").get());
   await assertFails(unauthDb.collection("payment_requests").doc("pay_1").get());
-  await assertFails(unauthDb.collection("access_codes").doc("AB12CD34").get());
-  await assertFails(unauthDb.collection("utr_locks").doc("UTR123456").get());
+  await assertFails(unauthDb.collection("access_codes").get());
+  await assertFails(unauthDb.collection("utr_locks").get());
+  await assertFails(unauthDb.collection("students").get());
+  await assertFails(unauthDb.collection("students").doc("some_uid").get());
+});
+
+test("Public visitor (without Anonymous Auth) can submit payment with cryptographic UUIDs and redeem unused code once", async () => {
+  const unauthDb = testEnv.unauthenticatedContext().firestore();
+  const pubUid = "pub_0123456789abcdef0123456789abcdef";
+  const payId = "pay_fedcba9876543210fedcba9876543210";
+  const utr = "UTR77665544";
+  const now = new Date();
+
+  const batch = unauthDb.batch();
+  batch.set(unauthDb.collection("utr_locks").doc(utr), {
+    utrNormalized: utr,
+    requestId: payId,
+    createdAt: now,
+  });
+  batch.set(
+    unauthDb.collection("payment_requests").doc(payId),
+    makePaymentPayload(pubUid, utr, { createdAt: now, updatedAt: now })
+  );
+  await assertSucceeds(batch.commit());
+  await assertSucceeds(unauthDb.collection("payment_requests").doc(payId).get());
+
+  // Unauthenticated visitor CANNOT approve their own payment
+  await assertFails(
+    unauthDb.collection("payment_requests").doc(payId).update({
+      status: "approved",
+      assignedCode: "K7M9P2X4",
+      updatedAt: new Date(),
+    })
+  );
+
+  // Unauthenticated visitor CAN redeem an unused code once using pub_ UUID
+  const code = "P9Q8R7S6";
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await ctx.firestore().collection("access_codes").doc(code).set(makeCodePayload(code));
+  });
+  await assertSucceeds(
+    unauthDb.collection("access_codes").doc(code).update({
+      status: "used",
+      isUsed: true,
+      usedAt: now,
+      usedBy: {
+        uid: pubUid,
+        name: "Public Student",
+        mobile: "9876543210",
+        deviceInfo: "Android WebView",
+      },
+      usedByUserId: pubUid,
+      usedByName: "Public Student",
+      usedByMobile: "9876543210",
+      updatedAt: now,
+    })
+  );
+  // Already-used code cannot be read or reused unauthenticated
+  await assertFails(unauthDb.collection("access_codes").doc(code).get());
 });
 
 test("Public user (anonymous/signed-in) can create payment_requests atomically with utr_locks and read only their own", async () => {

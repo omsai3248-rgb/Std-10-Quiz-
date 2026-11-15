@@ -22,6 +22,14 @@ service cloud.firestore {
       return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    function isValidPublicUid(uid) {
+      return uid is string && uid.matches('^pub_[a-f0-9]{32}$');
+    }
+
+    function isValidPayId(id) {
+      return id is string && id.matches('^pay_[a-f0-9]{32}$');
+    }
+
     function isValidUtrKey(utr) {
       return utr is string && utr.size() >= 4 && utr.size() <= 64 && utr.matches('^[A-Z0-9_\\-]+$');
     }
@@ -172,7 +180,7 @@ service cloud.firestore {
       allow list, create, update, delete: if false;
     }
 
-    // Students collection (tracks unlocked content + quiz stats per user UID)
+    // Students collection (tracks unlocked content + quiz stats per signed-in user UID)
     match /students/{userId} {
       allow get: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
       allow list: if isAdmin();
@@ -241,27 +249,29 @@ service cloud.firestore {
 
     // Unique UTR lock collection to enforce duplicate UTR prevention server-side
     match /utr_locks/{utrId} {
-      allow get: if isSignedIn() && isValidUtrKey(utrId);
+      allow get: if isValidUtrKey(utrId);
       allow list: if isAdmin();
-      allow create: if isSignedIn() &&
-                       isValidUtrKey(utrId) &&
+      allow create: if isValidUtrKey(utrId) &&
                        incoming().keys().hasAll(['utrNormalized', 'requestId', 'createdAt']) &&
                        incoming().keys().hasOnly(['utrNormalized', 'requestId', 'createdAt']) &&
                        incoming().utrNormalized == utrId &&
                        isValidId(incoming().requestId) &&
                        incoming().createdAt is timestamp && incoming().createdAt <= request.time &&
                        getAfter(/databases/$(database)/documents/payment_requests/$(incoming().requestId)).data.utrNormalized == utrId &&
-                       getAfter(/databases/$(database)/documents/payment_requests/$(incoming().requestId)).data.userId == request.auth.uid;
+                       (
+                         (isSignedIn() && getAfter(/databases/$(database)/documents/payment_requests/$(incoming().requestId)).data.userId == request.auth.uid) ||
+                         (!isSignedIn() && isValidPayId(incoming().requestId) && isValidPublicUid(getAfter(/databases/$(database)/documents/payment_requests/$(incoming().requestId)).data.userId))
+                       );
       allow update, delete: if false;
     }
 
     // Permanent access codes collection (NEVER deleted)
     match /access_codes/{codeId} {
-      allow get: if isSignedIn() && isValidId(codeId) && (
+      allow get: if isValidId(codeId) && (
         isAdmin() ||
         resource == null ||
         (resource.data.status == 'unused' && resource.data.isUsed == false) ||
-        resource.data.usedByUserId == request.auth.uid
+        (isSignedIn() && resource.data.usedByUserId == request.auth.uid)
       );
       allow list: if isAdmin();
 
@@ -272,8 +282,7 @@ service cloud.firestore {
                        incoming().status == 'unused' &&
                        incoming().isUsed == false;
 
-      allow update: if isSignedIn() &&
-                       isValidId(codeId) &&
+      allow update: if isValidId(codeId) &&
                        isValidAccessCode(incoming()) &&
                        incoming().code == existing().code &&
                        incoming().createdAt == existing().createdAt && (
@@ -283,9 +292,11 @@ service cloud.firestore {
                            existing().isUsed == false &&
                            incoming().status == 'used' &&
                            incoming().isUsed == true &&
-                           incoming().usedByUserId == request.auth.uid &&
                            isValidUsedByMap(incoming().usedBy) &&
-                           incoming().usedBy.uid == request.auth.uid &&
+                           (
+                             (isSignedIn() && incoming().usedByUserId == request.auth.uid && incoming().usedBy.uid == request.auth.uid) ||
+                             (!isSignedIn() && isValidPublicUid(incoming().usedByUserId) && incoming().usedBy.uid == incoming().usedByUserId)
+                           ) &&
                            incoming().usedByName == incoming().usedBy.name &&
                            incoming().usedByMobile == incoming().usedBy.mobile &&
                            incoming().usedAt is timestamp && incoming().usedAt <= request.time &&
@@ -309,7 +320,7 @@ service cloud.firestore {
     }
 
     match /app_config/{configId} {
-      allow get: if isSignedIn() && isValidId(configId);
+      allow get: if isValidId(configId);
       allow list: if isAdmin();
       allow create, update: if isAdmin() && isValidId(configId) && isValidAppConfig(incoming());
       allow delete: if false;
@@ -317,13 +328,17 @@ service cloud.firestore {
 
     // Payment requests collection
     match /payment_requests/{requestId} {
-      allow get: if isSignedIn() && isValidId(requestId) && ((resource != null && resource.data.userId == request.auth.uid) || isAdmin());
-      allow list: if isSignedIn() && (isAdmin() || resource.data.userId == request.auth.uid);
+      allow get: if isAdmin() ||
+                    (isSignedIn() && isValidId(requestId) && resource != null && resource.data.userId == request.auth.uid) ||
+                    (!isSignedIn() && isValidPayId(requestId) && (resource == null || isValidPublicUid(resource.data.userId)));
+      allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
 
-      allow create: if isSignedIn() &&
-                       isValidId(requestId) &&
+      allow create: if isValidId(requestId) &&
                        isValidPaymentRequest(incoming()) &&
-                       incoming().userId == request.auth.uid &&
+                       (
+                         (isSignedIn() && incoming().userId == request.auth.uid) ||
+                         (!isSignedIn() && isValidPayId(requestId) && isValidPublicUid(incoming().userId))
+                       ) &&
                        incoming().status == 'pending' &&
                        incoming().assignedCode == '' &&
                        incoming().adminNote == '' &&

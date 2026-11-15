@@ -17,6 +17,7 @@ import { getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage
 import { auth, db, storage } from '../firebase';
 import {
   ALL_SUBJECT_IDS,
+  getFixedPlanPrice,
   getSubjectDisplayName,
   resolveCodeSubjectId,
   resolvePaymentSubjectId,
@@ -53,6 +54,76 @@ export function isAdminAccount(authPhone = ''): boolean {
   return digits === ADMIN_PHONE_TEN_DIGITS && clean.startsWith('+91');
 }
 
+const PUBLIC_VISITOR_UID_KEY = 'std10_public_visitor_uid_v1';
+const MY_PAYMENT_IDS_KEY = 'std10_my_payment_ids_v1';
+let memoryPublicVisitorId = '';
+
+function randomHex32(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID().replace(/-/g, '').toLowerCase();
+  }
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+export function getOrCreatePublicVisitorId(): string {
+  const signedInUid = auth.currentUser?.uid;
+  if (signedInUid) return signedInUid;
+
+  try {
+    const existing = localStorage.getItem(PUBLIC_VISITOR_UID_KEY) ?? '';
+    if (/^pub_[a-f0-9]{32}$/.test(existing)) {
+      memoryPublicVisitorId = existing;
+      return existing;
+    }
+    const created = `pub_${randomHex32()}`;
+    localStorage.setItem(PUBLIC_VISITOR_UID_KEY, created);
+    memoryPublicVisitorId = created;
+    return created;
+  } catch {
+    if (!memoryPublicVisitorId) {
+      memoryPublicVisitorId = `pub_${randomHex32()}`;
+    }
+    return memoryPublicVisitorId;
+  }
+}
+
+export function loadMyPaymentRequestIds(mobileNumber = ''): string[] {
+  const cleanMob = mobileNumber.replace(/\D/g, '').slice(-10);
+  const key = cleanMob ? `${MY_PAYMENT_IDS_KEY}_${cleanMob}` : MY_PAYMENT_IDS_KEY;
+  try {
+    const raw = localStorage.getItem(key) ?? (cleanMob ? localStorage.getItem(MY_PAYMENT_IDS_KEY) : null);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((x) => String(x))
+      .filter((id) => /^pay_[a-f0-9]{32}$/.test(id))
+      .slice(0, 25);
+  } catch {
+    return [];
+  }
+}
+
+export function saveMyPaymentRequestId(requestId: string, mobileNumber = ''): string[] {
+  const cleanMob = mobileNumber.replace(/\D/g, '').slice(-10);
+  if (!/^pay_[a-f0-9]{32}$/.test(requestId)) {
+    return loadMyPaymentRequestIds(cleanMob);
+  }
+  const key = cleanMob ? `${MY_PAYMENT_IDS_KEY}_${cleanMob}` : MY_PAYMENT_IDS_KEY;
+  const next = [
+    requestId,
+    ...loadMyPaymentRequestIds(cleanMob).filter((id) => id !== requestId),
+  ].slice(0, 25);
+  try {
+    localStorage.setItem(key, JSON.stringify(next));
+  } catch {
+    // Ignore storage quota errors
+  }
+  return next;
+}
+
 function requireUserId(): string {
   const uid = auth.currentUser?.uid;
   if (!uid) {
@@ -72,8 +143,7 @@ export function generateUnique8CharCode(): string {
 }
 
 function generateId(prefix: string): string {
-  const hex = crypto.randomUUID().replace(/-/g, '').slice(0, 16);
-  return `${prefix}_${hex}`;
+  return `${prefix}_${randomHex32()}`;
 }
 
 export function normalizeUtrId(rawUtr: string): string {
@@ -181,27 +251,26 @@ export async function registerOrUpdateStudentProfile(
 export async function submitPaymentRequest(params: {
   studentName: string;
   mobileNumber: string;
-  amountRupees: number;
+  amountRupees?: number;
   upiTransactionRef: string;
   imageBlob: Blob;
   fallbackBase64: string;
   subjectId?: string;
 }): Promise<string> {
-  const uid = requireUserId();
+  const uid = getOrCreatePublicVisitorId();
+  const isSignedInSession = Boolean(auth.currentUser?.uid);
   const cleanName = params.studentName.trim().slice(0, 60);
   const cleanMobile = params.mobileNumber.replace(/\D/g, '');
-  const cleanAmount = Math.round(Number(params.amountRupees));
   const rawUtr = params.upiTransactionRef.trim().slice(0, 64);
   const utrNormalized = normalizeUtrId(rawUtr);
   const normalizedSubject = ALL_SUBJECT_IDS.includes(params.subjectId as SubjectId)
     ? (params.subjectId as SubjectId)
     : 'all';
+  // Enforce fixed plan pricing: ₹49 for all subjects, ₹24 for a single subject
+  const cleanAmount = getFixedPlanPrice(normalizedSubject);
 
   if (!cleanName) throw new Error('INVALID_NAME');
   if (!/^[0-9]{10}$/.test(cleanMobile)) throw new Error('INVALID_MOBILE');
-  if (!Number.isFinite(cleanAmount) || cleanAmount < 1 || cleanAmount > 100000) {
-    throw new Error('INVALID_AMOUNT');
-  }
   if (utrNormalized.length < 4) throw new Error('INVALID_UTR');
   if (!params.fallbackBase64 && params.imageBlob.size === 0) {
     throw new Error('SCREENSHOT_REQUIRED');
@@ -218,22 +287,25 @@ export async function submitPaymentRequest(params: {
   const screenshotPath = `payment_screenshots/${uid}/${requestId}.jpg`;
   let screenshotUrl = '';
 
-  // Upload to Firebase Storage (with 8s timeout + compressed Firestore thumbnail fallback)
-  try {
-    const fileRef = storageRef(storage, screenshotPath);
-    const uploadPromise = (async () => {
-      const snapshot = await uploadBytes(fileRef, params.imageBlob, {
-        contentType: 'image/jpeg',
+  // Storage requires an authenticated Firebase session; for unauthenticated public submissions,
+  // store the compressed JPEG directly in Firestore so submission completes immediately without timeout.
+  if (isSignedInSession) {
+    try {
+      const fileRef = storageRef(storage, screenshotPath);
+      const uploadPromise = (async () => {
+        const snapshot = await uploadBytes(fileRef, params.imageBlob, {
+          contentType: 'image/jpeg',
+        });
+        return await getDownloadURL(snapshot.ref);
+      })();
+      const timeoutPromise = new Promise<string>((_, reject) => {
+        window.setTimeout(() => reject(new Error('Storage upload timeout')), 8000);
       });
-      return await getDownloadURL(snapshot.ref);
-    })();
-    const timeoutPromise = new Promise<string>((_, reject) => {
-      window.setTimeout(() => reject(new Error('Storage upload timeout')), 8000);
-    });
-    screenshotUrl = await Promise.race([uploadPromise, timeoutPromise]);
-  } catch (storageErr) {
-    console.warn('Firebase Storage upload fell back to compressed Firestore thumbnail:', storageErr);
-    screenshotUrl = '';
+      screenshotUrl = await Promise.race([uploadPromise, timeoutPromise]);
+    } catch (storageErr) {
+      console.warn('Firebase Storage upload fell back to compressed Firestore thumbnail:', storageErr);
+      screenshotUrl = '';
+    }
   }
 
   const screenshotBase64 = screenshotUrl ? '' : params.fallbackBase64.slice(0, 440_000);
@@ -275,6 +347,7 @@ export async function submitPaymentRequest(params: {
         updatedAt: serverTimestamp(),
       });
     });
+    saveMyPaymentRequestId(requestId, cleanMobile);
     return requestId;
   } catch (error) {
     if (error instanceof Error && error.message === 'DUPLICATE_UTR') {
@@ -408,7 +481,8 @@ export async function redeemAccessCodePublic(params: {
   mobileNumber: string;
   expectedSubjectId?: string;
 }): Promise<{ code: string; subjectId: string; amountRupees: number }> {
-  const uid = requireUserId();
+  const uid = getOrCreatePublicVisitorId();
+  const isSignedInSession = Boolean(auth.currentUser?.uid);
   const cleanCode = params.rawCode.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '');
   const cleanName = params.userName.trim().slice(0, 60);
   const cleanMobile = params.mobileNumber.replace(/\D/g, '');
@@ -476,36 +550,38 @@ export async function redeemAccessCodePublic(params: {
       };
     });
 
-    // Best-effort sync to student profile so quiz attempt tracking works cleanly
-    try {
-      const studentRef = doc(db, COLLECTION_STUDENTS, uid);
-      const stSnap = await getDoc(studentRef);
-      const unlockedSet = new Set<string>(
-        stSnap.exists() && Array.isArray(stSnap.data().unlockedSubjects)
-          ? stSnap.data().unlockedSubjects.map((x: unknown) => String(x))
-          : []
-      );
-      if (result.subjectId === 'all') {
-        unlockedSet.add('all');
-        ALL_SUBJECT_IDS.forEach((s) => unlockedSet.add(s));
-      } else {
-        unlockedSet.add(result.subjectId);
-      }
-      const hasFull =
-        unlockedSet.has('all') || ALL_SUBJECT_IDS.every((s) => unlockedSet.has(s));
+    // Best-effort sync to student profile when a signed-in Firebase user exists
+    if (isSignedInSession) {
+      try {
+        const studentRef = doc(db, COLLECTION_STUDENTS, uid);
+        const stSnap = await getDoc(studentRef);
+        const unlockedSet = new Set<string>(
+          stSnap.exists() && Array.isArray(stSnap.data().unlockedSubjects)
+            ? stSnap.data().unlockedSubjects.map((x: unknown) => String(x))
+            : []
+        );
+        if (result.subjectId === 'all') {
+          unlockedSet.add('all');
+          ALL_SUBJECT_IDS.forEach((s) => unlockedSet.add(s));
+        } else {
+          unlockedSet.add(result.subjectId);
+        }
+        const hasFull =
+          unlockedSet.has('all') || ALL_SUBJECT_IDS.every((s) => unlockedSet.has(s));
 
-      if (stSnap.exists()) {
-        await updateDoc(studentRef, {
-          fullName: cleanName,
-          mobileNumber: cleanMobile === ADMIN_PHONE_TEN_DIGITS ? stSnap.data().mobileNumber : cleanMobile,
-          hasQuizAccess: hasFull,
-          redeemedCode: result.code,
-          unlockedSubjects: Array.from(unlockedSet),
-          updatedAt: serverTimestamp(),
-        });
+        if (stSnap.exists()) {
+          await updateDoc(studentRef, {
+            fullName: cleanName,
+            mobileNumber: cleanMobile === ADMIN_PHONE_TEN_DIGITS ? stSnap.data().mobileNumber : cleanMobile,
+            hasQuizAccess: hasFull,
+            redeemedCode: result.code,
+            unlockedSubjects: Array.from(unlockedSet),
+            updatedAt: serverTimestamp(),
+          });
+        }
+      } catch {
+        // Non-fatal: access is already persisted permanently in access_codes & local cache
       }
-    } catch {
-      // Non-fatal: access is already persisted permanently in access_codes & local cache
     }
 
     return result;
@@ -675,6 +751,47 @@ export function observeMyPaymentRequests(
   );
 }
 
+export function observePaymentRequestsByIds(
+  requestIds: string[],
+  onData: (list: PaymentRequest[]) => void
+): Unsubscribe {
+  const validIds = Array.from(new Set(requestIds)).filter((id) => /^pay_[a-f0-9]{32}$/.test(id));
+  if (validIds.length === 0) {
+    onData([]);
+    return () => {};
+  }
+
+  const byId = new Map<string, PaymentRequest>();
+  const emitSorted = () => {
+    const items = Array.from(byId.values()).sort(
+      (a, b) => timestampSortValue(b.createdAt) - timestampSortValue(a.createdAt)
+    );
+    onData(items);
+  };
+
+  const unsubs = validIds.map((id) => {
+    const ref = doc(db, COLLECTION_PAYMENT_REQUESTS, id);
+    return onSnapshot(
+      ref,
+      (snap) => {
+        if (snap.exists()) {
+          byId.set(id, mapPaymentDoc(snap.id, snap.data()));
+        } else {
+          byId.delete(id);
+        }
+        emitSorted();
+      },
+      () => {
+        // Ignore transient or denied single-doc listener error for unauthenticated guest
+      }
+    );
+  });
+
+  return () => {
+    unsubs.forEach((u) => u());
+  };
+}
+
 export function observeMyQuizAttempts(
   userId: string,
   onData: (list: QuizAttempt[]) => void
@@ -722,7 +839,8 @@ export async function recordQuizAttempt(params: {
   previousTotalQuizzes: number;
   previousBestScore: number;
 }): Promise<void> {
-  const uid = requireUserId();
+  const uid = auth.currentUser?.uid;
+  if (!uid) return;
   const {
     subjectId,
     subjectTitle,

@@ -2,68 +2,66 @@ import React, { useState } from 'react';
 import {
   ArrowLeft,
   BookOpen,
-  Copy,
-  ExternalLink,
   IndianRupee,
   KeyRound,
   Lock,
   LockOpen,
   Play,
-  Upload,
 } from 'lucide-react';
-import { ADMIN_UPI_ID, ADMIN_UPI_NAME } from '../services/quizRepository';
-import { buildUpiPaymentHref } from '../utils/imageUtils';
-import type { QuizChapter, QuizSubject } from '../types/models';
+import { SubjectPaymentModal } from '../components/SubjectPaymentModal';
+import { useTranslation } from '../i18n/translations';
+import {
+  PRICE_ALL_SUBJECTS,
+  PRICE_SINGLE_SUBJECT,
+  type PaymentRequest,
+  type QuizChapter,
+  type QuizSubject,
+} from '../types/models';
 
 interface SubjectChaptersScreenProps {
   subject: QuizSubject;
   hasQuizAccess: boolean;
-  studentMobile?: string;
+  studentName: string;
+  studentMobile: string;
+  myPayments: PaymentRequest[];
   isBusy?: boolean;
   onBack: () => void;
   onStartChapterQuiz: (chapter: QuizChapter) => void;
-  onRedeemCode: (code: string, onUnlocked: () => void) => void;
-  onOpenUnlock: () => void;
-  onNotify?: (message: string) => void;
+  onSubmitPayment: (params: {
+    studentName: string;
+    mobileNumber: string;
+    amountRupees: number;
+    upiTransactionRef: string;
+    imageBlob: Blob;
+    fallbackBase64: string;
+    subjectId: string;
+  }) => Promise<string | undefined>;
+  onRedeemCode: (params: {
+    code: string;
+    name: string;
+    mobile: string;
+    expectedSubjectId?: string;
+  }) => Promise<{ code: string; subjectId: string } | undefined>;
+  onNotify?: (message: string, isError?: boolean) => void;
 }
 
 export const SubjectChaptersScreen: React.FC<SubjectChaptersScreenProps> = ({
   subject,
   hasQuizAccess,
-  studentMobile = '',
+  studentName,
+  studentMobile,
+  myPayments,
   isBusy = false,
   onBack,
   onStartChapterQuiz,
+  onSubmitPayment,
   onRedeemCode,
-  onOpenUnlock,
   onNotify,
 }) => {
-  const [showUnlockDialog, setShowUnlockDialog] = useState(false);
-  const [codeInput, setCodeInput] = useState('');
-  const [localError, setLocalError] = useState<string | null>(null);
+  const { lang, t } = useTranslation();
+  const [modalMode, setModalMode] = useState<'pay' | 'code' | null>(null);
 
   const totalQuestions = subject.chapters.reduce((sum, ch) => sum + ch.questions.length, 0);
-
-  const handleCopyUpi = async () => {
-    try {
-      await navigator.clipboard.writeText(ADMIN_UPI_ID);
-      onNotify?.('UPI ID કોપી થઈ ગયો');
-    } catch {
-      onNotify?.(`UPI ID: ${ADMIN_UPI_ID}`);
-    }
-  };
-
-  const handleRedeem = () => {
-    const cleaned = codeInput.trim();
-    if (cleaned.length < 4) {
-      setLocalError('કૃપા કરીને માન્ય એક્સેસ કોડ દાખલ કરો.');
-      return;
-    }
-    setLocalError(null);
-    onRedeemCode(cleaned, () => {
-      setShowUnlockDialog(false);
-    });
-  };
 
   return (
     <div className="min-h-screen bg-[#FAF9F5] dark:bg-[#0B1120] text-[#0F172A] dark:text-[#F8FAFC]">
@@ -110,6 +108,35 @@ export const SubjectChaptersScreen: React.FC<SubjectChaptersScreenProps> = ({
           </div>
         </div>
 
+        {/* In-Subject Unlock Banner (Single ₹24 / All ₹49 via UPI) */}
+        {!hasQuizAccess && (
+          <div className="rounded-2xl bg-[#FEF3C7] dark:bg-[#451A03] border border-[#F59E0B]/35 p-4 text-[#92400E] dark:text-[#FDE68A] space-y-2.5">
+            <p className="text-xs sm:text-sm font-extrabold">
+              {lang === 'en'
+                ? `Unlock ${subject.englishSubtitle} (₹${PRICE_SINGLE_SUBJECT} Fix) or All Subjects (₹${PRICE_ALL_SUBJECTS} Fix)`
+                : `${subject.title} અનલૉક કરો ફક્ત ₹${PRICE_SINGLE_SUBJECT} (Fix) અથવા બધા વિષયો ₹${PRICE_ALL_SUBJECTS} (Fix)`}
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => setModalMode('pay')}
+                className="h-9 px-3.5 rounded-xl bg-[#1E3A8A] hover:bg-[#172554] text-white text-xs font-extrabold inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                <IndianRupee className="h-3.5 w-3.5" />
+                <span>{t.payTabLabel}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setModalMode('code')}
+                className="h-9 px-3.5 rounded-xl bg-white/85 dark:bg-black/30 hover:bg-white text-xs font-extrabold inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                <KeyRound className="h-3.5 w-3.5" />
+                <span>{t.codeTabLabel}</span>
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Chapters List */}
         <div className="space-y-3">
           {subject.chapters.map((chapter) => {
@@ -122,7 +149,7 @@ export const SubjectChaptersScreen: React.FC<SubjectChaptersScreenProps> = ({
                   if (isChapterUnlocked) {
                     onStartChapterQuiz(chapter);
                   } else {
-                    setShowUnlockDialog(true);
+                    setModalMode('pay');
                   }
                 }}
                 className="w-full text-left rounded-2xl bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] shadow-sm hover:shadow-md transition-shadow p-4 flex items-center gap-3.5 cursor-pointer"
@@ -162,7 +189,9 @@ export const SubjectChaptersScreen: React.FC<SubjectChaptersScreenProps> = ({
                             : 'bg-[#FEF3C7] text-[#92400E] dark:bg-[#451A03] dark:text-[#FDE68A]'
                         }`}
                       >
-                        {chapter.isFreeUnlocked ? 'ફ્રી અનલૉક' : 'લૉક'}
+                        {chapter.isFreeUnlocked
+                          ? 'ફ્રી અનલૉક'
+                          : `લૉક • ₹${PRICE_SINGLE_SUBJECT} / ₹${PRICE_ALL_SUBJECTS}`}
                       </span>
                     )}
                   </div>
@@ -179,104 +208,19 @@ export const SubjectChaptersScreen: React.FC<SubjectChaptersScreenProps> = ({
         </div>
       </main>
 
-      {/* Folder Unlock Modal */}
-      {showUnlockDialog && !hasQuizAccess && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-          role="dialog"
-          aria-modal="true"
-        >
-          <div className="w-full max-w-md max-h-[90vh] overflow-y-auto rounded-2xl bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] p-5 shadow-xl space-y-4">
-            <h3 className="text-lg font-bold">{subject.title} ફોલ્ડર અનલૉક કરો</h3>
-            <p className="text-xs text-[#475569] dark:text-[#94A3B8]">
-              એડમિન પેનલમાં આપેલ એક્સેસ કોડ નાખો એટલે આ ફોલ્ડરના બધા લૉક પ્રશ્નો એક સાથે અનલૉક થઈ જશે.
-            </p>
-
-            {/* Step 1: Access Code */}
-            <div className="space-y-2.5">
-              <div className="flex items-center gap-1.5 text-sm font-bold">
-                <KeyRound className="h-4 w-4 text-[#1E3A8A] dark:text-[#93C5FD]" />
-                <span>૧. એક્સેસ કોડ નાખો</span>
-              </div>
-              <input
-                type="text"
-                maxLength={32}
-                value={codeInput}
-                onChange={(e) => {
-                  setCodeInput(e.target.value.toUpperCase().slice(0, 32));
-                  setLocalError(null);
-                }}
-                placeholder="એક્સેસ કોડ (ઉદા. STD10-XXXXXX)"
-                className="w-full h-11 rounded-xl border border-[#CBD5E1] dark:border-[#334155] bg-[#FAF9F5] dark:bg-[#0F172A] px-3 text-sm font-semibold tracking-wide outline-none focus:border-[#1E3A8A]"
-              />
-              {localError && <p className="text-xs text-red-600 dark:text-red-400">{localError}</p>}
-              <button
-                type="button"
-                disabled={isBusy}
-                onClick={handleRedeem}
-                className="w-full h-11 rounded-xl bg-[#1E3A8A] hover:bg-[#172554] text-white text-sm font-semibold transition-colors disabled:opacity-60 cursor-pointer"
-              >
-                {isBusy ? 'ચકાસણી થાય છે...' : 'કોડથી બધા પ્રશ્નો અનલૉક કરો'}
-              </button>
-            </div>
-
-            <div className="border-t border-slate-200 dark:border-slate-700" />
-
-            {/* Step 2: UPI Payment */}
-            <div className="space-y-2.5">
-              <div className="flex items-center gap-1.5 text-sm font-bold">
-                <IndianRupee className="h-4 w-4 text-[#D97706] dark:text-[#FCD34D]" />
-                <span>૨. કોડ ન હોય તો ₹24 UPI પેમેન્ટ કરો</span>
-              </div>
-              <div className="rounded-xl bg-[#FEF3C7] dark:bg-[#451A03] p-3 text-[#92400E] dark:text-[#FDE68A] space-y-1.5">
-                <p className="text-xs font-bold">નામ: {ADMIN_UPI_NAME}</p>
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-sm font-bold">UPI: {ADMIN_UPI_ID}</span>
-                  <button
-                    type="button"
-                    onClick={handleCopyUpi}
-                    className="p-1.5 rounded-lg hover:bg-black/10 transition-colors cursor-pointer"
-                    title="UPI ID કોપી કરો"
-                  >
-                    <Copy className="h-4 w-4" />
-                  </button>
-                </div>
-                <p className="text-xs font-bold">રકમ: ₹24</p>
-              </div>
-
-              <a
-                href={buildUpiPaymentHref(ADMIN_UPI_ID, ADMIN_UPI_NAME, 24, studentMobile)}
-                className="w-full h-11 rounded-xl bg-[#D97706] hover:bg-[#B45309] text-white text-sm font-semibold flex items-center justify-center gap-2 transition-colors"
-              >
-                <ExternalLink className="h-4 w-4" />
-                <span>એક ક્લિકમાં ₹24 UPI એપમાં ચૂકવો</span>
-              </a>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setShowUnlockDialog(false);
-                  onOpenUnlock();
-                }}
-                className="w-full h-11 rounded-xl border border-[#CBD5E1] dark:border-[#334155] text-sm font-semibold flex items-center justify-center gap-2 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
-              >
-                <Upload className="h-4 w-4" />
-                <span>પેમેન્ટ સ્ક્રીનશોટ મોકલો</span>
-              </button>
-            </div>
-
-            <div className="flex justify-end pt-1">
-              <button
-                type="button"
-                onClick={() => setShowUnlockDialog(false)}
-                className="px-4 py-2 text-sm font-semibold text-[#1E3A8A] dark:text-[#93C5FD] hover:underline cursor-pointer"
-              >
-                બંધ કરો
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <SubjectPaymentModal
+        isOpen={modalMode !== null && !hasQuizAccess}
+        defaultSubjectId={subject.id}
+        initialMode={modalMode ?? 'pay'}
+        studentName={studentName}
+        studentMobile={studentMobile}
+        myPayments={myPayments}
+        isBusy={isBusy}
+        onClose={() => setModalMode(null)}
+        onSubmitPayment={onSubmitPayment}
+        onRedeemCode={onRedeemCode}
+        onNotify={onNotify}
+      />
     </div>
   );
 };
