@@ -751,7 +751,7 @@ export async function submitPaymentRequest(params: {
   studentName: string;
   mobileNumber: string;
   amountRupees?: number;
-  upiTransactionRef: string;
+  upiTransactionRef?: string;
   imageBlob: Blob;
   fallbackBase64: string;
   subjectId?: string;
@@ -759,8 +759,10 @@ export async function submitPaymentRequest(params: {
   const cleanName = params.studentName.trim().slice(0, 60);
   const cleanMobile = params.mobileNumber.replace(/\D/g, '').slice(-10);
   const studentId = getStudentDocId(cleanMobile);
-  const rawUtr = params.upiTransactionRef.trim().slice(0, 64);
-  const utrNormalized = normalizeUtrId(rawUtr);
+  const requestId = generateId('pay');
+  const autoRef = `SS-${requestId.slice(4, 14).toUpperCase()}`;
+  const rawUtr = (params.upiTransactionRef ?? '').trim().slice(0, 64) || autoRef;
+  const utrNormalized = normalizeUtrId(rawUtr) || autoRef;
   const normalizedSubject = ALL_SUBJECT_IDS.includes(params.subjectId as SubjectId)
     ? (params.subjectId as SubjectId)
     : 'all';
@@ -769,7 +771,6 @@ export async function submitPaymentRequest(params: {
 
   if (!cleanName) throw new Error('INVALID_NAME');
   if (!/^[0-9]{10}$/.test(cleanMobile)) throw new Error('INVALID_MOBILE');
-  if (utrNormalized.length < 4) throw new Error('INVALID_UTR');
   if (!params.fallbackBase64 && params.imageBlob.size === 0) {
     throw new Error('SCREENSHOT_REQUIRED');
   }
@@ -778,7 +779,6 @@ export async function submitPaymentRequest(params: {
   const isSignedInSession = Boolean(auth.currentUser?.uid);
 
   if (hasNativeFirebaseBridge()) {
-    const requestId = generateId('pay');
     const screenshotBase64 = params.fallbackBase64.slice(0, 440_000);
     if (!screenshotBase64) {
       throw new Error('SCREENSHOT_REQUIRED');
@@ -806,8 +806,6 @@ export async function submitPaymentRequest(params: {
   }
 
   const utrLockRef = doc(db, COLLECTION_UTR_LOCKS, utrNormalized);
-
-  const requestId = generateId('pay');
   const screenshotPath = `payment_screenshots/${uid}/${requestId}.jpg`;
   let screenshotUrl = '';
 

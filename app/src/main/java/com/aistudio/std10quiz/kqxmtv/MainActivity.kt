@@ -216,6 +216,89 @@ private class AndroidExportBridge(
             }
         }
     }
+
+    @JavascriptInterface
+    fun shareScreenshotOnWhatsApp(phoneDigits: String, message: String, dataUrl: String) {
+        activity.runOnUiThread {
+            val cleanPhone = phoneDigits.replace(Regex("[^0-9]"), "")
+            val hasDataImage = dataUrl.startsWith("data:image/") && dataUrl.contains(',')
+            if (!hasDataImage) {
+                val waUrl = if (cleanPhone.isNotEmpty()) {
+                    "https://wa.me/$cleanPhone?text=${Uri.encode(message)}"
+                } else {
+                    "https://wa.me/?text=${Uri.encode(message)}"
+                }
+                openExternalUrl(waUrl)
+                return@runOnUiThread
+            }
+
+            try {
+                val commaIdx = dataUrl.indexOf(',')
+                val header = dataUrl.substring(0, commaIdx)
+                val base64Part = dataUrl.substring(commaIdx + 1)
+                val bytes = Base64.decode(base64Part, Base64.DEFAULT)
+                val mimeType = header
+                    .removePrefix("data:")
+                    .substringBefore(';')
+                    .ifBlank { "image/jpeg" }
+                val ext = if (mimeType.contains("png")) "png" else "jpg"
+
+                val exportDir = File(activity.cacheDir, "exports").apply { mkdirs() }
+                val outFile = File(exportDir, "payment_screenshot.$ext")
+                outFile.writeBytes(bytes)
+
+                val uri = FileProvider.getUriForFile(
+                    activity,
+                    "${activity.packageName}.fileprovider",
+                    outFile
+                )
+
+                val packages = listOf("com.whatsapp", "com.whatsapp.w4b")
+                for (pkg in packages) {
+                    val waIntent = Intent(Intent.ACTION_SEND).apply {
+                        type = mimeType
+                        setPackage(pkg)
+                        putExtra(Intent.EXTRA_STREAM, uri)
+                        if (message.isNotBlank()) {
+                            putExtra(Intent.EXTRA_TEXT, message)
+                        }
+                        if (cleanPhone.isNotEmpty()) {
+                            putExtra("jid", "$cleanPhone@s.whatsapp.net")
+                        }
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    try {
+                        activity.startActivity(waIntent)
+                        return@runOnUiThread
+                    } catch (_: ActivityNotFoundException) {
+                        // Try next WhatsApp package
+                    }
+                }
+
+                val fallbackIntent = Intent(Intent.ACTION_SEND).apply {
+                    type = mimeType
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    if (message.isNotBlank()) {
+                        putExtra(Intent.EXTRA_TEXT, message)
+                    }
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                activity.startActivity(
+                    Intent.createChooser(
+                        fallbackIntent,
+                        activity.getString(R.string.share_export_title)
+                    )
+                )
+            } catch (_: Exception) {
+                val waUrl = if (cleanPhone.isNotEmpty()) {
+                    "https://wa.me/$cleanPhone?text=${Uri.encode(message)}"
+                } else {
+                    "https://wa.me/?text=${Uri.encode(message)}"
+                }
+                openExternalUrl(waUrl)
+            }
+        }
+    }
 }
 
 private fun launchUpiUriWithFallback(

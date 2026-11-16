@@ -20,6 +20,7 @@ import {
   ALL_SUBJECT_IDS,
   PRICE_ALL_SUBJECTS,
   PRICE_SINGLE_SUBJECT,
+  displayPaymentTransactionRef,
   getSubjectDisplayName,
   resolvePaymentSubjectId,
   type PaymentRequest,
@@ -40,7 +41,7 @@ interface UseCodeScreenProps {
     studentName: string;
     mobileNumber: string;
     amountRupees: number;
-    upiTransactionRef: string;
+    upiTransactionRef?: string;
     imageBlob: Blob;
     fallbackBase64: string;
     subjectId: string;
@@ -268,7 +269,10 @@ export const UseCodeScreen: React.FC<UseCodeScreenProps> = ({
                           ₹{req.amountRupees} • {subName}
                         </p>
                         <p className="text-[11px] text-[#64748B] dark:text-[#94A3B8] truncate">
-                          UTR: {req.upiTransactionRef} • {formatTimestampLabel(req.createdAt, lang)}
+                          {displayPaymentTransactionRef(req)
+                            ? `UTR: ${displayPaymentTransactionRef(req)} • `
+                            : ''}
+                          {formatTimestampLabel(req.createdAt, lang)}
                         </p>
                       </div>
                     </div>

@@ -733,7 +733,7 @@ export const App: React.FC = () => {
     studentName: string;
     mobileNumber: string;
     amountRupees: number;
-    upiTransactionRef: string;
+    upiTransactionRef?: string;
     imageBlob: Blob;
     fallbackBase64: string;
     subjectId: string;

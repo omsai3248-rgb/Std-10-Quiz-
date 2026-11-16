@@ -12,6 +12,7 @@ import {
   LockOpen,
   QrCode,
   Radio,
+  Send,
   Share2,
   Upload,
   X,
@@ -22,11 +23,11 @@ import { extractReadableErrorMessage } from '../services/firestoreErrorHandler';
 import {
   ADMIN_UPI_ID,
   ADMIN_UPI_NAME,
-  normalizeUtrId,
 } from '../services/quizRepository';
 import {
   PRICE_ALL_SUBJECTS,
   PRICE_SINGLE_SUBJECT,
+  displayPaymentTransactionRef,
   getFixedPlanPrice,
   getSubjectDisplayName,
   resolvePaymentSubjectId,
@@ -39,6 +40,7 @@ import {
   downloadPngDataUrl,
   formatTimestampLabel,
   launchUpiPayment,
+  launchWhatsAppPaymentWithScreenshot,
   resolvePaymentImageSrc,
   saveOrSharePngDataUrl,
   toImageDataUrl,
@@ -59,7 +61,7 @@ interface SubjectPaymentModalProps {
     studentName: string;
     mobileNumber: string;
     amountRupees: number;
-    upiTransactionRef: string;
+    upiTransactionRef?: string;
     imageBlob: Blob;
     fallbackBase64: string;
     subjectId: string;
@@ -91,9 +93,9 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
 
   const [activeTab, setActiveTab] = useState<'pay' | 'code'>(initialMode);
   const [selectedPlanSubject, setSelectedPlanSubject] = useState<string>(defaultSubjectId);
-  const [utrInput, setUtrInput] = useState('');
   const [imageBlob, setImageBlob] = useState<Blob | null>(null);
   const [imageBase64, setImageBase64] = useState<string | null>(null);
+  const [lastPreviewUrl, setLastPreviewUrl] = useState<string>('');
   const [isProcessingImage, setIsProcessingImage] = useState(false);
   const [codeInput, setCodeInput] = useState(initialCode);
   const [localError, setLocalError] = useState<string | null>(null);
@@ -187,6 +189,7 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
       const { blob, base64 } = await compressImageFileToBlobAndBase64(file);
       setImageBlob(blob);
       setImageBase64(base64);
+      setLastPreviewUrl(toImageDataUrl(base64));
     } catch {
       setLocalError(t.errScreenshotRequired);
     } finally {
@@ -231,11 +234,6 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
     e.preventDefault();
     setLocalError(null);
 
-    const utrNorm = normalizeUtrId(utrInput);
-    if (utrNorm.length < 4) {
-      setLocalError(t.errInvalidUtr);
-      return;
-    }
     if (!imageBlob || !imageBase64) {
       setLocalError(t.errScreenshotRequired);
       return;
@@ -246,7 +244,7 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
         studentName,
         mobileNumber: studentMobile,
         amountRupees: fixedAmount,
-        upiTransactionRef: utrInput.trim(),
+        upiTransactionRef: '',
         imageBlob,
         fallbackBase64: imageBase64,
         subjectId: selectedPlanSubject,
@@ -254,13 +252,26 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
 
       if (reqId) {
         setSubmittedRequestId(reqId);
-        setUtrInput('');
         setImageBlob(null);
         setImageBase64(null);
       }
     } catch (err) {
       setLocalError(mapErrorMessage(err));
     }
+  };
+
+  const handleSendScreenshotWhatsApp = () => {
+    setLocalError(null);
+    const latestSubmittedThumb =
+      relevantPayments.length > 0 ? resolvePaymentImageSrc(relevantPayments[0]) : '';
+    const effectivePreviewUrl = previewDataUrl || lastPreviewUrl || latestSubmittedThumb;
+    launchWhatsAppPaymentWithScreenshot({
+      studentName,
+      mobileNumber: studentMobile,
+      amountRupees: fixedAmount,
+      subjectId: selectedPlanSubject,
+      imageDataUrl: effectivePreviewUrl || undefined,
+    });
   };
 
   const handleCodeSubmit = async (e: React.FormEvent) => {
@@ -568,33 +579,15 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
               </div>
             </section>
 
-            {/* UTR & Screenshot Form */}
+            {/* Screenshot Upload Form + Side-by-Side Admin & WhatsApp Buttons */}
             <form
               onSubmit={(e) => void handlePaymentSubmit(e)}
               className="rounded-2xl bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] p-4 space-y-3.5 shadow-sm"
             >
-              <div>
-                <label
-                  htmlFor="modal-utr-input"
-                  className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1"
-                >
-                  {t.fieldUtr}
-                </label>
-                <input
-                  id="modal-utr-input"
-                  type="text"
-                  maxLength={60}
-                  value={utrInput}
-                  onChange={(e) => {
-                    setUtrInput(e.target.value.slice(0, 60));
-                    setLocalError(null);
-                  }}
-                  placeholder={t.fieldUtrPlaceholder}
-                  className="w-full h-12 rounded-xl border border-[#CBD5E1] dark:border-[#334155] bg-[#FAF9F5] dark:bg-[#0F172A] px-3.5 text-sm font-semibold tracking-wide outline-none focus:border-[#1E3A8A]"
-                />
-              </div>
-
               <div className="space-y-2">
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">
+                  {t.fieldScreenshot}
+                </label>
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -638,14 +631,28 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
                 </div>
               )}
 
-              <button
-                type="submit"
-                disabled={isBusy || isProcessingImage}
-                className="w-full min-h-[52px] py-3 px-4 rounded-xl bg-[#D97706] hover:bg-[#B45309] text-white text-sm font-extrabold flex items-center justify-center gap-2 transition-colors disabled:opacity-60 cursor-pointer"
-              >
-                <Upload className="h-4 w-4 shrink-0" />
-                <span>{isBusy ? t.submittingBtn : t.submitToAdminBtn}</span>
-              </button>
+              <div className="grid grid-cols-2 gap-2.5">
+                <button
+                  type="submit"
+                  data-testid="submit_payment_admin_button"
+                  disabled={isBusy || isProcessingImage}
+                  className="min-h-[52px] py-2.5 px-3 rounded-xl bg-[#D97706] hover:bg-[#B45309] text-white text-xs sm:text-sm font-extrabold flex items-center justify-center gap-1.5 text-center leading-tight transition-colors disabled:opacity-60 cursor-pointer"
+                >
+                  <Upload className="h-4 w-4 shrink-0" />
+                  <span>{isBusy ? t.submittingBtn : t.submitToAdminBtn}</span>
+                </button>
+
+                <button
+                  type="button"
+                  data-testid="send_whatsapp_screenshot_button"
+                  disabled={isProcessingImage}
+                  onClick={handleSendScreenshotWhatsApp}
+                  className="min-h-[52px] py-2.5 px-3 rounded-xl bg-[#047857] hover:bg-[#065F46] text-white text-xs sm:text-sm font-extrabold flex items-center justify-center gap-1.5 text-center leading-tight transition-colors disabled:opacity-60 cursor-pointer"
+                >
+                  <Send className="h-4 w-4 shrink-0" />
+                  <span>{t.sendWhatsAppScreenshotBtn}</span>
+                </button>
+              </div>
             </form>
 
             {/* Live Request Status */}
@@ -681,7 +688,9 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
                               {getSubjectDisplayName(resolvePaymentSubjectId(req), lang)}
                             </p>
                             <p className="text-[11px] text-slate-500 truncate">
-                              UTR: {req.upiTransactionRef} •{' '}
+                              {displayPaymentTransactionRef(req)
+                                ? `UTR: ${displayPaymentTransactionRef(req)} • `
+                                : ''}
                               {formatTimestampLabel(req.createdAt, lang)}
                             </p>
                           </div>

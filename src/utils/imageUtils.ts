@@ -107,6 +107,7 @@ interface AndroidBridgeApi {
   downloadQrToGallery?: (suggestedName: string, dataUrl: string) => void;
   openUpiPayment?: (upiUrl: string, fallbackUpiUrl: string) => void;
   openExternalUrl?: (url: string) => void;
+  shareScreenshotOnWhatsApp?: (phoneDigits: string, message: string, dataUrl: string) => void;
 }
 
 declare global {
@@ -246,7 +247,7 @@ export function buildStudentProofWhatsAppHref(params: {
   mobileNumber: string;
   amountRupees?: number;
   subjectId: string;
-  upiRef: string;
+  upiRef?: string;
 }): string {
   const subjectLabel = getSubjectDisplayName(params.subjectId, 'gu');
   const amt = params.amountRupees ?? 24;
@@ -256,9 +257,35 @@ export function buildStudentProofWhatsAppHref(params: {
     `• મોબાઇલ: +91 ${params.mobileNumber}`,
     `• વિષય: ${subjectLabel}`,
     ...(params.upiRef ? [`• UTR નંબર: ${params.upiRef}`] : []),
-    'કૃપા કરીને એપ્રુવ કરી કોડ આપશો.',
+    'કૃપા કરીને પેમેન્ટ સ્ક્રીનશોટ ચેક કરી એક્સેસ કોડ આપશો.',
   ];
   return `https://wa.me/91${ADMIN_PHONE_TEN_DIGITS}?text=${encodeURIComponent(lines.join('\n'))}`;
+}
+
+export function launchWhatsAppPaymentWithScreenshot(params: {
+  studentName: string;
+  mobileNumber: string;
+  amountRupees: number;
+  subjectId: string;
+  imageDataUrl?: string;
+}): void {
+  const subjectLabel = getSubjectDisplayName(params.subjectId, 'gu');
+  const lines = [
+    `નમસ્તે એડમિન, મેં ₹${params.amountRupees} નું પેમેન્ટ મોકલ્યું છે:`,
+    `• નામ: ${params.studentName}`,
+    `• મોબાઇલ: +91 ${params.mobileNumber}`,
+    `• વિષય: ${subjectLabel}`,
+    'કૃપા કરીને પેમેન્ટ સ્ક્રીનશોટ ચેક કરી એક્સેસ કોડ આપશો.',
+  ];
+  const message = lines.join('\n');
+  const adminPhone = `91${ADMIN_PHONE_TEN_DIGITS}`;
+
+  if (typeof window !== 'undefined' && window.AndroidBridge?.shareScreenshotOnWhatsApp) {
+    window.AndroidBridge.shareScreenshotOnWhatsApp(adminPhone, message, params.imageDataUrl ?? '');
+    return;
+  }
+
+  launchExternalUrl(`https://wa.me/${adminPhone}?text=${encodeURIComponent(message)}`);
 }
 
 export async function compressImageFileToBlobAndBase64(file: File): Promise<{

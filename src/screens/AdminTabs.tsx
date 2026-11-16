@@ -223,7 +223,7 @@ const PaymentRequestCard: React.FC<{
         <div className="sm:col-span-7 space-y-2.5">
           <div className="rounded-xl bg-[#EFF4FA] dark:bg-[#0F172A] p-3 space-y-1 text-xs">
             <DetailRow label={t.fieldAmount.replace(' *', '')} value={`₹${req.amountRupees}`} />
-            <DetailRow label="UTR / Ref" value={cleanUtr || '-'} />
+            {cleanUtr && <DetailRow label="UTR / Ref" value={cleanUtr} />}
             <DetailRow label="UPI" value={req.upiId} />
             <DetailRow label={t.createdAtLabel} value={formatTimestampLabel(req.createdAt, lang)} />
           </div>

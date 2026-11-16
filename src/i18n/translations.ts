@@ -51,6 +51,7 @@ export interface Translations {
   payTabLabel: string;
   codeTabLabel: string;
   submitToAdminBtn: string;
+  sendWhatsAppScreenshotBtn: string;
   unlockAllBannerTitle: string;
   unlockAllBannerDesc: string;
   approvedModalTitle: string;
@@ -200,14 +201,14 @@ const GU: Translations = {
   navAdminLive: 'એડમિન લાઇવ',
   loadingApp: 'એપ લોડ થઈ રહી છે...',
 
-  payHeaderTitle: 'પેમેન્ટ વિગતો અને સ્ક્રીનશોટ મોકલો',
+  payHeaderTitle: 'પેમેન્ટ સ્ક્રીનશોટ મોકલો',
   payHeaderDesc:
-    'ફી ચૂકવીને તમારી વિગત, UTR નંબર અને સ્ક્રીનશોટ મોકલો. એડમિન એપ્રુવ કરતાં જ તમને અહીં લાઇવ 8-અક્ષરનો કોડ મળશે.',
+    'ફી ચૂકવીને તમારો પેમેન્ટ સ્ક્રીનશોટ એડમિન પેનલમાં અથવા WhatsApp (9099592283) પર મોકલો. એડમિન એપ્રુવ કરતાં જ તમને અહીં લાઇવ 8-અક્ષરનો કોડ મળશે.',
   payUpiCardTitle: 'UPI દ્વારા પેમેન્ટ કરો',
   payUpiCopy: 'કોપી',
   payUpiCopied: 'કોપી થઈ ગયો',
   payUpiOpenApp: 'ડાયરેક્ટ UPI એપ ખોલો',
-  payUpiQuickTip: 'પેમેન્ટ કર્યા બાદ Transaction / UTR નંબર અને સ્ક્રીનશોટ નીચે અપલોડ કરો.',
+  payUpiQuickTip: 'પેમેન્ટ કર્યા બાદ નીચે માત્ર પેમેન્ટનો સ્ક્રીનશોટ અપલોડ કરી એડમિન પેનલમાં અથવા WhatsApp (9099592283) પર મોકલો.',
   payQrTitle: 'UPI QR કોડ સ્કેન કરો (Bank Limit Error વગર)',
   payQrDownload: 'QR ડાઉનલોડ કરો (Gallery)',
   payQrShareOnly: 'શેર',
@@ -239,7 +240,8 @@ const GU: Translations = {
   fixedPriceBadge: 'ફિક્સ ફી',
   payTabLabel: 'UPI પેમેન્ટ અને સ્ક્રીનશોટ',
   codeTabLabel: 'મારી પાસે કોડ છે',
-  submitToAdminBtn: 'સ્ક્રીનશોટ એડમિન પેનલમાં મોકલો',
+  submitToAdminBtn: 'એડમિન પેનલમાં મોકલો',
+  sendWhatsAppScreenshotBtn: 'WhatsApp (9099592283)',
   unlockAllBannerTitle: 'બધા જ વિષયો ફક્ત ₹49 માં અનલૉક કરો',
   unlockAllBannerDesc: 'કોઈ એક વિષય ₹24 (Fix) અથવા બધા વિષયો ₹49 (Fix) — વિષયની અંદર જ UPI પેમેન્ટ કરો.',
   approvedModalTitle: 'પેમેન્ટ મંજૂર અને કોડ તૈયાર છે!',
@@ -387,14 +389,14 @@ const EN: Translations = {
   navAdminLive: 'Admin Live',
   loadingApp: 'Loading app...',
 
-  payHeaderTitle: 'Submit Payment Details & Screenshot',
+  payHeaderTitle: 'Submit Payment Screenshot',
   payHeaderDesc:
-    'Enter your payment details, UTR ID, and screenshot. Once the admin approves, your 8-character code will appear right here live.',
+    'Upload your payment screenshot to the Admin Panel or send directly on WhatsApp (9099592283). Once approved, your 8-character code will appear right here live.',
   payUpiCardTitle: 'Pay via UPI',
   payUpiCopy: 'Copy',
   payUpiCopied: 'Copied',
   payUpiOpenApp: 'Open UPI App Directly',
-  payUpiQuickTip: 'After paying, upload the Transaction / UTR ID and screenshot below.',
+  payUpiQuickTip: 'After paying, upload the payment screenshot below to send to Admin or WhatsApp (9099592283).',
   payQrTitle: 'Scan UPI QR Code (No Intent Limit)',
   payQrDownload: 'Download QR (Gallery)',
   payQrShareOnly: 'Share',
@@ -426,7 +428,8 @@ const EN: Translations = {
   fixedPriceBadge: 'Fixed Price',
   payTabLabel: 'Pay via UPI & Screenshot',
   codeTabLabel: 'I Have a Code',
-  submitToAdminBtn: 'Send Screenshot to Admin Panel',
+  submitToAdminBtn: 'Send to Admin Panel',
+  sendWhatsAppScreenshotBtn: 'WhatsApp (9099592283)',
   unlockAllBannerTitle: 'Unlock All Subjects for Just ₹49',
   unlockAllBannerDesc: 'Fixed ₹24 per subject or ₹49 for all subjects — pay via UPI inside any quiz.',
   approvedModalTitle: 'Approved & Code Ready!',

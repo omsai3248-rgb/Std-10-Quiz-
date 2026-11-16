@@ -260,7 +260,16 @@ export function resolvePaymentSubjectId(req: PaymentRequest): AccessScopeId {
 }
 
 export function displayPaymentTransactionRef(req: PaymentRequest): string {
-  return req.upiTransactionRef.replace(PAYMENT_SUBJECT_TAG_REGEX, '').trim();
+  const cleaned = req.upiTransactionRef.replace(PAYMENT_SUBJECT_TAG_REGEX, '').trim();
+  if (
+    !cleaned ||
+    cleaned.startsWith('SS-') ||
+    cleaned === 'SCREENSHOT' ||
+    cleaned === 'SCREENSHOT_ONLY'
+  ) {
+    return '';
+  }
+  return cleaned;
 }
 
 export function studentHasAccessToSubject(student: StudentProfile, subjectId: SubjectId): boolean {

@@ -1148,8 +1148,9 @@ class NativeFirebaseBridge(
                 val mobileNumber = obj.getString("mobileNumber")
                 val amountRupees = obj.getInt("amountRupees")
                 val upiId = obj.getString("upiId")
-                val upiTransactionRef = obj.getString("upiTransactionRef")
-                val utrNormalized = obj.getString("utrNormalized")
+                val autoRef = "SS-${requestId.removePrefix("pay_").take(10).uppercase()}"
+                val upiTransactionRef = obj.optString("upiTransactionRef", "").trim().ifBlank { autoRef }
+                val utrNormalized = obj.optString("utrNormalized", "").trim().ifBlank { autoRef }
                 val screenshotBase64 = obj.getString("screenshotBase64")
                 val subjectId = obj.optString("subjectId", "all")
 

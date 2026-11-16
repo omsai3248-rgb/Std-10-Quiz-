@@ -526,8 +526,10 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
                 +91 {approvedConfirmation.mobileNumber} • ₹{approvedConfirmation.amountRupees}
               </p>
               <p className="text-[#475569] dark:text-[#94A3B8]">
-                {getSubjectDisplayName(resolvePaymentSubjectId(approvedConfirmation), lang)} • UTR:{' '}
-                {displayPaymentTransactionRef(approvedConfirmation) || '-'}
+                {getSubjectDisplayName(resolvePaymentSubjectId(approvedConfirmation), lang)}
+                {displayPaymentTransactionRef(approvedConfirmation)
+                  ? ` • UTR: ${displayPaymentTransactionRef(approvedConfirmation)}`
+                  : ''}
               </p>
             </div>
 

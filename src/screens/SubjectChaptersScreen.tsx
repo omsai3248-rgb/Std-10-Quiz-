@@ -31,7 +31,7 @@ interface SubjectChaptersScreenProps {
     studentName: string;
     mobileNumber: string;
     amountRupees: number;
-    upiTransactionRef: string;
+    upiTransactionRef?: string;
     imageBlob: Blob;
     fallbackBase64: string;
     subjectId: string;
