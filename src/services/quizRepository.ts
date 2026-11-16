@@ -3,6 +3,7 @@ import {
   deleteDoc,
   doc,
   getDoc,
+  getDocFromServer,
   getDocs,
   limit,
   onSnapshot,
@@ -31,6 +32,8 @@ import {
   hasNativeFirebaseBridge,
   invokeNativeBridgeCall,
   notifyNativeAuthUser,
+  resetNativeAdminSessionDeviceCache,
+  subscribeNativeAdminSessionDevice,
   subscribeNativeAllCodes,
   subscribeNativeAllPayments,
   subscribeNativeAllStudents,
@@ -39,6 +42,7 @@ import {
   subscribeNativeMyPayments,
   subscribeNativeReleaseConfig,
   subscribeNativeStudentProfile,
+  triggerNativeActiveSessionCheck,
   type AppAuthUser,
 } from './nativeFirebaseBridge';
 import {
@@ -64,7 +68,9 @@ export const COLLECTION_ACCESS_CODES = 'access_codes';
 export const COLLECTION_PAYMENT_REQUESTS = 'payment_requests';
 export const COLLECTION_UTR_LOCKS = 'utr_locks';
 export const COLLECTION_APP_CONFIG = 'app_config';
+export const COLLECTION_ADMIN_SESSIONS = 'admin_sessions';
 export const DOC_RELEASE_CONFIG = 'release';
+export const DOC_ADMIN_SESSION_PRIMARY = 'primary';
 
 export const ADMIN_UPI_ID = '9099592283@upi';
 export const ADMIN_UPI_NAME = 'KATRIYA KIRANKUMAR RAMESHBHAI';
@@ -103,6 +109,7 @@ export function observeAppAuthState(cb: (user: AppAuthUser | null) => void): () 
 }
 
 export async function signOutAdminSession(): Promise<void> {
+  resetNativeAdminSessionDeviceCache();
   if (hasNativeFirebaseBridge()) {
     await invokeNativeBridgeCall((callId) => {
       window.AndroidFirebaseBridge?.signOutGoogle?.(callId);
@@ -110,6 +117,91 @@ export async function signOutAdminSession(): Promise<void> {
     return;
   }
   await signOut(auth);
+}
+
+let lastWebAdminClaimAtMs = 0;
+
+export async function claimAdminSessionDevice(): Promise<void> {
+  const { deviceId, deviceName } = getCurrentDeviceIdentity();
+  lastWebAdminClaimAtMs = Date.now();
+  if (hasNativeFirebaseBridge()) {
+    await invokeNativeBridgeCall((callId) => {
+      window.AndroidFirebaseBridge?.claimAdminSessionDevice?.(
+        callId,
+        JSON.stringify({ deviceId, deviceName })
+      );
+    });
+    return;
+  }
+  requireUserId();
+  const ref = doc(db, COLLECTION_ADMIN_SESSIONS, DOC_ADMIN_SESSION_PRIMARY);
+  try {
+    await setDoc(ref, {
+      activeDeviceId: deviceId,
+      activeDeviceName: deviceName,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (err) {
+    // Allow admin panel entry even if quota/offline temporarily blocks session write
+    console.warn('claimAdminSessionDevice deferred:', err);
+  }
+}
+
+export function observeAdminSessionDevice(onDeviceId: (deviceId: string) => void): Unsubscribe {
+  if (hasNativeFirebaseBridge()) {
+    return subscribeNativeAdminSessionDevice(onDeviceId);
+  }
+  const ref = doc(db, COLLECTION_ADMIN_SESSIONS, DOC_ADMIN_SESSION_PRIMARY);
+  return onSnapshot(
+    ref,
+    (snap) => {
+      if (!snap.exists()) return;
+      const remoteDeviceId = String(snap.data().activeDeviceId ?? '').trim();
+      const myDeviceId = getCurrentDeviceIdentity().deviceId;
+      const withinClaimWindow = Date.now() - lastWebAdminClaimAtMs < 4500;
+      if (snap.metadata.fromCache && withinClaimWindow && remoteDeviceId && remoteDeviceId !== myDeviceId) {
+        return;
+      }
+      onDeviceId(remoteDeviceId);
+    },
+    () => {
+      // Non-fatal
+    }
+  );
+}
+
+export async function verifyActiveSessionOnResume(studentId?: string, isAdminActive = false): Promise<{
+  studentProfile?: StudentProfile | null;
+  adminDeviceId?: string;
+}> {
+  if (hasNativeFirebaseBridge()) {
+    triggerNativeActiveSessionCheck();
+    return {};
+  }
+  const out: { studentProfile?: StudentProfile | null; adminDeviceId?: string } = {};
+  if (studentId?.trim()) {
+    try {
+      const snap = await getDocFromServer(doc(db, COLLECTION_STUDENTS, studentId.trim()));
+      if (snap.exists()) {
+        const mapped = mapStudentDoc(snap.id, snap.data());
+        saveWebStudentBackup(mapped, false);
+        out.studentProfile = mapped;
+      }
+    } catch {
+      // Offline / quota fallback: listener handles live state
+    }
+  }
+  if (isAdminActive && Date.now() - lastWebAdminClaimAtMs >= 4000) {
+    try {
+      const snap = await getDocFromServer(doc(db, COLLECTION_ADMIN_SESSIONS, DOC_ADMIN_SESSION_PRIMARY));
+      if (snap.exists()) {
+        out.adminDeviceId = String(snap.data().activeDeviceId ?? '').trim();
+      }
+    } catch {
+      // Ignore
+    }
+  }
+  return out;
 }
 
 export function isAdminAccount(authPhone = '', authEmail = ''): boolean {
@@ -489,9 +581,6 @@ export async function loginStudentWithDeviceLock(params: {
       const d = snap.data();
       const existingDeviceId = String(d.activeDeviceId ?? '').trim();
       const existingDeviceName = String(d.activeDeviceName ?? '').trim();
-      if (existingDeviceId && existingDeviceId !== deviceId) {
-        throw new Error(`DEVICE_ALREADY_LOGGED_IN:${existingDeviceName}`);
-      }
       const existingName = String(d.fullName ?? '').trim();
       const effectiveName = cleanName || existingName || 'Student';
       const needsUpdate =
@@ -522,19 +611,10 @@ export async function loginStudentWithDeviceLock(params: {
     saveWebStudentBackup(profile, false);
     return profile;
   } catch (error) {
-    if (
-      error instanceof Error &&
-      (error.message === 'NAME_REQUIRED_FOR_NEW_USER' ||
-        error.message.startsWith('DEVICE_ALREADY_LOGGED_IN:'))
-    ) {
+    if (error instanceof Error && error.message === 'NAME_REQUIRED_FOR_NEW_USER') {
       throw error;
     }
     const lower = error instanceof Error ? error.message.toLowerCase() : '';
-    if (lower.includes('permission')) {
-      const latest = await getDoc(ref).catch(() => null);
-      const lockDev = latest?.exists() ? String(latest.data().activeDeviceName ?? '').trim() : '';
-      throw new Error(`DEVICE_ALREADY_LOGGED_IN:${lockDev}`);
-    }
     if (
       lower.includes('resource-exhausted') ||
       lower.includes('resource_exhausted') ||
@@ -545,17 +625,23 @@ export async function loginStudentWithDeviceLock(params: {
     ) {
       const backup = loadWebStudentBackup(studentId);
       if (backup) {
-        if (backup.activeDeviceId && backup.activeDeviceId !== deviceId) {
-          throw new Error(`DEVICE_ALREADY_LOGGED_IN:${backup.activeDeviceName ?? ''}`);
-        }
+        const effectiveName = cleanName || backup.fullName || 'Student';
         const restored: StudentProfile = {
           ...backup,
-          fullName: cleanName || backup.fullName || 'Student',
-          activeDeviceId: backup.activeDeviceId || deviceId,
-          activeDeviceName: backup.activeDeviceName || deviceName,
+          fullName: effectiveName,
+          activeDeviceId: deviceId,
+          activeDeviceName: deviceName,
           isReturningUser: !backup.pendingServerSync,
         };
         saveWebStudentBackup(restored, Boolean(backup.pendingServerSync));
+        if (typeof navigator === 'undefined' || navigator.onLine !== false) {
+          void updateDoc(ref, {
+            fullName: effectiveName,
+            activeDeviceId: deviceId,
+            activeDeviceName: deviceName,
+            updatedAt: serverTimestamp(),
+          }).catch(() => {});
+        }
         return restored;
       }
       if (typeof navigator === 'undefined' || navigator.onLine !== false) {

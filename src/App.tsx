@@ -27,6 +27,7 @@ import {
   isAdminAccount,
   loadMyPaymentRequestIds,
   loginStudentWithDeviceLock,
+  observeAdminSessionDevice,
   observeAllAccessCodes,
   observeAllPaymentRequests,
   observeAllStudents,
@@ -46,6 +47,7 @@ import {
   submitPaymentRequest,
   toggleStudentQuizAccess,
   updateStudentSubjectAccess,
+  verifyActiveSessionOnResume,
   type AdminPasscodeAuthResult,
   type AppAuthUser,
 } from './services/quizRepository';
@@ -156,6 +158,8 @@ export const App: React.FC = () => {
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
   const lastCheckedConfigKeyRef = useRef<string>('');
   const deviceClaimedForStudentRef = useRef<string>('');
+  const lastStudentTakeoverAtRef = useRef<number>(0);
+  const lastAdminTakeoverAtRef = useRef<number>(0);
   const knownPendingIdsRef = useRef<Set<string> | null>(null);
   const knownUsedCodesRef = useRef<Set<string> | null>(null);
   const isSoundEnabledRef = useRef(isSoundEnabled);
@@ -546,8 +550,12 @@ export const App: React.FC = () => {
     // Single-device lock enforcement
     const myDeviceId = getCurrentDeviceIdentity().deviceId;
     const remoteDeviceId = (student.activeDeviceId ?? '').trim();
+    const withinTakeoverGrace = Date.now() - lastStudentTakeoverAtRef.current < 4500;
 
     if (remoteDeviceId && remoteDeviceId !== myDeviceId) {
+      if (withinTakeoverGrace) {
+        return;
+      }
       clearLocalStudentSession(t.deviceKickedOutMsg, true);
       return;
     }
@@ -564,15 +572,11 @@ export const App: React.FC = () => {
     }
 
     deviceClaimedForStudentRef.current = studentDocId;
+    lastStudentTakeoverAtRef.current = Date.now();
     void loginStudentWithDeviceLock({
       mobileNumber: savedUserMeta.mobile,
       fullName: student.fullName || savedUserMeta.name,
-    }).catch((err: unknown) => {
-      const msg = err instanceof Error ? err.message : '';
-      if (msg.startsWith('DEVICE_ALREADY_LOGGED_IN:')) {
-        clearLocalStudentSession(extractReadableErrorMessage(err, langRef.current), true);
-      }
-    });
+    }).catch(() => {});
   }, [
     clearLocalStudentSession,
     isStudentLoggedIn,
@@ -662,6 +666,7 @@ export const App: React.FC = () => {
     const effectiveName = (profile.fullName || cleanName).trim().slice(0, 60);
     if (!effectiveName) throw new Error('INVALID_NAME');
 
+    lastStudentTakeoverAtRef.current = Date.now();
     deviceClaimedForStudentRef.current = profile.id || getStudentDocId(cleanMobile);
     setStudent(profile);
     persistUserMeta(effectiveName, cleanMobile);
@@ -969,7 +974,28 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleAdminSignOut = useCallback(
+    async (noticeMessage?: string, isErrorNotice = true) => {
+      try {
+        await signOutAdminSession().catch(() => {});
+        setAuthUser(null);
+        setApprovedConfirmation(null);
+        setRoute({ name: 'public', tab: 'quiz' });
+        if (noticeMessage) {
+          setBanner({ isError: isErrorNotice, message: noticeMessage });
+        }
+      } catch (err) {
+        setBanner({
+          isError: true,
+          message: formatAppError(err, 'Sign out error'),
+        });
+      }
+    },
+    [formatAppError]
+  );
+
   const handleAdminLoginSuccess = (result: AdminPasscodeAuthResult) => {
+    lastAdminTakeoverAtRef.current = Date.now();
     setAuthUser(result.user);
     setSyncVersion((v) => v + 1);
     setRoute({ name: 'public', tab: 'admin' });
@@ -982,18 +1008,63 @@ export const App: React.FC = () => {
     });
   };
 
-  const handleAdminSignOut = async () => {
-    try {
-      await signOutAdminSession().catch(() => {});
-      setApprovedConfirmation(null);
-      setRoute({ name: 'public', tab: 'quiz' });
-    } catch (err) {
-      setBanner({
-        isError: true,
-        message: formatAppError(err, 'Sign out error'),
+  // Enforce single-device session for Admin (if Admin signs in on another device, sign out here automatically)
+  useEffect(() => {
+    if (!isFirebaseAdmin) return;
+    const unsub = observeAdminSessionDevice((remoteDeviceId) => {
+      const cleanRemote = (remoteDeviceId ?? '').trim();
+      const myDeviceId = getCurrentDeviceIdentity().deviceId;
+      if (
+        cleanRemote &&
+        cleanRemote !== myDeviceId &&
+        Date.now() - lastAdminTakeoverAtRef.current > 4500
+      ) {
+        void handleAdminSignOut(t.deviceKickedOutMsg, true);
+      }
+    });
+    return () => unsub();
+  }, [handleAdminSignOut, isFirebaseAdmin, t.deviceKickedOutMsg]);
+
+  // Verify active device session immediately when returning to the app
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (!isStudentLoggedIn && !isFirebaseAdmin) return;
+      void verifyActiveSessionOnResume(
+        isStudentLoggedIn ? studentDocId : undefined,
+        isFirebaseAdmin
+      ).then((res) => {
+        const myDeviceId = getCurrentDeviceIdentity().deviceId;
+        if (res.studentProfile && isStudentLoggedIn) {
+          const remoteDev = (res.studentProfile.activeDeviceId ?? '').trim();
+          if (
+            remoteDev &&
+            remoteDev !== myDeviceId &&
+            Date.now() - lastStudentTakeoverAtRef.current > 4500
+          ) {
+            clearLocalStudentSession(t.deviceKickedOutMsg, true);
+          }
+        }
+        if (
+          res.adminDeviceId &&
+          isFirebaseAdmin &&
+          res.adminDeviceId !== myDeviceId &&
+          Date.now() - lastAdminTakeoverAtRef.current > 4500
+        ) {
+          void handleAdminSignOut(t.deviceKickedOutMsg, true);
+        }
       });
-    }
-  };
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, [
+    clearLocalStudentSession,
+    handleAdminSignOut,
+    isFirebaseAdmin,
+    isStudentLoggedIn,
+    studentDocId,
+    t.deviceKickedOutMsg,
+  ]);
 
   if (!authInitialized) {
     return (

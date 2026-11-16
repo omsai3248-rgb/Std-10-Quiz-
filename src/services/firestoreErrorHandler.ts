@@ -68,8 +68,8 @@ export function extractReadableErrorMessage(error: unknown, lang: 'gu' | 'en' = 
     const dev = inner.slice('DEVICE_ALREADY_LOGGED_IN:'.length).trim();
     const devSuffix = dev ? ` (${dev})` : '';
     return lang === 'en'
-      ? `This mobile number is already logged in on another device${devSuffix}. Log out from the old device first or ask Admin to unlock it.`
-      : `આ મોબાઇલ નંબર પહેલેથી બીજા ડિવાઇસ${devSuffix} પર લૉગિન છે! એક નંબરથી એક જ સમયે એક જ ડિવાઇસમાં લૉગિન થઈ શકે. પહેલાં જૂના ડિવાઇસમાંથી લૉગ આઉટ કરો અથવા એડમિન પાસેથી ડિવાઇસ અનલૉક કરાવો.`;
+      ? `This account was active on another device${devSuffix}. Logging in here will automatically sign out the previous device.`
+      : `આ નંબર અન્ય ડિવાઇસ${devSuffix} પર ચાલુ હતો. ફરી પ્રયાસ કરો — અહીં લૉગિન થતાં જૂના ડિવાઇસમાંથી આપમેળે લૉગ આઉટ થઈ જશે.`;
   }
   if (inner === 'NAME_REQUIRED_FOR_NEW_USER') {
     return lang === 'en'

@@ -539,8 +539,9 @@ test("Mobile student (mob_9876543210) persists profile, links paymentRequestIds,
   );
 });
 
-test("Single-device session lock blocks second device until first logs out or admin unlocks", async () => {
+test("New device login takes over single-device session (forcing old device auto-logout) while admin_sessions is strictly admin-only", async () => {
   const unauthDb = testEnv.unauthenticatedContext().firestore();
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
   const adminDb = testEnv.authenticatedContext(ADMIN_UID, {
     phone_number: ADMIN_PHONE,
   }).firestore();
@@ -569,41 +570,23 @@ test("Single-device session lock blocks second device until first logs out or ad
     })
   );
 
-  // Device 1 can re-login on the same device
+  // Device 2 logs in with the SAME mobile -> SUCCEEDS and takes over activeDeviceId (kicking Device 1 out)
   await assertSucceeds(
     unauthDb.collection("students").doc(studentId).update({
       fullName: "Gguu",
-      activeDeviceId: "and_device_one",
-      activeDeviceName: "Samsung Galaxy A54",
+      activeDeviceId: "and_device_two",
+      activeDeviceName: "Pixel 8",
       updatedAt: now,
     })
   );
 
-  // Device 2 CANNOT hijack or log in while Device 1 is active
+  // Device takeover still cannot forge hasQuizAccess or unlockedSubjects
   await assertFails(
     unauthDb.collection("students").doc(studentId).update({
       fullName: "Gguu",
-      activeDeviceId: "and_device_two",
-      activeDeviceName: "Pixel 8",
-      updatedAt: now,
-    })
-  );
-
-  // Device 1 logs out (clears activeDeviceId)
-  await assertSucceeds(
-    unauthDb.collection("students").doc(studentId).update({
-      activeDeviceId: "",
-      activeDeviceName: "",
-      updatedAt: now,
-    })
-  );
-
-  // Now Device 2 CAN log in
-  await assertSucceeds(
-    unauthDb.collection("students").doc(studentId).update({
-      fullName: "Gguu",
-      activeDeviceId: "and_device_two",
-      activeDeviceName: "Pixel 8",
+      activeDeviceId: "and_device_three",
+      activeDeviceName: "Pixel 9",
+      hasQuizAccess: true,
       updatedAt: now,
     })
   );
@@ -617,7 +600,7 @@ test("Single-device session lock blocks second device until first logs out or ad
     })
   );
 
-  // Device 1 can log in again after Admin unlock
+  // Device 1 can log in again after Admin unlock or takeover
   await assertSucceeds(
     unauthDb.collection("students").doc(studentId).update({
       fullName: "Gguu",
@@ -625,5 +608,34 @@ test("Single-device session lock blocks second device until first logs out or ad
       activeDeviceName: "Samsung Galaxy A54",
       updatedAt: now,
     })
+  );
+
+  // Admin single-device session document is writable/readable ONLY by Admin
+  await assertFails(
+    unauthDb.collection("admin_sessions").doc("primary").set({
+      activeDeviceId: "evil_dev",
+      activeDeviceName: "Evil",
+      updatedAt: now,
+    })
+  );
+  await assertFails(
+    aliceDb.collection("admin_sessions").doc("primary").get()
+  );
+  await assertSucceeds(
+    adminDb.collection("admin_sessions").doc("primary").set({
+      activeDeviceId: "admin_dev_one",
+      activeDeviceName: "Admin Phone 1",
+      updatedAt: now,
+    })
+  );
+  await assertSucceeds(
+    adminDb.collection("admin_sessions").doc("primary").set({
+      activeDeviceId: "admin_dev_two",
+      activeDeviceName: "Admin Phone 2",
+      updatedAt: now,
+    })
+  );
+  await assertFails(
+    adminDb.collection("admin_sessions").doc("primary").delete()
   );
 });

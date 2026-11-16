@@ -14,6 +14,7 @@ import { useTranslation } from '../i18n/translations';
 import { extractReadableErrorMessage } from '../services/firestoreErrorHandler';
 import {
   ADMIN_PHONE_TEN_DIGITS,
+  claimAdminSessionDevice,
   getCurrentDeviceIdentity,
   lookupStudentByMobile,
   signInAsAdminWithPasscode,
@@ -125,6 +126,7 @@ export const StudentMobileLoginScreen: React.FC<StudentMobileLoginScreenProps> =
       setIsLoading(true);
       try {
         const result = await signInAsAdminWithPasscode(cleanDigits, passwordInput);
+        await claimAdminSessionDevice().catch(() => {});
         setPasswordInput('');
         onAdminAuthenticated(result);
       } catch (err: unknown) {
@@ -232,7 +234,7 @@ export const StudentMobileLoginScreen: React.FC<StudentMobileLoginScreenProps> =
             <div
               className={`rounded-2xl p-3.5 text-xs space-y-1.5 border ${
                 isLockedOnOtherDevice
-                  ? 'bg-amber-50 dark:bg-amber-950/40 border-amber-300 dark:border-amber-800 text-amber-900 dark:text-amber-200'
+                  ? 'bg-[#EFF6FF] dark:bg-[#172554]/50 border-[#3B82F6]/40 text-[#1E3A8A] dark:text-[#BFDBFE]'
                   : 'bg-[#D1FAE5]/60 dark:bg-[#064E3B]/50 border-[#10B981]/40 text-[#064E3B] dark:text-[#D1FAE5]'
               }`}
             >
@@ -258,7 +260,7 @@ export const StudentMobileLoginScreen: React.FC<StudentMobileLoginScreenProps> =
                 )}
               </div>
               {isLockedOnOtherDevice && (
-                <p className="text-[11px] font-bold pt-1 text-red-700 dark:text-red-300">
+                <p className="text-[11px] font-bold pt-1 text-[#1D4ED8] dark:text-[#93C5FD]">
                   {t.deviceLockedOnLabel} {existingProfile.activeDeviceName || 'Other Device'}
                 </p>
               )}

@@ -405,12 +405,12 @@ export function renderQrToPngDataUrl(
   ctx.fillRect(0, 0, w, h);
 
   ctx.fillStyle = '#1E3A8A';
-  ctx.font = 'bold 18px sans-serif';
+  ctx.font = 'bold 18px "Anek Gujarati", sans-serif';
   ctx.textAlign = 'center';
   ctx.fillText(titleLine, w / 2, 30);
 
   ctx.fillStyle = '#0F172A';
-  ctx.font = 'bold 20px sans-serif';
+  ctx.font = 'bold 20px "Anek Gujarati", sans-serif';
   ctx.fillText(amountLabel, w / 2, 56);
 
   const offsetX = padX + quiet * scale;
@@ -425,7 +425,7 @@ export function renderQrToPngDataUrl(
   }
 
   ctx.fillStyle = '#475569';
-  ctx.font = 'bold 14px sans-serif';
+  ctx.font = 'bold 14px "Anek Gujarati", sans-serif';
   ctx.fillText('GPay / PhonePe / Paytm → Scan QR from Gallery', w / 2, h - 18);
 
   return canvas.toDataURL('image/png');

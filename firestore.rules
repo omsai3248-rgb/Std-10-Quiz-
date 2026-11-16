@@ -65,12 +65,6 @@ service cloud.firestore {
              ));
     }
 
-    function isDeviceLockAvailable(existingData, newDeviceId) {
-      return !('activeDeviceId' in existingData) ||
-             existingData.activeDeviceId == '' ||
-             (newDeviceId is string && newDeviceId.size() >= 1 && existingData.activeDeviceId == newDeviceId);
-    }
-
     function isValidStudent(data) {
       return data.keys().hasAll([
                'userId', 'fullName', 'mobileNumber', 'email', 'standard',
@@ -238,7 +232,6 @@ service cloud.firestore {
                                'activeDeviceId' in incoming() &&
                                incoming().activeDeviceId is string &&
                                incoming().activeDeviceId.size() >= 1 &&
-                               isDeviceLockAvailable(existing(), incoming().activeDeviceId) &&
                                incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'email', 'activeDeviceId', 'activeDeviceName', 'updatedAt'])
                              ) ||
                              (
@@ -250,7 +243,6 @@ service cloud.firestore {
                              (
                                isSignedIn() &&
                                request.auth.uid == userId &&
-                               (!('activeDeviceId' in incoming()) || isDeviceLockAvailable(existing(), incoming().activeDeviceId)) &&
                                incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'mobileNumber', 'email', 'activeDeviceId', 'activeDeviceName', 'updatedAt'])
                              ) ||
                              (
@@ -382,6 +374,20 @@ service cloud.firestore {
       allow get: if isValidId(configId);
       allow list: if isAdmin();
       allow create, update: if isAdmin() && isValidId(configId) && isValidAppConfig(incoming());
+      allow delete: if false;
+    }
+
+    function isValidAdminSession(data) {
+      return data.keys().hasAll(['activeDeviceId', 'activeDeviceName', 'updatedAt']) &&
+             data.keys().hasOnly(['activeDeviceId', 'activeDeviceName', 'updatedAt']) &&
+             data.activeDeviceId is string && data.activeDeviceId.size() <= 128 &&
+             data.activeDeviceName is string && data.activeDeviceName.size() <= 120 &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    match /admin_sessions/{sessionId} {
+      allow get, list: if isAdmin();
+      allow create, update: if isAdmin() && isValidId(sessionId) && isValidAdminSession(incoming());
       allow delete: if false;
     }
 

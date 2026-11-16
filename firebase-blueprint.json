@@ -104,12 +104,23 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["utrNormalized", "requestId", "createdAt"]
+    },
+    "AdminSession": {
+      "title": "AdminSession",
+      "description": "Tracks the currently active Admin device ID so logging in on a new device auto-logs out older devices.",
+      "type": "object",
+      "properties": {
+        "activeDeviceId": { "type": "string" },
+        "activeDeviceName": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["activeDeviceId", "activeDeviceName", "updatedAt"]
     }
   },
   "firestore": {
     "/students/{userId}": {
       "schema": { "$ref": "#/entities/StudentProfile" },
-      "description": "Unlocked subject tracking per user UID."
+      "description": "Unlocked subject tracking and active device session per user UID."
     },
     "/payment_requests/{requestId}": {
       "schema": { "$ref": "#/entities/PaymentRequest" },
@@ -122,6 +133,10 @@
     "/access_codes/{codeId}": {
       "schema": { "$ref": "#/entities/AccessCode" },
       "description": "Permanent 8-character codes (unused -> used)."
+    },
+    "/admin_sessions/{sessionId}": {
+      "schema": { "$ref": "#/entities/AdminSession" },
+      "description": "Single-device admin session lock for automatic logout across devices."
     }
   }
 }

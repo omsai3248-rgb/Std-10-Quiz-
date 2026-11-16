@@ -46,6 +46,8 @@ interface AndroidFirebaseBridgeApi {
   deletePaymentRequest?: (callId: string, payloadJson: string) => void;
   deleteAccessCode?: (callId: string, payloadJson: string) => void;
   deleteStudent?: (callId: string, payloadJson: string) => void;
+  claimAdminSessionDevice?: (callId: string, payloadJson: string) => void;
+  verifyActiveSessionNow?: () => void;
 }
 
 declare global {
@@ -54,6 +56,7 @@ declare global {
     __resolveNativeFirebaseCall?: (callId: string, ok: boolean, payload: unknown) => void;
     __onNativeAuthStateChanged?: (user: AppAuthUser | null) => void;
     __onNativeReleaseConfig?: (cfg: AppReleaseConfig | null) => void;
+    __onNativeAdminSessionDevice?: (deviceId: string) => void;
     __onNativeMyPayments?: (list: PaymentRequest[]) => void;
     __onNativeStudentProfile?: (profile: StudentProfile | null) => void;
     __onNativeMyAttempts?: (list: QuizAttempt[]) => void;
@@ -102,6 +105,7 @@ const pendingCalls = new Map<
 
 const authListeners = new Set<(user: AppAuthUser | null) => void>();
 const releaseListeners = new Set<(cfg: AppReleaseConfig | null) => void>();
+const adminSessionDeviceListeners = new Set<(deviceId: string) => void>();
 const myPaymentListeners = new Set<(list: PaymentRequest[]) => void>();
 const studentProfileListeners = new Set<(profile: StudentProfile | null) => void>();
 const myAttemptListeners = new Set<(list: QuizAttempt[]) => void>();
@@ -112,6 +116,7 @@ const adminErrorListeners = new Set<(err: Error) => void>();
 
 let latestAuthUser: AppAuthUser | null | undefined;
 let latestReleaseConfig: AppReleaseConfig | null | undefined;
+let latestAdminSessionDevice: string | undefined;
 let latestMyPayments: PaymentRequest[] | undefined;
 let latestStudentProfile: StudentProfile | null | undefined;
 let latestMyAttempts: QuizAttempt[] | undefined;
@@ -139,6 +144,11 @@ if (typeof window !== 'undefined') {
   window.__onNativeReleaseConfig = (cfg) => {
     latestReleaseConfig = cfg ?? null;
     releaseListeners.forEach((cb) => cb(latestReleaseConfig ?? null));
+  };
+
+  window.__onNativeAdminSessionDevice = (deviceId) => {
+    latestAdminSessionDevice = typeof deviceId === 'string' ? deviceId : '';
+    adminSessionDeviceListeners.forEach((cb) => cb(latestAdminSessionDevice!));
   };
 
   window.__onNativeMyPayments = (list) => {
@@ -236,7 +246,8 @@ function maybeStopNativeAdminListeners(): void {
     allPaymentListeners.size === 0 &&
     allCodeListeners.size === 0 &&
     allStudentListeners.size === 0 &&
-    releaseListeners.size === 0
+    releaseListeners.size === 0 &&
+    adminSessionDeviceListeners.size === 0
   ) {
     adminListenersStarted = false;
     window.AndroidFirebaseBridge?.stopAdminListeners?.();
@@ -258,6 +269,26 @@ export function subscribeNativeReleaseConfig(
     releaseListeners.delete(cb);
     maybeStopNativeAdminListeners();
   };
+}
+
+export function subscribeNativeAdminSessionDevice(
+  cb: (deviceId: string) => void
+): () => void {
+  adminSessionDeviceListeners.add(cb);
+  if (latestAdminSessionDevice !== undefined) cb(latestAdminSessionDevice);
+  ensureNativeAdminListenersStarted();
+  return () => {
+    adminSessionDeviceListeners.delete(cb);
+    maybeStopNativeAdminListeners();
+  };
+}
+
+export function resetNativeAdminSessionDeviceCache(): void {
+  latestAdminSessionDevice = undefined;
+}
+
+export function triggerNativeActiveSessionCheck(): void {
+  window.AndroidFirebaseBridge?.verifyActiveSessionNow?.();
 }
 
 export function subscribeNativeMyPayments(
