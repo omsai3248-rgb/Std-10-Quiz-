@@ -391,6 +391,16 @@ export const App: React.FC = () => {
     }
 
     const onAdminListenerError = (err: unknown) => {
+      const raw = err instanceof Error ? err.message : String(err ?? '');
+      const lower = raw.toLowerCase();
+      if (
+        raw === 'QUOTA_EXCEEDED' ||
+        lower.includes('resource_exhausted') ||
+        lower.includes('resource-exhausted') ||
+        lower.includes('quota')
+      ) {
+        return;
+      }
       setBanner({
         isError: true,
         message: extractReadableErrorMessage(err, langRef.current),

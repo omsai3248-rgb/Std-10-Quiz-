@@ -236,6 +236,22 @@ class NativeFirebaseBridge(
         }
     }
 
+    private fun saveAdminListBackup(key: String, jsonArrayString: String) {
+        runCatching {
+            appContext.getSharedPreferences("std10_admin_cache_prefs", Context.MODE_PRIVATE)
+                .edit()
+                .putString(key, jsonArrayString)
+                .apply()
+        }
+    }
+
+    private fun loadAdminListBackup(key: String): String {
+        return runCatching {
+            appContext.getSharedPreferences("std10_admin_cache_prefs", Context.MODE_PRIVATE)
+                .getString(key, "[]") ?: "[]"
+        }.getOrDefault("[]")
+    }
+
     private val auth: FirebaseAuth? by lazy {
         if (!ensureFirebaseInitialized()) return@lazy null
         runCatching { Firebase.auth }
@@ -1043,42 +1059,71 @@ class NativeFirebaseBridge(
                 val cachedSnap = runCatching { studentRef.get(Source.CACHE).awaitResult() }.getOrNull()
                 val stSnap = if (cachedSnap != null && cachedSnap.exists()) {
                     cachedSnap
+                } else if (System.currentTimeMillis() < serverQuotaDegradedUntilMs || !isInternetConnected()) {
+                    null
                 } else {
-                    studentRef.get().awaitResult()
+                    try {
+                        withTimeoutOrNull(3_000L) { studentRef.get().awaitResult() }
+                    } catch (e: Throwable) {
+                        markQuotaDegradedIfApplicable(e)
+                        null
+                    }
                 }
-                if (!stSnap.exists()) {
+
+                val backup = if (stSnap == null || !stSnap.exists()) loadLocalStudentBackup(studentId) else null
+                if ((stSnap == null || !stSnap.exists()) && backup == null) {
                     resolveCallSuccess(callId, "false")
                     return@launch
                 }
 
-                val prevTotal = (stSnap.getLong("totalQuizzesTaken") ?: 0L).toInt()
-                val prevBest = (stSnap.getLong("bestScorePercent") ?: 0L).toInt()
-                val attemptRef = studentRef.collection("quiz_attempts").document(attemptId)
+                val prevTotal = if (stSnap != null && stSnap.exists()) {
+                    (stSnap.getLong("totalQuizzesTaken") ?: 0L).toInt()
+                } else {
+                    backup?.optInt("totalQuizzesTaken", 0) ?: 0
+                }
+                val prevBest = if (stSnap != null && stSnap.exists()) {
+                    (stSnap.getLong("bestScorePercent") ?: 0L).toInt()
+                } else {
+                    backup?.optInt("bestScorePercent", 0) ?: 0
+                }
+                val nextTotal = prevTotal + 1
+                val nextBest = maxOf(prevBest, percentage)
 
-                val batch = localDb.batch()
-                batch.set(
-                    attemptRef,
-                    mapOf(
-                        "userId" to studentId,
-                        "subjectId" to subjectId,
-                        "subjectTitle" to subjectTitle,
-                        "chapterTitle" to chapterTitle,
-                        "score" to safeScore,
-                        "totalQuestions" to totalQuestions,
-                        "percentage" to percentage,
-                        "timeTakenSeconds" to timeTakenSeconds,
-                        "createdAt" to FieldValue.serverTimestamp(),
+                if (backup != null) {
+                    backup.put("totalQuizzesTaken", nextTotal)
+                    backup.put("bestScorePercent", nextBest)
+                    saveLocalStudentBackup(backup, pendingSync = backup.optBoolean("pendingServerSync", false))
+                }
+
+                if (stSnap != null && stSnap.exists()) {
+                    val attemptRef = studentRef.collection("quiz_attempts").document(attemptId)
+                    val batch = localDb.batch()
+                    batch.set(
+                        attemptRef,
+                        mapOf(
+                            "userId" to studentId,
+                            "subjectId" to subjectId,
+                            "subjectTitle" to subjectTitle,
+                            "chapterTitle" to chapterTitle,
+                            "score" to safeScore,
+                            "totalQuestions" to totalQuestions,
+                            "percentage" to percentage,
+                            "timeTakenSeconds" to timeTakenSeconds,
+                            "createdAt" to FieldValue.serverTimestamp(),
+                        )
                     )
-                )
-                batch.update(
-                    studentRef,
-                    mapOf(
-                        "totalQuizzesTaken" to (prevTotal + 1),
-                        "bestScorePercent" to maxOf(prevBest, percentage),
-                        "updatedAt" to FieldValue.serverTimestamp(),
+                    batch.update(
+                        studentRef,
+                        mapOf(
+                            "totalQuizzesTaken" to nextTotal,
+                            "bestScorePercent" to nextBest,
+                            "updatedAt" to FieldValue.serverTimestamp(),
+                        )
                     )
-                )
-                batch.commit().awaitResult()
+                    withTimeoutOrNull(4_000L) {
+                        runCatching { batch.commit().awaitResult() }
+                    }
+                }
                 resolveCallSuccess(callId, "true")
             } catch (e: Exception) {
                 handleFirestoreError(e, OperationType.CREATE, "quiz_attempts")
@@ -1419,10 +1464,27 @@ class NativeFirebaseBridge(
             }
 
             val byId = linkedMapOf<String, JSONObject>()
-            ids.distinct().take(25).forEach { payId ->
-                val reg = localDb.collection("payment_requests").document(payId)
+            ids.distinct().take(5).forEach { payId ->
+                val docRef = localDb.collection("payment_requests").document(payId)
+                val reg = docRef
                     .addSnapshotListener { snap, error ->
-                        if (error != null) return@addSnapshotListener
+                        if (error != null) {
+                            if (isQuotaOrOfflineException(error)) {
+                                activity.lifecycleScope.launch(Dispatchers.IO) {
+                                    val cached = runCatching { docRef.get(Source.CACHE).awaitResult() }.getOrNull()
+                                    if (cached != null && cached.exists()) {
+                                        byId[payId] = serializePayment(cached)
+                                        val sorted = byId.values.sortedByDescending {
+                                            it.optJSONObject("createdAt")?.optLong("seconds") ?: Long.MAX_VALUE
+                                        }
+                                        val out = JSONArray()
+                                        sorted.forEach { out.put(it) }
+                                        emitToJs("window.__onNativeMyPayments", out.toString())
+                                    }
+                                }
+                            }
+                            return@addSnapshotListener
+                        }
                         if (snap != null && snap.exists()) {
                             byId[payId] = serializePayment(snap)
                         } else {
@@ -1450,8 +1512,66 @@ class NativeFirebaseBridge(
         }
     }
 
+    private fun emitAdminCachedData(localDb: FirebaseFirestore) {
+        val payQuery = localDb.collection("payment_requests")
+            .orderBy("createdAt", Query.Direction.DESCENDING)
+            .limit(50)
+        val codeQuery = localDb.collection("access_codes")
+            .orderBy("createdAt", Query.Direction.DESCENDING)
+            .limit(100)
+        val studentsQuery = localDb.collection("students")
+            .orderBy("updatedAt", Query.Direction.DESCENDING)
+            .limit(100)
+
+        activity.lifecycleScope.launch(Dispatchers.IO) {
+            val payCache = runCatching { payQuery.get(Source.CACHE).awaitResult() }.getOrNull()
+            if (payCache != null && !payCache.isEmpty) {
+                val arr = JSONArray()
+                payCache.documents.forEach { arr.put(serializePayment(it)) }
+                val jsonStr = arr.toString()
+                saveAdminListBackup("all_payments", jsonStr)
+                emitToJs("window.__onNativeAllPayments", jsonStr)
+            } else {
+                emitToJs("window.__onNativeAllPayments", loadAdminListBackup("all_payments"))
+            }
+
+            val codeCache = runCatching { codeQuery.get(Source.CACHE).awaitResult() }.getOrNull()
+            if (codeCache != null && !codeCache.isEmpty) {
+                val arr = JSONArray()
+                codeCache.documents.forEach { arr.put(serializeAccessCode(it)) }
+                val jsonStr = arr.toString()
+                saveAdminListBackup("all_codes", jsonStr)
+                emitToJs("window.__onNativeAllCodes", jsonStr)
+            } else {
+                emitToJs("window.__onNativeAllCodes", loadAdminListBackup("all_codes"))
+            }
+
+            val stCache = runCatching { studentsQuery.get(Source.CACHE).awaitResult() }.getOrNull()
+            if (stCache != null && !stCache.isEmpty) {
+                val arr = JSONArray()
+                stCache.documents.forEach { arr.put(serializeStudent(it)) }
+                val jsonStr = arr.toString()
+                saveAdminListBackup("all_students", jsonStr)
+                emitToJs("window.__onNativeAllStudents", jsonStr)
+            } else {
+                emitToJs("window.__onNativeAllStudents", loadAdminListBackup("all_students"))
+            }
+        }
+    }
+
+    private fun pauseAdminListenersOnQuota(localDb: FirebaseFirestore) {
+        serverQuotaDegradedUntilMs = System.currentTimeMillis() + 5L * 60L * 1000L
+        emitAdminCachedData(localDb)
+        activity.runOnUiThread {
+            adminListenersActive = false
+            adminListeners.forEach { it.remove() }
+            adminListeners.clear()
+        }
+    }
+
     @JavascriptInterface
     fun forceRefreshAdminListeners() {
+        serverQuotaDegradedUntilMs = 0L
         activity.runOnUiThread {
             adminListenersActive = false
             startAdminListeners()
@@ -1471,77 +1591,80 @@ class NativeFirebaseBridge(
             }
             adminListeners.forEach { it.remove() }
             adminListeners.clear()
+
+            // Immediately display cached data so Admin screen loads instantaneously
+            emitAdminCachedData(localDb)
+
+            if (!isInternetConnected() || System.currentTimeMillis() < serverQuotaDegradedUntilMs) {
+                adminListenersActive = false
+                return@runOnUiThread
+            }
+
             adminListenersActive = true
 
             val payQuery = localDb.collection("payment_requests")
                 .orderBy("createdAt", Query.Direction.DESCENDING)
-                .limit(80)
+                .limit(50)
             val payReg = payQuery
                 .addSnapshotListener { snap, error ->
                     if (error != null) {
                         handleFirestoreError(error, OperationType.LIST, "payment_requests")
                         if (isQuotaOrOfflineException(error)) {
-                            activity.lifecycleScope.launch(Dispatchers.IO) {
-                                val cached = runCatching { payQuery.get(Source.CACHE).awaitResult() }.getOrNull()
-                                val arr = JSONArray()
-                                cached?.documents?.forEach { arr.put(serializePayment(it)) }
-                                emitToJs("window.__onNativeAllPayments", arr.toString())
-                            }
+                            pauseAdminListenersOnQuota(localDb)
+                        } else {
+                            emitToJs("window.__onNativeAdminError", JSONObject.quote(error.localizedMessage ?: "Permission denied"))
                         }
-                        emitToJs("window.__onNativeAdminError", JSONObject.quote(if (isExplicitQuotaError(error)) "QUOTA_EXCEEDED" else (error.localizedMessage ?: "Permission denied")))
                         return@addSnapshotListener
                     }
                     val arr = JSONArray()
                     snap?.documents?.forEach { arr.put(serializePayment(it)) }
-                    emitToJs("window.__onNativeAllPayments", arr.toString())
+                    val jsonStr = arr.toString()
+                    saveAdminListBackup("all_payments", jsonStr)
+                    emitToJs("window.__onNativeAllPayments", jsonStr)
                 }
             adminListeners.add(payReg)
 
             val codeQuery = localDb.collection("access_codes")
                 .orderBy("createdAt", Query.Direction.DESCENDING)
-                .limit(150)
+                .limit(100)
             val codeReg = codeQuery
                 .addSnapshotListener { snap, error ->
                     if (error != null) {
                         handleFirestoreError(error, OperationType.LIST, "access_codes")
                         if (isQuotaOrOfflineException(error)) {
-                            activity.lifecycleScope.launch(Dispatchers.IO) {
-                                val cached = runCatching { codeQuery.get(Source.CACHE).awaitResult() }.getOrNull()
-                                val arr = JSONArray()
-                                cached?.documents?.forEach { arr.put(serializeAccessCode(it)) }
-                                emitToJs("window.__onNativeAllCodes", arr.toString())
-                            }
+                            pauseAdminListenersOnQuota(localDb)
+                        } else {
+                            emitToJs("window.__onNativeAdminError", JSONObject.quote(error.localizedMessage ?: "Permission denied"))
                         }
-                        emitToJs("window.__onNativeAdminError", JSONObject.quote(if (isExplicitQuotaError(error)) "QUOTA_EXCEEDED" else (error.localizedMessage ?: "Permission denied")))
                         return@addSnapshotListener
                     }
                     val arr = JSONArray()
                     snap?.documents?.forEach { arr.put(serializeAccessCode(it)) }
-                    emitToJs("window.__onNativeAllCodes", arr.toString())
+                    val jsonStr = arr.toString()
+                    saveAdminListBackup("all_codes", jsonStr)
+                    emitToJs("window.__onNativeAllCodes", jsonStr)
                 }
             adminListeners.add(codeReg)
 
             val studentsQuery = localDb.collection("students")
                 .orderBy("updatedAt", Query.Direction.DESCENDING)
-                .limit(150)
+                .limit(100)
             val studentsReg = studentsQuery
                 .addSnapshotListener { snap, error ->
                     if (error != null) {
                         handleFirestoreError(error, OperationType.LIST, "students")
                         if (isQuotaOrOfflineException(error)) {
-                            activity.lifecycleScope.launch(Dispatchers.IO) {
-                                val cached = runCatching { studentsQuery.get(Source.CACHE).awaitResult() }.getOrNull()
-                                val arr = JSONArray()
-                                cached?.documents?.forEach { arr.put(serializeStudent(it)) }
-                                emitToJs("window.__onNativeAllStudents", arr.toString())
-                            }
+                            pauseAdminListenersOnQuota(localDb)
+                        } else {
+                            emitToJs("window.__onNativeAdminError", JSONObject.quote(error.localizedMessage ?: "Permission denied"))
                         }
-                        emitToJs("window.__onNativeAdminError", JSONObject.quote(if (isExplicitQuotaError(error)) "QUOTA_EXCEEDED" else (error.localizedMessage ?: "Permission denied")))
                         return@addSnapshotListener
                     }
                     val arr = JSONArray()
                     snap?.documents?.forEach { arr.put(serializeStudent(it)) }
-                    emitToJs("window.__onNativeAllStudents", arr.toString())
+                    val jsonStr = arr.toString()
+                    saveAdminListBackup("all_students", jsonStr)
+                    emitToJs("window.__onNativeAllStudents", jsonStr)
                 }
             adminListeners.add(studentsReg)
 
