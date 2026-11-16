@@ -96,6 +96,11 @@ export function extractReadableErrorMessage(error: unknown, lang: 'gu' | 'en' = 
       ? 'Permission denied. Please sign in with an authorized account and try again.'
       : 'પરવાનગી મળી નથી. કૃપા કરીને માન્ય એકાઉન્ટથી લૉગિન કરી ફરી પ્રયાસ કરો.';
   }
+  if (lower.includes('deadline-exceeded') || lower.includes('deadline_exceeded') || lower.includes('timed out')) {
+    return lang === 'en'
+      ? 'Server is taking longer than expected. Please try again in a moment.'
+      : 'સર્વર જવાબ આપવામાં વધુ સમય લઈ રહ્યું છે. કૃપા કરીને થોડી ક્ષણોમાં ફરી પ્રયાસ કરો.';
+  }
   if (lower.includes('offline') || lower.includes('unavailable') || lower.includes('network')) {
     return lang === 'en'
       ? 'Network unavailable. Please check your internet connection and retry.'

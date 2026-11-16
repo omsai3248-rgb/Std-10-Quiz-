@@ -349,6 +349,30 @@ function mapStudentDoc(id: string, d: Record<string, unknown>): StudentProfile {
   };
 }
 
+const LOCAL_STUDENT_BACKUP_PREFIX = 'std10_student_backup_v1_';
+
+function saveWebStudentBackup(profile: StudentProfile, pendingSync = false): void {
+  try {
+    if (!profile.id) return;
+    localStorage.setItem(
+      `${LOCAL_STUDENT_BACKUP_PREFIX}${profile.id}`,
+      JSON.stringify({ ...profile, pendingServerSync: pendingSync })
+    );
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+function loadWebStudentBackup(studentId: string): (StudentProfile & { pendingServerSync?: boolean }) | null {
+  try {
+    const raw = localStorage.getItem(`${LOCAL_STUDENT_BACKUP_PREFIX}${studentId}`);
+    if (!raw) return null;
+    return JSON.parse(raw) as StudentProfile & { pendingServerSync?: boolean };
+  } catch {
+    return null;
+  }
+}
+
 export async function lookupStudentByMobile(mobileNumber: string): Promise<StudentProfile | null> {
   const cleanMobile = mobileNumber.replace(/\D/g, '').slice(-10);
   if (!/^[0-9]{10}$/.test(cleanMobile) || cleanMobile === ADMIN_PHONE_TEN_DIGITS) {
@@ -367,10 +391,12 @@ export async function lookupStudentByMobile(mobileNumber: string): Promise<Stude
   const studentId = getStudentDocId(cleanMobile);
   try {
     const snap = await getDoc(doc(db, COLLECTION_STUDENTS, studentId));
-    if (!snap.exists()) return null;
-    return mapStudentDoc(snap.id, snap.data());
+    if (!snap.exists()) return loadWebStudentBackup(studentId);
+    const mapped = mapStudentDoc(snap.id, snap.data());
+    saveWebStudentBackup(mapped, false);
+    return mapped;
   } catch {
-    return null;
+    return loadWebStudentBackup(studentId);
   }
 }
 
@@ -493,6 +519,7 @@ export async function loginStudentWithDeviceLock(params: {
     });
 
     knownSyncedStudentIds.add(studentId);
+    saveWebStudentBackup(profile, false);
     return profile;
   } catch (error) {
     if (
@@ -508,6 +535,55 @@ export async function loginStudentWithDeviceLock(params: {
       const lockDev = latest?.exists() ? String(latest.data().activeDeviceName ?? '').trim() : '';
       throw new Error(`DEVICE_ALREADY_LOGGED_IN:${lockDev}`);
     }
+    if (
+      lower.includes('resource-exhausted') ||
+      lower.includes('resource_exhausted') ||
+      lower.includes('quota') ||
+      lower.includes('unavailable') ||
+      lower.includes('offline') ||
+      lower.includes('failed-precondition')
+    ) {
+      const backup = loadWebStudentBackup(studentId);
+      if (backup) {
+        if (backup.activeDeviceId && backup.activeDeviceId !== deviceId) {
+          throw new Error(`DEVICE_ALREADY_LOGGED_IN:${backup.activeDeviceName ?? ''}`);
+        }
+        const restored: StudentProfile = {
+          ...backup,
+          fullName: cleanName || backup.fullName || 'Student',
+          activeDeviceId: backup.activeDeviceId || deviceId,
+          activeDeviceName: backup.activeDeviceName || deviceName,
+          isReturningUser: !backup.pendingServerSync,
+        };
+        saveWebStudentBackup(restored, Boolean(backup.pendingServerSync));
+        return restored;
+      }
+      if (typeof navigator === 'undefined' || navigator.onLine !== false) {
+        if (!cleanName) throw new Error('NAME_REQUIRED_FOR_NEW_USER');
+        const fallbackProfile: StudentProfile = {
+          id: studentId,
+          userId: studentId,
+          fullName: cleanName,
+          mobileNumber: cleanMobile,
+          email: '',
+          standard: 'ધોરણ 10',
+          hasQuizAccess: false,
+          redeemedCode: '',
+          paymentStatus: 'none',
+          totalQuizzesTaken: 0,
+          bestScorePercent: 0,
+          unlockedSubjects: [],
+          paymentRequestIds: [],
+          activeDeviceId: deviceId,
+          activeDeviceName: deviceName,
+          isReturningUser: false,
+          createdAt: null,
+          updatedAt: null,
+        };
+        saveWebStudentBackup(fallbackProfile, true);
+        return fallbackProfile;
+      }
+    }
     handleFirestoreError(error, OperationType.WRITE, ref.path);
   }
 }
@@ -518,6 +594,11 @@ export async function releaseStudentDeviceLock(mobileNumber: string): Promise<vo
     return;
   }
   const { deviceId } = getCurrentDeviceIdentity();
+  const studentId = getStudentDocId(cleanMobile);
+  const existingBackup = loadWebStudentBackup(studentId);
+  if (existingBackup) {
+    saveWebStudentBackup({ ...existingBackup, activeDeviceId: '', activeDeviceName: '' }, Boolean(existingBackup.pendingServerSync));
+  }
 
   if (hasNativeFirebaseBridge()) {
     await invokeNativeBridgeCall((callId) => {
@@ -529,7 +610,7 @@ export async function releaseStudentDeviceLock(mobileNumber: string): Promise<vo
     return;
   }
 
-  const ref = doc(db, COLLECTION_STUDENTS, getStudentDocId(cleanMobile));
+  const ref = doc(db, COLLECTION_STUDENTS, studentId);
   try {
     await runTransaction(db, async (tx) => {
       const snap = await tx.get(ref);
