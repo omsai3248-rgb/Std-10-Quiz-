@@ -65,14 +65,37 @@ jobs:
           cache-provider: 'basic'
 
       - name: Prepare debug signing keystore
+        env:
+          DEBUG_KEYSTORE_BASE64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
         run: |
+          if [ ! -f debug.keystore ] && [ -n "${DEBUG_KEYSTORE_BASE64:-}" ]; then
+            if printf '%s' "$DEBUG_KEYSTORE_BASE64" | tr -d '[:space:]' | base64 -d > debug.keystore && [ -s debug.keystore ]; then
+              echo "Restored debug.keystore from DEBUG_KEYSTORE_BASE64 secret."
+            else
+              rm -f debug.keystore
+              echo "WARN: Failed to decode DEBUG_KEYSTORE_BASE64 secret; continuing with fallback." >&2
+            fi
+          fi
           if [ ! -f debug.keystore ] && [ -f debug.keystore.base64 ]; then
-            base64 -d debug.keystore.base64 > debug.keystore
+            if tr -d '[:space:]' < debug.keystore.base64 | base64 -d > debug.keystore && [ -s debug.keystore ]; then
+              echo "Restored debug.keystore from debug.keystore.base64."
+            else
+              rm -f debug.keystore
+            fi
           fi
           if [ ! -f debug.keystore ]; then
-            echo "ERROR: debug.keystore and debug.keystore.base64 are missing" >&2
-            exit 1
+            echo "WARN: debug.keystore and debug.keystore.base64 are absent in checkout; generating CI signing keystore."
+            keytool -genkeypair -v \
+              -keystore debug.keystore \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
           fi
+          keytool -list -v -keystore debug.keystore -storepass android -alias androiddebugkey | grep -E "SHA1:|SHA256:" || true
 
       - name: Build Final Android APK
         run: gradle :app:assembleRelease -x lintVitalRelease -x lintVitalAnalyzeRelease -x lintVitalReportRelease --no-daemon --max-workers=1 --console=plain --stacktrace
