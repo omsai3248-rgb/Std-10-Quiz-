@@ -8,8 +8,36 @@ type MathNode =
   | { kind: 'sqrt'; indexNodes?: MathNode[]; inner: MathNode[] }
   | { kind: 'frac'; numerator: MathNode[]; denominator: MathNode[] };
 
+const SUPERSCRIPT_MAP: Record<string, string> = {
+  '⁰': '0',
+  '¹': '1',
+  '²': '2',
+  '³': '3',
+  '⁴': '4',
+  '⁵': '5',
+  '⁶': '6',
+  '⁷': '7',
+  '⁸': '8',
+  '⁹': '9',
+};
+
+const SUBSCRIPT_MAP: Record<string, string> = {
+  '₀': '0',
+  '₁': '1',
+  '₂': '2',
+  '₃': '3',
+  '₄': '4',
+  '₅': '5',
+  '₆': '6',
+  '₇': '7',
+  '₈': '8',
+  '₉': '9',
+};
+
+const UNIT_RATIO_SET = new Set(['m/s', 'cm/s', 'km/s', 'km/h', 'j/s', 'n/m', 'kg/m', 'm/sec']);
+
 function normalizeMathMacros(raw: string): string {
-  return raw
+  let out = raw
     .replace(/\\overline\s*\{/g, '\\bar{')
     .replace(/\\dfrac\s*\{/g, '\\frac{')
     .replace(/\\tfrac\s*\{/g, '\\frac{')
@@ -39,6 +67,38 @@ function normalizeMathMacros(raw: string): string {
     .replace(/\\left\[/g, '[')
     .replace(/\\right\]/g, ']')
     .replace(/\\,/g, ' ');
+
+  // Convert Unicode superscript runs (e.g. 10⁸, cm²) -> ^{...}
+  out = out.replace(/[⁰¹²³⁴⁵⁶⁷⁸⁹]+/g, (seq) => {
+    const mapped = Array.from(seq, (c) => SUPERSCRIPT_MAP[c] ?? c).join('');
+    return `^{${mapped}}`;
+  });
+
+  // Convert Unicode subscript runs (e.g. H₂O, CO₂) -> _{...}
+  out = out.replace(/[₀₁₂₃₄₅₆₇₈₉]+/g, (seq) => {
+    const mapped = Array.from(seq, (c) => SUBSCRIPT_MAP[c] ?? c).join('');
+    return `_{${mapped}}`;
+  });
+
+  // Normalize unbraced multi-letter subscript like R_eq -> R_{eq}
+  out = out.replace(/([A-Za-z0-9])_([A-Za-z]{2,})\b/g, '$1_{$2}');
+
+  // Convert bare √(expr) and √D / √5 into \sqrt{...}
+  out = out.replace(/√\(([^)]+)\)/g, '\\sqrt{$1}');
+  out = out.replace(/√([A-Za-z0-9]+)/g, '\\sqrt{$1}');
+
+  // Convert math slash fractions like 1/f, R/2, V^2/R, h'/h -> \frac{...}{...}
+  // while keeping unit ratios like m/s, km/h, cm/s inline.
+  out = out.replace(
+    /(?<![A-Za-z0-9/\\])([A-Za-z0-9']+(?:\^(?:\{[A-Za-z0-9]+\}|[A-Za-z0-9]))?)\/([A-Za-z0-9]+)(?![A-Za-z0-9/])/g,
+    (full, num: string, den: string) => {
+      if (UNIT_RATIO_SET.has(full.toLowerCase())) return full;
+      if (/^\d{4}$/.test(den)) return full;
+      return `\\frac{${num}}{${den}}`;
+    }
+  );
+
+  return out;
 }
 
 function parseUntil(
@@ -138,44 +198,226 @@ function parseBracedGroup(input: string, openBraceIndex: number): [MathNode[], n
   return parseUntil(input, openBraceIndex + 1, '}');
 }
 
-function renderNodes(nodes: MathNode[], keyPrefix = 'm'): React.ReactNode[] {
+const UPRIGHT_WORDS = new Set([
+  'sin',
+  'cos',
+  'tan',
+  'cot',
+  'sec',
+  'cosec',
+  'csc',
+  'log',
+  'eq',
+  'cm',
+  'km',
+  'mm',
+  'kg',
+  'mg',
+  'ml',
+  'm',
+  's',
+  'g',
+  'Hz',
+  'HCF',
+  'LCM',
+  'Na',
+  'Ca',
+  'OH',
+  'SO',
+  'NO',
+  'CO',
+  'Fe',
+  'Zn',
+  'Cu',
+  'Mg',
+  'Al',
+  'Cl',
+  'pH',
+  'V',
+  'A',
+  'W',
+  'J',
+]);
+
+// Format tokens inside an equation span into upright numbers, italic variables, and operators
+function renderEquationTokens(expr: string, keyPrefix: string): React.ReactNode[] {
+  const tokenRegex =
+    /(\d+(?:\.\d+)?|[A-Za-z]+|[=≠≤≥<>+\-×÷±≈∞∝⇒→↑∠⊥∥ΔθπαβγΩ°·()[\],:/%]+)/g;
+  const parts: React.ReactNode[] = [];
+  let lastIdx = 0;
+  let match: RegExpExecArray | null;
+  let partIdx = 0;
+
+  while ((match = tokenRegex.exec(expr)) !== null) {
+    if (match.index > lastIdx) {
+      parts.push(
+        <React.Fragment key={`${keyPrefix}_raw_${partIdx++}`}>
+          {expr.slice(lastIdx, match.index)}
+        </React.Fragment>
+      );
+    }
+
+    const tok = match[0];
+    const prevSlice = expr.slice(0, match.index);
+    if (/^\d/.test(tok)) {
+      parts.push(
+        <span key={`${keyPrefix}_num_${partIdx++}`} className="math-num">
+          {tok}
+        </span>
+      );
+    } else if (/^[A-Za-z]+$/.test(tok)) {
+      const precededBySpaceAndDigit = /\d\s+$/.test(prevSlice);
+      if (
+        UPRIGHT_WORDS.has(tok) &&
+        (tok.length > 1 || precededBySpaceAndDigit)
+      ) {
+        parts.push(
+          <span key={`${keyPrefix}_fn_${partIdx++}`} className="math-op">
+            {tok}
+          </span>
+        );
+      } else if (tok.length <= 3) {
+        parts.push(
+          <span key={`${keyPrefix}_var_${partIdx++}`} className="math-var">
+            {tok}
+          </span>
+        );
+      } else {
+        parts.push(<React.Fragment key={`${keyPrefix}_word_${partIdx++}`}>{tok}</React.Fragment>);
+      }
+    } else {
+      parts.push(
+        <span key={`${keyPrefix}_op_${partIdx++}`} className="math-op">
+          {tok}
+        </span>
+      );
+    }
+    lastIdx = tokenRegex.lastIndex;
+  }
+
+  if (lastIdx < expr.length) {
+    parts.push(
+      <React.Fragment key={`${keyPrefix}_tail_${partIdx}`}>{expr.slice(lastIdx)}</React.Fragment>
+    );
+  }
+  return parts;
+}
+
+// Keep Gujarati prose, question prefixes ("12)"), "સ્ટેપ 1:", and board dates "(March-2026)" in Anek Gujarati,
+// while rendering math equations, math symbols, variables, and numeric values in Equation Format.
+const SKIP_OR_MATH_SEGMENT_REGEX =
+  /(^\s*\d+\)\s*|સ્ટેપ\s+\d+\s*:|\((?:March|June|July|May|Aug|Sample)[^)]*\)|\([A-D]\)|_{3,}|(?:∠|Δ|θ|π|α|β|γ|Ω|±|≠|≤|≥|=|<|>|≈|∞|∝|⇒|→|↑|⊥|∥|×|÷|·|[+\-−]?\d+(?:\.\d+)?(?:\s*[A-Za-z°%]+)?|[A-Za-z]+(?:\s*\([A-Za-z0-9,\s+-]+\))?)(?:\s*(?:[=≠≤≥<>+\-×÷±≈⇒→·:/]|°|%)\s*(?:∠|Δ|θ|π|α|β|γ|Ω|±|≠|≤|≥|≈|∞|∝|⇒|→|↑|⊥|∥|×|÷|·|\d+(?:\.\d+)?|[A-Za-z0-9()[\]°%.'+-]+))*)/g;
+
+function renderPlainSegment(
+  text: string,
+  keyPrefix: string,
+  insideMathNode: boolean
+): React.ReactNode {
+  if (insideMathNode) {
+    return <span className="math-eq">{renderEquationTokens(text, keyPrefix)}</span>;
+  }
+
+  const out: React.ReactNode[] = [];
+  let lastIdx = 0;
+  let idx = 0;
+  SKIP_OR_MATH_SEGMENT_REGEX.lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = SKIP_OR_MATH_SEGMENT_REGEX.exec(text)) !== null) {
+    if (match.index > lastIdx) {
+      out.push(
+        <React.Fragment key={`${keyPrefix}_gu_${idx++}`}>
+          {text.slice(lastIdx, match.index)}
+        </React.Fragment>
+      );
+    }
+
+    const seg = match[0];
+    const isSkippedMeta =
+      /^\s*\d+\)\s*$/.test(seg) ||
+      /^સ્ટેપ\s+\d+\s*:$/.test(seg) ||
+      /^\((?:March|June|July|May|Aug|Sample)/.test(seg) ||
+      /^\([A-D]\)$/.test(seg) ||
+      /^_{3,}$/.test(seg);
+
+    // Avoid styling ordinary multi-word English prose as equations if there's no math operator/digit/symbol
+    const hasMathSignal =
+      /[\d=≠≤≥<>+\-×÷±≈∞∝⇒→↑∠⊥∥ΔθπαβγΩ°·%√:/]/.test(seg) ||
+      /^(?:[a-zA-Z]|[a-zA-Z]\s*\([a-zA-Z0-9,\s+-]+\)|(?:sin|cos|tan|cot|sec|cosec|csc)\b)/.test(
+        seg.trim()
+      );
+
+    if (isSkippedMeta || !hasMathSignal) {
+      out.push(<React.Fragment key={`${keyPrefix}_txt_${idx++}`}>{seg}</React.Fragment>);
+    } else {
+      out.push(
+        <span key={`${keyPrefix}_eq_${idx++}`} className="math-eq">
+          {renderEquationTokens(seg, `${keyPrefix}_t${idx}`)}
+        </span>
+      );
+    }
+
+    lastIdx = SKIP_OR_MATH_SEGMENT_REGEX.lastIndex;
+  }
+
+  if (lastIdx < text.length) {
+    out.push(
+      <React.Fragment key={`${keyPrefix}_end_${idx}`}>{text.slice(lastIdx)}</React.Fragment>
+    );
+  }
+
+  return out;
+}
+
+function renderNodes(
+  nodes: MathNode[],
+  keyPrefix = 'm',
+  insideMathNode = false
+): React.ReactNode[] {
   return nodes.map((node, idx) => {
     const key = `${keyPrefix}_${idx}`;
     switch (node.kind) {
       case 'plain':
-        return <React.Fragment key={key}>{node.text}</React.Fragment>;
+        return (
+          <React.Fragment key={key}>
+            {renderPlainSegment(node.text, key, insideMathNode)}
+          </React.Fragment>
+        );
       case 'sup':
         return (
-          <sup key={key} className="text-[0.74em] leading-none align-super">
-            {renderNodes(node.nodes, key)}
+          <sup key={key} className="math-eq text-[0.74em] leading-none align-super">
+            {renderNodes(node.nodes, key, true)}
           </sup>
         );
       case 'sub':
         return (
-          <sub key={key} className="text-[0.74em] leading-none align-sub">
-            {renderNodes(node.nodes, key)}
+          <sub key={key} className="math-eq text-[0.74em] leading-none align-sub">
+            {renderNodes(node.nodes, key, true)}
           </sub>
         );
       case 'overbar':
         return (
           <span
             key={key}
-            className="inline-block border-t border-current pt-[2px] mt-[2px] mx-[1px] leading-[1.2]"
+            className="math-eq inline-block border-t border-current pt-[2px] mt-[2px] mx-[1px] leading-[1.2]"
           >
-            {renderNodes(node.nodes, `${key}_ob`)}
+            {renderNodes(node.nodes, `${key}_ob`, true)}
           </span>
         );
       case 'sqrt':
         return (
-          <span key={key} className="inline-flex items-baseline mx-[2px] py-[2px] whitespace-nowrap">
+          <span
+            key={key}
+            className="math-eq inline-flex items-baseline mx-[2px] py-[2px] whitespace-nowrap"
+          >
             {node.indexNodes && node.indexNodes.length > 0 && (
               <sup className="text-[0.65em] leading-none mr-[1px]">
-                {renderNodes(node.indexNodes, `${key}_idx`)}
+                {renderNodes(node.indexNodes, `${key}_idx`, true)}
               </sup>
             )}
-            <span className="text-[1.08em] font-medium leading-none">√</span>
+            <span className="text-[1.12em] font-medium leading-none">√</span>
             <span className="border-t border-current px-[3px] pt-[2px] leading-[1.2]">
-              {renderNodes(node.inner, key)}
+              {renderNodes(node.inner, key, true)}
             </span>
           </span>
         );
@@ -183,13 +425,13 @@ function renderNodes(nodes: MathNode[], keyPrefix = 'm'): React.ReactNode[] {
         return (
           <span
             key={key}
-            className="inline-flex flex-col items-center justify-center align-middle mx-1 my-0.5 py-0.5 text-[0.88em] leading-[1.25] whitespace-nowrap"
+            className="math-eq inline-flex flex-col items-center justify-center align-middle mx-1 my-0.5 py-0.5 text-[0.9em] leading-[1.25] whitespace-nowrap"
           >
             <span className="px-1.5 border-b border-current pb-[2px]">
-              {renderNodes(node.numerator, `${key}_n`)}
+              {renderNodes(node.numerator, `${key}_n`, true)}
             </span>
             <span className="px-1.5 pt-[2px]">
-              {renderNodes(node.denominator, `${key}_d`)}
+              {renderNodes(node.denominator, `${key}_d`, true)}
             </span>
           </span>
         );

@@ -21,7 +21,10 @@ export interface Translations {
   payUpiOpenApp: string;
   payUpiQuickTip: string;
   payQrTitle: string;
+  payQrDownload: string;
+  payQrShareOnly: string;
   payQrSaveShare: string;
+  payQrDownloadedMsg: string;
   payQrSavedMsg: string;
   payCopyAmount: string;
   payCopyUpiId: string;
@@ -206,7 +209,10 @@ const GU: Translations = {
   payUpiOpenApp: 'ડાયરેક્ટ UPI એપ ખોલો',
   payUpiQuickTip: 'પેમેન્ટ કર્યા બાદ Transaction / UTR નંબર અને સ્ક્રીનશોટ નીચે અપલોડ કરો.',
   payQrTitle: 'UPI QR કોડ સ્કેન કરો (Bank Limit Error વગર)',
+  payQrDownload: 'QR ડાઉનલોડ કરો (Gallery)',
+  payQrShareOnly: 'શેર',
   payQrSaveShare: 'QR સેવ / શેર કરો (Gallery થી સ્કેન કરો)',
+  payQrDownloadedMsg: 'QR કોડ Gallery માં ડાઉનલોડ થઈ ગયો છે — GPay / PhonePe માં "Scan from gallery" વડે પેમેન્ટ કરો.',
   payQrSavedMsg: 'QR ફોટો તૈયાર છે — GPay / PhonePe માં "Scan from gallery" વડે પેમેન્ટ કરો.',
   payCopyAmount: 'રકમ કોપી',
   payCopyUpiId: 'UPI ID કોપી',
@@ -390,7 +396,10 @@ const EN: Translations = {
   payUpiOpenApp: 'Open UPI App Directly',
   payUpiQuickTip: 'After paying, upload the Transaction / UTR ID and screenshot below.',
   payQrTitle: 'Scan UPI QR Code (No Intent Limit)',
+  payQrDownload: 'Download QR (Gallery)',
+  payQrShareOnly: 'Share',
   payQrSaveShare: 'Save / Share QR (Scan from Gallery)',
+  payQrDownloadedMsg: 'QR code downloaded to Gallery — open GPay / PhonePe and select "Scan from gallery".',
   payQrSavedMsg: 'QR image ready — open GPay / PhonePe and select "Scan from gallery".',
   payCopyAmount: 'Copy ₹',
   payCopyUpiId: 'Copy UPI ID',

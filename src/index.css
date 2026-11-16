@@ -2,31 +2,63 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 @font-face {
-  font-family: "Plus Jakarta Sans";
-  src: url("/fonts/plus_jakarta_sans.ttf") format("truetype");
+  font-family: "Anek Gujarati";
+  src: url("/fonts/anek_gujarati.ttf") format("truetype");
   font-weight: 100 900;
   font-style: normal;
   font-display: swap;
 }
 
 @font-face {
-  font-family: "Noto Sans Gujarati";
-  src: url("/fonts/noto_sans_gujarati.ttf") format("truetype");
-  font-weight: 100 900;
+  font-family: "STIX Two Text";
+  src: url("/fonts/stix_two_text.ttf") format("truetype");
+  font-weight: 400 700;
   font-style: normal;
   font-display: swap;
 }
 
 :root {
-  --font-sans: "Plus Jakarta Sans", "Noto Sans Gujarati", system-ui, -apple-system, sans-serif;
-  --font-gujarati: "Noto Sans Gujarati", "Plus Jakarta Sans", system-ui, sans-serif;
+  --font-sans: "Anek Gujarati", system-ui, -apple-system, sans-serif;
+  --font-gujarati: "Anek Gujarati", system-ui, -apple-system, sans-serif;
+  --font-math: "STIX Two Text", "Cambria Math", "Times New Roman", "Anek Gujarati", serif;
 }
 
-body {
+html,
+body,
+button,
+input,
+textarea,
+select {
   font-family: var(--font-sans);
-  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
 }
 
 .tabular-nums {
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: tabular-nums lining-nums;
 }
+
+.math-eq {
+  font-family: var(--font-math);
+  font-variant-numeric: lining-nums tabular-nums;
+  letter-spacing: 0.015em;
+  word-spacing: 0.06em;
+}
+
+.math-var {
+  font-family: var(--font-math);
+  font-style: italic;
+  font-weight: 500;
+  padding-inline: 0.5px;
+}
+
+.math-num {
+  font-family: var(--font-math);
+  font-style: normal;
+  font-variant-numeric: lining-nums tabular-nums;
+}
+
+.math-op {
+  font-family: var(--font-math);
+  font-style: normal;
+  font-weight: 500;
+}
+

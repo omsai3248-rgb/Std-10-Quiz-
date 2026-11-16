@@ -6,4 +6,5 @@
     <string name="error_no_upi_app">કોઈ UPI એપ મળી નથી. કૃપા કરીને UPI ID કોપી કરીને પેમેન્ટ કરો.</string>
     <string name="upi_chooser_title">UPI એપ પસંદ કરો</string>
     <string name="share_export_title">એક્સપોર્ટ ફાઇલ શેર / સેવ કરો</string>
+    <string name="qr_downloaded_gallery">QR કોડ Gallery (Pictures/Std10Quiz) માં ડાઉનલોડ થઈ ગયો છે.</string>
 </resources>

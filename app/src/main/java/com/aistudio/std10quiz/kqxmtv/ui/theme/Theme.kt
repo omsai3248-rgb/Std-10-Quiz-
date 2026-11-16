@@ -9,7 +9,43 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.aistudio.std10quiz.kqxmtv.R
+
+private val AnekGujaratiFontFamily = FontFamily(
+    Font(R.font.anek_gujarati, FontWeight.Normal),
+    Font(R.font.anek_gujarati, FontWeight.Medium),
+    Font(R.font.anek_gujarati, FontWeight.Bold)
+)
+
+private val BaseTypography = Typography()
+private val AppTypography = Typography(
+    displayLarge = BaseTypography.displayLarge.copy(fontFamily = AnekGujaratiFontFamily),
+    displayMedium = BaseTypography.displayMedium.copy(fontFamily = AnekGujaratiFontFamily),
+    displaySmall = BaseTypography.displaySmall.copy(fontFamily = AnekGujaratiFontFamily),
+    headlineLarge = BaseTypography.headlineLarge.copy(fontFamily = AnekGujaratiFontFamily),
+    headlineMedium = BaseTypography.headlineMedium.copy(fontFamily = AnekGujaratiFontFamily),
+    headlineSmall = BaseTypography.headlineSmall.copy(fontFamily = AnekGujaratiFontFamily),
+    titleLarge = BaseTypography.titleLarge.copy(fontFamily = AnekGujaratiFontFamily),
+    titleMedium = BaseTypography.titleMedium.copy(fontFamily = AnekGujaratiFontFamily),
+    titleSmall = BaseTypography.titleSmall.copy(fontFamily = AnekGujaratiFontFamily),
+    bodyLarge = TextStyle(
+        fontFamily = AnekGujaratiFontFamily,
+        fontWeight = FontWeight.Normal,
+        fontSize = 16.sp,
+        lineHeight = 24.sp
+    ),
+    bodyMedium = BaseTypography.bodyMedium.copy(fontFamily = AnekGujaratiFontFamily),
+    bodySmall = BaseTypography.bodySmall.copy(fontFamily = AnekGujaratiFontFamily),
+    labelLarge = BaseTypography.labelLarge.copy(fontFamily = AnekGujaratiFontFamily),
+    labelMedium = BaseTypography.labelMedium.copy(fontFamily = AnekGujaratiFontFamily),
+    labelSmall = BaseTypography.labelSmall.copy(fontFamily = AnekGujaratiFontFamily)
+)
 
 private val RoyalBlue = Color(0xFF1E3A8A)
 private val Emerald = Color(0xFF047857)
@@ -56,7 +92,7 @@ fun Std10QuizTheme(
 ) {
     MaterialTheme(
         colorScheme = if (darkTheme) DarkColors else LightColors,
-        typography = Typography(),
+        typography = AppTypography,
         shapes = AppShapes,
         content = content
     )

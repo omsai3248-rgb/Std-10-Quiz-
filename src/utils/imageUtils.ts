@@ -104,6 +104,7 @@ export function getCurrentDeviceIdentity(): { deviceId: string; deviceName: stri
 
 interface AndroidBridgeApi {
   saveExportedFile?: (suggestedName: string, dataUrl: string) => void;
+  downloadQrToGallery?: (suggestedName: string, dataUrl: string) => void;
   openUpiPayment?: (upiUrl: string, fallbackUpiUrl: string) => void;
   openExternalUrl?: (url: string) => void;
 }
@@ -120,7 +121,7 @@ export function buildUpiPaymentHref(
   amountRupees: number,
   studentMobile: string
 ): string {
-  const cleanAmount = Math.max(1, Number(amountRupees) || 24).toFixed(2);
+  const cleanAmount = String(Math.max(1, Math.round(Number(amountRupees) || 24)));
   const cleanMob = studentMobile.replace(/\D/g, '').slice(-10);
   const note = cleanMob ? `Std10Quiz-${cleanMob}` : 'Std10QuizFee';
   const query = [
@@ -142,6 +143,20 @@ export function launchUpiPayment(upiUrl: string): void {
     return;
   }
   window.location.href = upiUrl;
+}
+
+export function downloadPngDataUrl(suggestedName: string, dataUrl: string): void {
+  if (typeof window === 'undefined' || !dataUrl) return;
+  if (window.AndroidBridge?.downloadQrToGallery) {
+    window.AndroidBridge.downloadQrToGallery(suggestedName, dataUrl);
+    return;
+  }
+  const link = document.createElement('a');
+  link.href = dataUrl;
+  link.download = suggestedName;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
 }
 
 export function saveOrSharePngDataUrl(suggestedName: string, dataUrl: string): void {

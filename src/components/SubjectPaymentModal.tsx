@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   Clock,
   Copy,
+  Download,
   ExternalLink,
   Image as ImageIcon,
   IndianRupee,
@@ -35,6 +36,7 @@ import {
 import {
   buildUpiPaymentHref,
   compressImageFileToBlobAndBase64,
+  downloadPngDataUrl,
   formatTimestampLabel,
   launchUpiPayment,
   resolvePaymentImageSrc,
@@ -141,6 +143,18 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
   }, [myPayments, submittedRequestId]);
 
   if (!isOpen) return null;
+
+  const handleDownloadQr = () => {
+    const pngDataUrl = renderQrToPngDataUrl(
+      upiPaymentUrl,
+      ADMIN_UPI_NAME,
+      `₹${fixedAmount} • ${ADMIN_UPI_ID}`
+    );
+    if (pngDataUrl) {
+      downloadPngDataUrl(`Std10Quiz_UPI_${fixedAmount}.png`, pngDataUrl);
+      onNotify?.(t.payQrDownloadedMsg);
+    }
+  };
 
   const handleSaveShareQr = () => {
     const pngDataUrl = renderQrToPngDataUrl(
@@ -481,14 +495,26 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
                   </svg>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={handleSaveShareQr}
-                  className="w-full min-h-[48px] px-4 py-2 rounded-xl bg-[#047857] hover:bg-[#065F46] text-white text-xs sm:text-sm font-extrabold flex items-center justify-center gap-2 transition-colors cursor-pointer"
-                >
-                  <Share2 className="h-4 w-4 shrink-0" />
-                  <span>{t.payQrSaveShare}</span>
-                </button>
+                <div className="w-full flex items-center gap-2">
+                  <button
+                    type="button"
+                    data-testid="download_qr_button"
+                    onClick={handleDownloadQr}
+                    className="flex-1 min-h-[48px] px-4 py-2 rounded-xl bg-[#047857] hover:bg-[#065F46] text-white text-xs sm:text-sm font-extrabold flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                  >
+                    <Download className="h-4 w-4 shrink-0" />
+                    <span>{t.payQrDownload}</span>
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="share_qr_button"
+                    onClick={handleSaveShareQr}
+                    className="min-h-[48px] px-3.5 py-2 rounded-xl border border-[#CBD5E1] bg-[#FAF9F5] hover:bg-slate-100 text-[#0F172A] text-xs sm:text-sm font-extrabold flex items-center justify-center gap-1.5 transition-colors cursor-pointer shrink-0"
+                  >
+                    <Share2 className="h-4 w-4 shrink-0" />
+                    <span>{t.payQrShareOnly}</span>
+                  </button>
+                </div>
               </div>
 
               {/* Manual Copy UPI ID + Copy Amount (Bypasses Bank Intent Limits) */}

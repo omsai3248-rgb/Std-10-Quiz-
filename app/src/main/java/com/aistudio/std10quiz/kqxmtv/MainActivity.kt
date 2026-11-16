@@ -2,11 +2,15 @@ package com.aistudio.std10quiz.kqxmtv
 
 import android.annotation.SuppressLint
 import android.content.ActivityNotFoundException
+import android.content.ContentValues
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.MediaStore
 import android.util.Base64
 import android.util.Log
 import android.webkit.JavascriptInterface
@@ -118,6 +122,68 @@ private class AndroidExportBridge(
                     Toast.LENGTH_SHORT
                 ).show()
             }
+        }
+    }
+
+    @JavascriptInterface
+    fun downloadQrToGallery(suggestedName: String, dataUrl: String) {
+        val commaIdx = dataUrl.indexOf(',')
+        if (commaIdx <= 0) return
+        val base64Part = dataUrl.substring(commaIdx + 1)
+        val bytes = try {
+            Base64.decode(base64Part, Base64.DEFAULT)
+        } catch (_: Exception) {
+            return
+        }
+        val baseName = suggestedName
+            .replace(Regex("[^A-Za-z0-9._-]"), "_")
+            .removeSuffix(".png")
+            .ifBlank { "Std10Quiz_UPI_QR" }
+        val uniqueName = "${baseName}_${System.currentTimeMillis() % 100000}.png"
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            Thread {
+                val resolver = activity.contentResolver
+                val values = ContentValues().apply {
+                    put(MediaStore.Images.Media.DISPLAY_NAME, uniqueName)
+                    put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+                    put(
+                        MediaStore.Images.Media.RELATIVE_PATH,
+                        "${Environment.DIRECTORY_PICTURES}/Std10Quiz"
+                    )
+                    put(MediaStore.Images.Media.IS_PENDING, 1)
+                }
+                var savedOk = false
+                var insertedUri: Uri? = null
+                try {
+                    insertedUri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                    if (insertedUri != null) {
+                        resolver.openOutputStream(insertedUri)?.use { out ->
+                            out.write(bytes)
+                            out.flush()
+                        }
+                        values.clear()
+                        values.put(MediaStore.Images.Media.IS_PENDING, 0)
+                        resolver.update(insertedUri, values, null, null)
+                        savedOk = true
+                    }
+                } catch (_: Exception) {
+                    insertedUri?.let { runCatching { resolver.delete(it, null, null) } }
+                }
+                activity.runOnUiThread {
+                    if (savedOk) {
+                        Toast.makeText(
+                            activity,
+                            activity.getString(R.string.qr_downloaded_gallery),
+                            Toast.LENGTH_LONG
+                        ).show()
+                    } else {
+                        saveExportedFile("$baseName.png", dataUrl)
+                    }
+                }
+            }.start()
+        } else {
+            saveExportedFile("$baseName.png", dataUrl)
         }
     }
 

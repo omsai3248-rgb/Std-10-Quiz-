@@ -178,19 +178,19 @@ export const PolynomialGraphCard: React.FC<PolynomialGraphCardProps> = ({ patter
         />
 
         {/* Axis labels */}
-        <text x={width - 26} y={cy + 14} fontSize={11} fontWeight="bold" fill="currentColor">
+        <text x={width - 26} y={cy + 14} fontSize={12} fontWeight="bold" fontFamily="STIX Two Text, serif" fontStyle="italic" fill="currentColor">
           X
         </text>
-        <text x={14} y={cy + 14} fontSize={11} fontWeight="bold" fill="currentColor">
+        <text x={14} y={cy + 14} fontSize={12} fontWeight="bold" fontFamily="STIX Two Text, serif" fontStyle="italic" fill="currentColor">
           X&apos;
         </text>
-        <text x={cx + 8} y={16} fontSize={11} fontWeight="bold" fill="currentColor">
+        <text x={cx + 8} y={16} fontSize={12} fontWeight="bold" fontFamily="STIX Two Text, serif" fontStyle="italic" fill="currentColor">
           Y
         </text>
-        <text x={cx + 8} y={height - 12} fontSize={11} fontWeight="bold" fill="currentColor">
+        <text x={cx + 8} y={height - 12} fontSize={12} fontWeight="bold" fontFamily="STIX Two Text, serif" fontStyle="italic" fill="currentColor">
           Y&apos;
         </text>
-        <text x={cx + 5} y={cy + 13} fontSize={10} fontWeight="bold" fill="currentColor">
+        <text x={cx + 5} y={cy + 13} fontSize={11} fontWeight="bold" fontFamily="STIX Two Text, serif" fontStyle="italic" fill="currentColor">
           O
         </text>
 
