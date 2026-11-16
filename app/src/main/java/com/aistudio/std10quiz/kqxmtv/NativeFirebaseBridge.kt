@@ -133,7 +133,7 @@ class NativeFirebaseBridge(
         val localAuth = auth ?: return
         val localCreds = credentialManager ?: return
         if (localAuth.currentUser != null) return
-        val clientId = runCatching { appContext.getString(R.string.default_web_client_id) }.getOrDefault("")
+        val clientId = getOptionalStringResource("default_web_client_id")
         if (clientId.isBlank()) return
 
         activity.lifecycleScope.launch {
@@ -191,7 +191,7 @@ class NativeFirebaseBridge(
             resolveCallError(callId, "Native Firebase configuration is not initialized.")
             return
         }
-        val clientId = runCatching { appContext.getString(R.string.default_web_client_id) }.getOrDefault("")
+        val clientId = getOptionalStringResource("default_web_client_id")
         if (clientId.isBlank()) {
             resolveCallError(callId, "Google Sign-In configuration missing: default_web_client_id not found")
             return
