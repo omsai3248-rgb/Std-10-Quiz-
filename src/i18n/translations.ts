@@ -11,8 +11,6 @@ export interface Translations {
   navAdmin: string;
   navAdminLive: string;
   loadingApp: string;
-  authSetupWarningTitle: string;
-  authSetupWarningDesc: string;
 
   // Public Payment Page
   payHeaderTitle: string;
@@ -99,10 +97,6 @@ export interface Translations {
   loggingInBtn: string;
   errWrongAdminPassword: string;
   errWrongAdminGoogleAccount: string;
-  connectFirebaseGoogleBtn: string;
-  firebaseConnectedBadge: string;
-  firebaseNeedsAuthTitle: string;
-  firebaseNeedsAuthDesc: string;
   onlyAdminAllowedError: string;
   signOutBtn: string;
 
@@ -117,7 +111,12 @@ export interface Translations {
   tabAllCodes: string;
   tabUsedCodes: string;
   tabStudents: string;
-  tabSetup: string;
+  tabUpdates: string;
+  noStudentsYet: string;
+  quizzesTakenLabel: string;
+  bestScoreLabel: string;
+  grantAllAccessBtn: string;
+  revokeAccessBtn: string;
   pendingLabel: string;
   approvedLabel: string;
   rejectedLabel: string;
@@ -171,9 +170,6 @@ const GU: Translations = {
   navAdmin: 'એડમિન',
   navAdminLive: 'એડમિન લાઇવ',
   loadingApp: 'એપ લોડ થઈ રહી છે...',
-  authSetupWarningTitle: 'Firebase Anonymous Auth ચાલુ કરવું જરૂરી છે',
-  authSetupWarningDesc:
-    'પબ્લિક યુઝર્સ ફોર્મ સબમિટ કરી શકે તે માટે Firebase Console → Authentication → Sign-in method માં Anonymous અને Phone બંને ચાલુ કરો.',
 
   payHeaderTitle: 'પેમેન્ટ વિગતો અને સ્ક્રીનશોટ મોકલો',
   payHeaderDesc:
@@ -260,11 +256,6 @@ const GU: Translations = {
   loggingInBtn: 'લૉગિન થઈ રહ્યું છે...',
   errWrongAdminPassword: 'ખોટો પાસવર્ડ! કૃપા કરીને સાચો એડમિન પાસવર્ડ દાખલ કરો.',
   errWrongAdminGoogleAccount: 'માત્ર અધિકૃત એડમિન Google એકાઉન્ટ (omsai3248@gmail.com) જ માન્ય છે!',
-  connectFirebaseGoogleBtn: 'Google વડે Firebase ચાલુ કરો (omsai3248@gmail.com)',
-  firebaseConnectedBadge: 'Firebase ચાલુ છે',
-  firebaseNeedsAuthTitle: 'લાઇવ Firebase સિંક ચાલુ કરો',
-  firebaseNeedsAuthDesc:
-    'પેમેન્ટ વિનંતીઓ જોવા અને કોડ એપ્રુવ કરવા નીચેના બટન પર ક્લિક કરી Google (omsai3248@gmail.com) વડે Firebase ચાલુ કરો.',
   onlyAdminAllowedError: 'માત્ર 9099592283 નંબર જ એડમિન લૉગિન માટે માન્ય છે!',
   signOutBtn: 'એડમિન લૉગ આઉટ',
 
@@ -278,7 +269,12 @@ const GU: Translations = {
   tabAllCodes: 'બધા કોડ્સ',
   tabUsedCodes: 'વપરાયેલ કોડ',
   tabStudents: 'વિદ્યાર્થીઓ',
-  tabSetup: 'સેટઅપ',
+  tabUpdates: 'અપડેટ્સ',
+  noStudentsYet: 'હજી કોઈ વિદ્યાર્થી લૉગિન થયો નથી.',
+  quizzesTakenLabel: 'રમેલી ક્વિઝ:',
+  bestScoreLabel: 'શ્રેષ્ઠ સ્કોર:',
+  grantAllAccessBtn: 'બધા વિષયો અનલૉક કરો',
+  revokeAccessBtn: 'એક્સેસ બંધ કરો',
   pendingLabel: 'બાકી',
   approvedLabel: 'મંજૂર',
   rejectedLabel: 'નામંજૂર',
@@ -331,9 +327,6 @@ const EN: Translations = {
   navAdmin: 'Admin',
   navAdminLive: 'Admin Live',
   loadingApp: 'Loading app...',
-  authSetupWarningTitle: 'Enable Firebase Anonymous & Phone Auth',
-  authSetupWarningDesc:
-    'Enable Anonymous Auth (for public users) and Phone Auth (for admin 9099592283) in Firebase Console → Authentication → Sign-in method.',
 
   payHeaderTitle: 'Submit Payment Details & Screenshot',
   payHeaderDesc:
@@ -421,11 +414,6 @@ const EN: Translations = {
   loggingInBtn: 'Signing in...',
   errWrongAdminPassword: 'Incorrect admin password. Please try again.',
   errWrongAdminGoogleAccount: 'Only authorized owner Google account (omsai3248@gmail.com) is allowed!',
-  connectFirebaseGoogleBtn: 'Turn On Firebase via Google (omsai3248@gmail.com)',
-  firebaseConnectedBadge: 'Firebase Active',
-  firebaseNeedsAuthTitle: 'Connect Live Firebase Sync',
-  firebaseNeedsAuthDesc:
-    'Tap below to activate live Firebase reads and approvals directly with Google (omsai3248@gmail.com).',
   onlyAdminAllowedError: 'Only 9099592283 is allowed for Admin Login!',
   signOutBtn: 'Admin Sign Out',
 
@@ -439,7 +427,12 @@ const EN: Translations = {
   tabAllCodes: 'All Codes',
   tabUsedCodes: 'Used Codes',
   tabStudents: 'Students',
-  tabSetup: 'Setup',
+  tabUpdates: 'Updates',
+  noStudentsYet: 'No students logged in yet.',
+  quizzesTakenLabel: 'Quizzes Taken:',
+  bestScoreLabel: 'Best Score:',
+  grantAllAccessBtn: 'Unlock All Subjects',
+  revokeAccessBtn: 'Revoke Access',
   pendingLabel: 'Pending',
   approvedLabel: 'Approved',
   rejectedLabel: 'Rejected',

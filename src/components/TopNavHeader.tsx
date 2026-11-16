@@ -1,5 +1,5 @@
 import React from 'react';
-import { BookOpen, Languages, LogOut, Moon, ShieldCheck, Smartphone, Sun } from 'lucide-react';
+import { Languages, LogOut, Moon, ShieldCheck, Smartphone, Sun } from 'lucide-react';
 import { useTranslation } from '../i18n/translations';
 
 export type PublicTabId = 'quiz' | 'admin';
@@ -51,6 +51,22 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
         </div>
 
         <div className="flex items-center gap-1.5 shrink-0">
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={() => onSelectTab('admin')}
+              className="h-9 px-2.5 rounded-xl bg-[#047857] hover:bg-[#065F46] text-white text-xs font-extrabold flex items-center gap-1.5 transition-colors cursor-pointer"
+            >
+              <ShieldCheck className="h-3.5 w-3.5 shrink-0" />
+              <span className="hidden sm:inline">{t.navAdminLive}</span>
+              {adminBadgeCount > 0 && (
+                <span className="rounded-full bg-[#DC2626] text-white text-[10px] font-extrabold px-1.5 py-0.5 min-w-[18px] text-center leading-none tabular-nums">
+                  {adminBadgeCount}
+                </span>
+              )}
+            </button>
+          )}
+
           <button
             type="button"
             onClick={toggleLang}
@@ -91,45 +107,6 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
           </button>
         </div>
       )}
-
-      {/* Clean 2-Tab Navigation: Quiz Platform / Login vs Admin */}
-      <nav
-        aria-label="Primary Navigation"
-        className="max-w-4xl mx-auto px-2 sm:px-4 grid grid-cols-2 border-t border-slate-100 dark:border-slate-800"
-      >
-        <button
-          type="button"
-          onClick={() => onSelectTab('quiz')}
-          className={`h-11 flex items-center justify-center gap-1.5 text-xs sm:text-sm font-bold border-b-2 transition-colors cursor-pointer ${
-            activeTab === 'quiz'
-              ? 'border-[#1E3A8A] text-[#1E3A8A] dark:border-[#93C5FD] dark:text-[#93C5FD]'
-              : 'border-transparent text-[#475569] dark:text-[#94A3B8] hover:text-[#0F172A] dark:hover:text-white'
-          }`}
-        >
-          <BookOpen className="h-4 w-4 shrink-0" />
-          <span className="truncate">
-            {isStudentLoggedIn ? (lang === 'en' ? 'Quiz Platform' : 'ક્વિઝ પ્લેટફોર્મ') : t.loginTitle}
-          </span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => onSelectTab('admin')}
-          className={`h-11 flex items-center justify-center gap-1.5 text-xs sm:text-sm font-bold border-b-2 transition-colors cursor-pointer ${
-            activeTab === 'admin'
-              ? 'border-[#047857] text-[#047857] dark:border-[#6EE7B7] dark:text-[#6EE7B7]'
-              : 'border-transparent text-[#475569] dark:text-[#94A3B8] hover:text-[#0F172A] dark:hover:text-white'
-          }`}
-        >
-          <ShieldCheck className="h-4 w-4 shrink-0" />
-          <span className="truncate">{isAdmin ? t.navAdminLive : t.navAdmin}</span>
-          {isAdmin && adminBadgeCount > 0 && (
-            <span className="rounded-full bg-[#DC2626] text-white text-[10px] font-extrabold px-1.5 py-0.5 min-w-[18px] text-center leading-none tabular-nums">
-              {adminBadgeCount}
-            </span>
-          )}
-        </button>
-      </nav>
     </header>
   );
 };

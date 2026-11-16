@@ -1,5 +1,11 @@
 import firebaseConfig from '../../firebase-applet-config.json';
-import type { AccessCode, AppReleaseConfig, PaymentRequest } from '../types/models';
+import type {
+  AccessCode,
+  AppReleaseConfig,
+  PaymentRequest,
+  QuizAttempt,
+  StudentProfile,
+} from '../types/models';
 
 export interface AppAuthUser {
   uid: string;
@@ -14,6 +20,10 @@ interface AndroidFirebaseBridgeApi {
   getCurrentAuthUser?: () => string;
   requestGoogleSignIn?: (callId: string) => void;
   signOutGoogle?: (callId: string) => void;
+  registerOrUpdateStudentProfile?: (callId: string, payloadJson: string) => void;
+  startStudentListeners?: (studentId: string) => void;
+  stopStudentListeners?: () => void;
+  recordQuizAttempt?: (callId: string, payloadJson: string) => void;
   submitPaymentRequest?: (callId: string, payloadJson: string) => void;
   redeemAccessCode?: (callId: string, payloadJson: string) => void;
   startPublicListeners?: (paymentIdsJson: string) => void;
@@ -25,6 +35,8 @@ interface AndroidFirebaseBridgeApi {
   rejectPayment?: (callId: string, payloadJson: string) => void;
   generateBulkCodes?: (callId: string, payloadJson: string) => void;
   saveReleaseConfig?: (callId: string, payloadJson: string) => void;
+  toggleStudentQuizAccess?: (callId: string, payloadJson: string) => void;
+  updateStudentSubjectAccess?: (callId: string, payloadJson: string) => void;
 }
 
 declare global {
@@ -34,8 +46,11 @@ declare global {
     __onNativeAuthStateChanged?: (user: AppAuthUser | null) => void;
     __onNativeReleaseConfig?: (cfg: AppReleaseConfig | null) => void;
     __onNativeMyPayments?: (list: PaymentRequest[]) => void;
+    __onNativeStudentProfile?: (profile: StudentProfile | null) => void;
+    __onNativeMyAttempts?: (list: QuizAttempt[]) => void;
     __onNativeAllPayments?: (list: PaymentRequest[]) => void;
     __onNativeAllCodes?: (list: AccessCode[]) => void;
+    __onNativeAllStudents?: (list: StudentProfile[]) => void;
     __onNativeAdminError?: (message: string) => void;
   }
 }
@@ -79,15 +94,21 @@ const pendingCalls = new Map<
 const authListeners = new Set<(user: AppAuthUser | null) => void>();
 const releaseListeners = new Set<(cfg: AppReleaseConfig | null) => void>();
 const myPaymentListeners = new Set<(list: PaymentRequest[]) => void>();
+const studentProfileListeners = new Set<(profile: StudentProfile | null) => void>();
+const myAttemptListeners = new Set<(list: QuizAttempt[]) => void>();
 const allPaymentListeners = new Set<(list: PaymentRequest[]) => void>();
 const allCodeListeners = new Set<(list: AccessCode[]) => void>();
+const allStudentListeners = new Set<(list: StudentProfile[]) => void>();
 const adminErrorListeners = new Set<(err: Error) => void>();
 
 let latestAuthUser: AppAuthUser | null | undefined;
 let latestReleaseConfig: AppReleaseConfig | null | undefined;
 let latestMyPayments: PaymentRequest[] | undefined;
+let latestStudentProfile: StudentProfile | null | undefined;
+let latestMyAttempts: QuizAttempt[] | undefined;
 let latestAllPayments: PaymentRequest[] | undefined;
 let latestAllCodes: AccessCode[] | undefined;
+let latestAllStudents: StudentProfile[] | undefined;
 
 if (typeof window !== 'undefined') {
   window.__resolveNativeFirebaseCall = (callId, ok, payload) => {
@@ -116,6 +137,16 @@ if (typeof window !== 'undefined') {
     myPaymentListeners.forEach((cb) => cb(latestMyPayments!));
   };
 
+  window.__onNativeStudentProfile = (profile) => {
+    latestStudentProfile = profile ?? null;
+    studentProfileListeners.forEach((cb) => cb(latestStudentProfile ?? null));
+  };
+
+  window.__onNativeMyAttempts = (list) => {
+    latestMyAttempts = Array.isArray(list) ? list : [];
+    myAttemptListeners.forEach((cb) => cb(latestMyAttempts!));
+  };
+
   window.__onNativeAllPayments = (list) => {
     latestAllPayments = Array.isArray(list) ? list : [];
     allPaymentListeners.forEach((cb) => cb(latestAllPayments!));
@@ -124,6 +155,11 @@ if (typeof window !== 'undefined') {
   window.__onNativeAllCodes = (list) => {
     latestAllCodes = Array.isArray(list) ? list : [];
     allCodeListeners.forEach((cb) => cb(latestAllCodes!));
+  };
+
+  window.__onNativeAllStudents = (list) => {
+    latestAllStudents = Array.isArray(list) ? list : [];
+    allStudentListeners.forEach((cb) => cb(latestAllStudents!));
   };
 
   window.__onNativeAdminError = (msg) => {
@@ -172,6 +208,7 @@ export function subscribeNativeAuthState(cb: (user: AppAuthUser | null) => void)
 }
 
 let publicListenersStarted = false;
+let activeStudentId = '';
 
 export function subscribeNativeReleaseConfig(
   cb: (cfg: AppReleaseConfig | null) => void
@@ -205,6 +242,48 @@ export function subscribeNativeMyPayments(
   };
 }
 
+export function subscribeNativeStudentProfile(
+  studentId: string,
+  cb: (profile: StudentProfile | null) => void
+): () => void {
+  if (activeStudentId !== studentId) {
+    latestStudentProfile = undefined;
+    latestMyAttempts = undefined;
+    activeStudentId = studentId;
+    window.AndroidFirebaseBridge?.startStudentListeners?.(studentId);
+  }
+  studentProfileListeners.add(cb);
+  if (latestStudentProfile !== undefined) cb(latestStudentProfile);
+  return () => {
+    studentProfileListeners.delete(cb);
+    if (studentProfileListeners.size === 0 && myAttemptListeners.size === 0) {
+      activeStudentId = '';
+      window.AndroidFirebaseBridge?.stopStudentListeners?.();
+    }
+  };
+}
+
+export function subscribeNativeMyAttempts(
+  studentId: string,
+  cb: (list: QuizAttempt[]) => void
+): () => void {
+  if (activeStudentId !== studentId) {
+    latestStudentProfile = undefined;
+    latestMyAttempts = undefined;
+    activeStudentId = studentId;
+    window.AndroidFirebaseBridge?.startStudentListeners?.(studentId);
+  }
+  myAttemptListeners.add(cb);
+  if (latestMyAttempts !== undefined) cb(latestMyAttempts);
+  return () => {
+    myAttemptListeners.delete(cb);
+    if (studentProfileListeners.size === 0 && myAttemptListeners.size === 0) {
+      activeStudentId = '';
+      window.AndroidFirebaseBridge?.stopStudentListeners?.();
+    }
+  };
+}
+
 export function subscribeNativeAllPayments(
   cb: (list: PaymentRequest[]) => void,
   onError?: (err: Error) => void
@@ -216,7 +295,11 @@ export function subscribeNativeAllPayments(
   return () => {
     allPaymentListeners.delete(cb);
     if (onError) adminErrorListeners.delete(onError);
-    if (allPaymentListeners.size === 0 && allCodeListeners.size === 0) {
+    if (
+      allPaymentListeners.size === 0 &&
+      allCodeListeners.size === 0 &&
+      allStudentListeners.size === 0
+    ) {
       window.AndroidFirebaseBridge?.stopAdminListeners?.();
     }
   };
@@ -233,7 +316,32 @@ export function subscribeNativeAllCodes(
   return () => {
     allCodeListeners.delete(cb);
     if (onError) adminErrorListeners.delete(onError);
-    if (allPaymentListeners.size === 0 && allCodeListeners.size === 0) {
+    if (
+      allPaymentListeners.size === 0 &&
+      allCodeListeners.size === 0 &&
+      allStudentListeners.size === 0
+    ) {
+      window.AndroidFirebaseBridge?.stopAdminListeners?.();
+    }
+  };
+}
+
+export function subscribeNativeAllStudents(
+  cb: (list: StudentProfile[]) => void,
+  onError?: (err: Error) => void
+): () => void {
+  allStudentListeners.add(cb);
+  if (onError) adminErrorListeners.add(onError);
+  if (latestAllStudents !== undefined) cb(latestAllStudents);
+  window.AndroidFirebaseBridge?.startAdminListeners?.();
+  return () => {
+    allStudentListeners.delete(cb);
+    if (onError) adminErrorListeners.delete(onError);
+    if (
+      allPaymentListeners.size === 0 &&
+      allCodeListeners.size === 0 &&
+      allStudentListeners.size === 0
+    ) {
       window.AndroidFirebaseBridge?.stopAdminListeners?.();
     }
   };

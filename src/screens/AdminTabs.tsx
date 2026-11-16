@@ -6,7 +6,6 @@ import {
   FileSpreadsheet,
   FileText,
   Filter,
-  FolderKanban,
   Image as ImageIcon,
   PlusCircle,
   Search,
@@ -19,15 +18,16 @@ import {
 } from 'lucide-react';
 import { useTranslation } from '../i18n/translations';
 import { exportAccessCodesA4Pdf } from '../services/pdfGenerator';
-import { getActiveFirebaseSummary } from '../services/quizRepository';
 import {
+  ALL_SUBJECT_IDS,
   displayPaymentTransactionRef,
   getSubjectDisplayName,
   resolveCodeSubjectId,
   resolvePaymentSubjectId,
   type AccessCode,
-  type AppReleaseConfig,
   type PaymentRequest,
+  type StudentProfile,
+  type SubjectId,
 } from '../types/models';
 import {
   buildPaymentApprovalWhatsAppHref,
@@ -36,7 +36,6 @@ import {
   launchExternalUrl,
   resolvePaymentImageSrc,
 } from '../utils/imageUtils';
-import { AdminUpdateSettingsTab } from './AdminUpdateSettingsTab';
 
 const SUBJECT_LIST = ['all', 'maths', 'science', 'social_science'] as const;
 
@@ -702,87 +701,146 @@ export const AdminUsedCodesTab: React.FC<{
   );
 };
 
-/* --- Tab 4: Firebase Setup & Updates --- */
-export const AdminFirebaseSetupTab: React.FC<{
-  releaseConfig: AppReleaseConfig | null;
-  effectiveGithubRepo: string;
-  currentVersionName: string;
+/* --- Tab 4: Live Students & Subject Access Management --- */
+export const AdminStudentsTab: React.FC<{
+  students: StudentProfile[];
   isBusy: boolean;
-  isCheckingUpdate: boolean;
-  isFirebaseConnected: boolean;
-  onConnectFirebaseGoogle: () => void;
-  onSaveGithubRepo: (ownerRepo: string, releaseNotes: string) => void;
-  onTestUpdateCheck: () => void;
-}> = (props) => {
+  onToggleStudentAccess: (student: StudentProfile, grantAccess: boolean) => void;
+  onUpdateStudentSubjectAccess: (
+    student: StudentProfile,
+    subjectId: SubjectId,
+    grantAccess: boolean
+  ) => void;
+}> = ({ students, isBusy, onToggleStudentAccess, onUpdateStudentSubjectAccess }) => {
   const { lang, t } = useTranslation();
-  const { isBusy, isFirebaseConnected, onConnectFirebaseGoogle } = props;
-  const firebaseSummary = getActiveFirebaseSummary();
+  const [searchQuery, setSearchQuery] = useState('');
+
+  const filteredStudents = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return students;
+    return students.filter(
+      (st) =>
+        st.fullName.toLowerCase().includes(q) ||
+        st.mobileNumber.includes(q) ||
+        st.redeemedCode.toLowerCase().includes(q)
+    );
+  }, [students, searchQuery]);
 
   return (
-    <div className="space-y-4">
-      <div className="p-3 sm:p-4 max-w-3xl mx-auto">
-        <div className="rounded-2xl bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] p-5 space-y-3.5">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <FolderKanban className="h-5 w-5 text-[#1E3A8A] dark:text-[#93C5FD]" />
-              <h2 className="text-base font-extrabold">
-                {lang === 'gu'
-                  ? 'Firebase સેટઅપ અને લાઇવ કનેક્શન'
-                  : 'Firebase Setup & Live Connection'}
-              </h2>
-            </div>
+    <div className="p-3 sm:p-4 space-y-4 max-w-5xl mx-auto">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+        <div className="flex items-center gap-2">
+          <UserCheck className="h-5 w-5 text-[#1E3A8A] dark:text-[#93C5FD]" />
+          <h2 className="text-base font-extrabold">
+            {t.tabStudents} ({students.length})
+          </h2>
+        </div>
 
-            <span
-              className={`rounded-full px-3 py-1 text-xs font-extrabold ${
-                isFirebaseConnected
-                  ? 'bg-[#D1FAE5] text-[#064E3B] dark:bg-[#064E3B] dark:text-[#D1FAE5]'
-                  : 'bg-[#FEF3C7] text-[#92400E] dark:bg-[#451A03] dark:text-[#FDE68A]'
-              }`}
-            >
-              {isFirebaseConnected
-                ? t.firebaseConnectedBadge
-                : lang === 'gu'
-                  ? 'એડમિન લૉગિન બાકી'
-                  : 'Auth Pending'}
-            </span>
-          </div>
-
-          <div className="rounded-xl bg-[#EFF4FA] dark:bg-[#0F172A] p-3 text-xs space-y-1 font-mono break-all">
-            <p>Project ID: {firebaseSummary.projectId}</p>
-            <p>Database: {firebaseSummary.databaseId}</p>
-            <p>Admin: 9099592283 / omsai3248@gmail.com</p>
-          </div>
-
-          <ol className="list-decimal pl-5 space-y-2 text-xs leading-relaxed text-[#334155] dark:text-[#CBD5E1]">
-            <li>
-              <strong>Google Sign-In (Android APK &amp; Web):</strong>{' '}
-              {lang === 'gu'
-                ? 'Android APK અને Web બંનેમાં 1-ક્લિકમાં Firebase ચાલુ કરવા Google બટનથી omsai3248@gmail.com વડે સાઇન-ઇન કરો.'
-                : 'Sign in with omsai3248@gmail.com using the Google button for instant live Firebase admin sync on both Android APK and Web.'}
-            </li>
-            <li>
-              <strong>Public UPI Payments &amp; Access Codes:</strong>{' '}
-              {lang === 'gu'
-                ? 'વિદ્યાર્થીઓ મોબાઇલ નંબરથી લૉગિન કરી Anonymous Auth વગર પણ સીધા Firestore માં UPI પેમેન્ટ અને 8-અક્ષરનો કોડ વાપરી શકે છે.'
-                : 'Students submit UPI payments and redeem 8-character codes directly to Firestore without requiring Anonymous Auth.'}
-            </li>
-          </ol>
-
-          {!isFirebaseConnected && (
-            <button
-              type="button"
-              disabled={isBusy}
-              onClick={onConnectFirebaseGoogle}
-              className="w-full sm:w-auto min-h-[44px] px-4 py-2 rounded-xl bg-[#1E3A8A] hover:bg-[#172554] text-white text-xs sm:text-sm font-extrabold inline-flex items-center justify-center gap-2 transition-colors disabled:opacity-60 cursor-pointer"
-            >
-              <ShieldCheck className="h-4 w-4" />
-              <span>{t.connectFirebaseGoogleBtn}</span>
-            </button>
-          )}
+        <div className="sm:w-72 flex items-center rounded-xl border border-[#CBD5E1] dark:border-[#334155] bg-white dark:bg-[#1E293B] px-3 h-10">
+          <Search className="h-4 w-4 text-slate-400 mr-2 shrink-0" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder={t.searchCodesPlaceholder}
+            className="w-full bg-transparent text-xs outline-none"
+          />
         </div>
       </div>
 
-      <AdminUpdateSettingsTab {...props} />
+      {filteredStudents.length === 0 ? (
+        <EmptyStateCard message={t.noStudentsYet} />
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+          {filteredStudents.map((st) => {
+            const unlockedSet = new Set<string>(
+              st.hasQuizAccess
+                ? ALL_SUBJECT_IDS
+                : (st.unlockedSubjects ?? []).filter((s) => s !== 'all')
+            );
+            const hasFull = st.hasQuizAccess || ALL_SUBJECT_IDS.every((s) => unlockedSet.has(s));
+            return (
+              <div
+                key={st.id || st.userId}
+                className="rounded-2xl bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] p-4 space-y-3 shadow-sm"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <h4 className="text-sm sm:text-base font-extrabold truncate">{st.fullName}</h4>
+                    <p className="text-xs text-[#475569] dark:text-[#94A3B8] tabular-nums">
+                      +91 {st.mobileNumber} • {formatTimestampLabel(st.updatedAt ?? st.createdAt, lang)}
+                    </p>
+                  </div>
+                  <span
+                    className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] font-bold ${
+                      hasFull
+                        ? 'bg-[#D1FAE5] text-[#064E3B] dark:bg-[#064E3B] dark:text-[#D1FAE5]'
+                        : unlockedSet.size > 0
+                          ? 'bg-[#DBEAFE] text-[#1E3A8A] dark:bg-[#1E3A5F] dark:text-[#DBEAFE]'
+                          : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
+                    }`}
+                  >
+                    {hasFull
+                      ? t.unlockedBadge
+                      : unlockedSet.size > 0
+                        ? t.partialUnlockedBadge
+                        : t.lockedBadge}
+                  </span>
+                </div>
+
+                <div className="rounded-xl bg-[#EFF4FA] dark:bg-[#0F172A] p-2.5 text-xs flex flex-wrap items-center justify-between gap-2">
+                  <span>
+                    {t.quizzesTakenLabel} <strong>{st.totalQuizzesTaken}</strong>
+                  </span>
+                  <span>
+                    {t.bestScoreLabel} <strong>{st.bestScorePercent}%</strong>
+                  </span>
+                  {st.redeemedCode && (
+                    <span className="font-mono font-bold text-[#047857] dark:text-[#6EE7B7]">
+                      {st.redeemedCode}
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex flex-wrap gap-1.5">
+                  {ALL_SUBJECT_IDS.map((subId) => {
+                    const active = unlockedSet.has(subId);
+                    return (
+                      <button
+                        key={subId}
+                        type="button"
+                        disabled={isBusy}
+                        onClick={() => onUpdateStudentSubjectAccess(st, subId, !active)}
+                        className={`rounded-lg px-2.5 py-1.5 text-[11px] font-bold border transition-colors cursor-pointer disabled:opacity-60 ${
+                          active
+                            ? 'bg-[#047857] text-white border-[#047857]'
+                            : 'bg-[#FAF9F5] dark:bg-[#0F172A] border-[#CBD5E1] dark:border-[#334155]'
+                        }`}
+                      >
+                        {active ? '✓ ' : ''}
+                        {getSubjectDisplayName(subId, lang)}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <button
+                  type="button"
+                  disabled={isBusy}
+                  onClick={() => onToggleStudentAccess(st, !hasFull)}
+                  className={`w-full h-10 rounded-xl text-xs font-extrabold transition-colors cursor-pointer disabled:opacity-60 ${
+                    hasFull
+                      ? 'border border-red-300 dark:border-red-800 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40'
+                      : 'bg-[#1E3A8A] hover:bg-[#172554] text-white'
+                  }`}
+                >
+                  {hasFull ? t.revokeAccessBtn : t.grantAllAccessBtn}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 };

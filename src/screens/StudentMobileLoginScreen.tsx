@@ -20,8 +20,8 @@ import { normalizeIndianMobileInput } from '../utils/imageUtils';
 interface StudentMobileLoginScreenProps {
   initialName?: string;
   initialMobile?: string;
-  onLoginSuccess: (name: string, mobile: string) => void;
-  onAdminAuthenticated: (mode: 'firebase' | 'local') => void;
+  onLoginSuccess: (name: string, mobile: string) => Promise<void> | void;
+  onAdminAuthenticated: () => void;
 }
 
 export const StudentMobileLoginScreen: React.FC<StudentMobileLoginScreenProps> = ({
@@ -58,15 +58,19 @@ export const StudentMobileLoginScreen: React.FC<StudentMobileLoginScreenProps> =
       }
       setIsLoading(true);
       try {
-        const mode = await signInAsAdminWithPasscode(cleanDigits, passwordInput);
+        await signInAsAdminWithPasscode(cleanDigits, passwordInput);
         setPasswordInput('');
-        onAdminAuthenticated(mode);
+        onAdminAuthenticated();
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : '';
         if (msg === 'INVALID_ADMIN_PASSWORD') {
           setErrorMsg(t.errWrongAdminPassword);
         } else if (msg === 'ONLY_ADMIN_NUMBER') {
           setErrorMsg(t.onlyAdminAllowedError);
+        } else if (msg === 'ONLY_ADMIN_GOOGLE_EMAIL') {
+          setErrorMsg(t.errWrongAdminGoogleAccount);
+        } else if (msg === 'SIGN_IN_CANCELLED') {
+          setErrorMsg(null);
         } else {
           setErrorMsg(extractReadableErrorMessage(err, lang));
         }
@@ -81,7 +85,15 @@ export const StudentMobileLoginScreen: React.FC<StudentMobileLoginScreenProps> =
       setErrorMsg(t.errInvalidName);
       return;
     }
-    onLoginSuccess(cleanName, cleanDigits);
+
+    setIsLoading(true);
+    try {
+      await onLoginSuccess(cleanName, cleanDigits);
+    } catch (err: unknown) {
+      setErrorMsg(extractReadableErrorMessage(err, lang));
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (

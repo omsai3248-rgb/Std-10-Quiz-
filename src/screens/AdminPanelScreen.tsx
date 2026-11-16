@@ -12,6 +12,7 @@ import {
   Send,
   Settings,
   UserCheck,
+  Users,
   Volume2,
   VolumeX,
   Wallet,
@@ -25,6 +26,8 @@ import {
   type AccessCode,
   type AppReleaseConfig,
   type PaymentRequest,
+  type StudentProfile,
+  type SubjectId,
 } from '../types/models';
 import {
   buildPaymentApprovalWhatsAppHref,
@@ -32,10 +35,11 @@ import {
 } from '../utils/imageUtils';
 import {
   AdminAllCodesTab,
-  AdminFirebaseSetupTab,
   AdminRequestsTab,
+  AdminStudentsTab,
   AdminUsedCodesTab,
 } from './AdminTabs';
+import { AdminUpdateSettingsTab } from './AdminUpdateSettingsTab';
 
 export interface AdminLiveAlert {
   id: string;
@@ -48,6 +52,7 @@ export interface AdminLiveAlert {
 interface AdminPanelScreenProps {
   payments: PaymentRequest[];
   accessCodes: AccessCode[];
+  students: StudentProfile[];
   lastGeneratedBatch: string[];
   liveAlerts: AdminLiveAlert[];
   isSoundEnabled: boolean;
@@ -56,7 +61,6 @@ interface AdminPanelScreenProps {
   currentVersionName: string;
   isBusy: boolean;
   isCheckingUpdate: boolean;
-  isFirebaseConnected: boolean;
   approvedConfirmation?: PaymentRequest | null;
   onDismissApprovedConfirmation?: () => void;
   onBackToPublic: () => void;
@@ -64,10 +68,15 @@ interface AdminPanelScreenProps {
   onToggleSound: () => void;
   onClearAlerts: () => void;
   onSignOut: () => void;
-  onConnectFirebaseGoogle: () => void;
   onGenerateBulkCodes: (count: number, batchName: string, subjectId: string) => void;
   onApprovePayment: (req: PaymentRequest, adminNote: string, subjectId: string) => void;
   onRejectPayment: (req: PaymentRequest, reason: string) => void;
+  onToggleStudentAccess: (student: StudentProfile, grantAccess: boolean) => void;
+  onUpdateStudentSubjectAccess: (
+    student: StudentProfile,
+    subjectId: SubjectId,
+    grantAccess: boolean
+  ) => void;
   onSaveGithubRepo: (ownerRepo: string, releaseNotes: string) => void;
   onTestUpdateCheck: () => void;
   onNotify?: (message: string) => void;
@@ -76,6 +85,7 @@ interface AdminPanelScreenProps {
 export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
   payments,
   accessCodes,
+  students,
   lastGeneratedBatch,
   liveAlerts,
   isSoundEnabled,
@@ -84,7 +94,6 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
   currentVersionName,
   isBusy,
   isCheckingUpdate,
-  isFirebaseConnected,
   approvedConfirmation = null,
   onDismissApprovedConfirmation,
   onBackToPublic,
@@ -92,16 +101,19 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
   onToggleSound,
   onClearAlerts,
   onSignOut,
-  onConnectFirebaseGoogle,
   onGenerateBulkCodes,
   onApprovePayment,
   onRejectPayment,
+  onToggleStudentAccess,
+  onUpdateStudentSubjectAccess,
   onSaveGithubRepo,
   onTestUpdateCheck,
   onNotify,
 }) => {
   const { lang, toggleLang, t } = useTranslation();
-  const [selectedTab, setSelectedTab] = useState<'requests' | 'all_codes' | 'used_codes' | 'setup'>('requests');
+  const [selectedTab, setSelectedTab] = useState<
+    'requests' | 'all_codes' | 'used_codes' | 'students' | 'updates'
+  >('requests');
   const [showAlertsDrawer, setShowAlertsDrawer] = useState(false);
   const [zoomedScreenshotUrl, setZoomedScreenshotUrl] = useState<string | null>(null);
 
@@ -142,8 +154,8 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
                 </span>
               </div>
               <p className="text-[11px] text-[#475569] dark:text-[#94A3B8] truncate tabular-nums">
-                +91 9099592283 • {t.pendingLabel}: {pendingCount} • {t.tabAllCodes}:{' '}
-                {accessCodes.length}
+                +91 9099592283 • {t.pendingLabel}: {pendingCount} • {t.tabStudents}:{' '}
+                {students.length}
               </p>
             </div>
           </div>
@@ -280,8 +292,13 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
               Icon: UserCheck,
             },
             {
-              id: 'setup' as const,
-              label: t.tabSetup,
+              id: 'students' as const,
+              label: `${t.tabStudents} (${students.length})`,
+              Icon: Users,
+            },
+            {
+              id: 'updates' as const,
+              label: t.tabUpdates,
               Icon: Settings,
             },
           ].map(({ id, label, Icon }) => {
@@ -291,7 +308,7 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
                 key={id}
                 type="button"
                 onClick={() => setSelectedTab(id)}
-                className={`flex-1 min-w-[110px] py-2.5 px-3 flex items-center justify-center gap-1.5 text-xs sm:text-sm font-bold border-b-2 transition-colors whitespace-nowrap cursor-pointer ${
+                className={`flex-1 min-w-[100px] py-2.5 px-3 flex items-center justify-center gap-1.5 text-xs sm:text-sm font-bold border-b-2 transition-colors whitespace-nowrap cursor-pointer ${
                   active
                     ? 'border-[#1E3A8A] text-[#1E3A8A] dark:border-[#93C5FD] dark:text-[#93C5FD]'
                     : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
@@ -306,23 +323,6 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
       </header>
 
       <main className="flex-1 max-w-6xl w-full mx-auto">
-        {!isFirebaseConnected && (
-          <div className="p-3 sm:p-4 pb-0">
-            <div className="rounded-2xl bg-[#FEF3C7] dark:bg-[#451A03] border border-[#F59E0B]/45 p-4 space-y-2.5 text-[#92400E] dark:text-[#FDE68A] shadow-sm">
-              <p className="text-sm font-extrabold">{t.firebaseNeedsAuthTitle}</p>
-              <p className="text-xs leading-relaxed opacity-90">{t.firebaseNeedsAuthDesc}</p>
-              <button
-                type="button"
-                disabled={isBusy}
-                onClick={onConnectFirebaseGoogle}
-                className="min-h-[44px] px-4 py-2 rounded-xl bg-[#1E3A8A] hover:bg-[#172554] text-white text-xs sm:text-sm font-extrabold inline-flex items-center gap-2 transition-colors disabled:opacity-60 cursor-pointer"
-              >
-                <Radio className="h-4 w-4" />
-                <span>{t.connectFirebaseGoogleBtn}</span>
-              </button>
-            </div>
-          </div>
-        )}
         {selectedTab === 'requests' && (
           <AdminRequestsTab
             payments={payments}
@@ -346,15 +346,22 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
 
         {selectedTab === 'used_codes' && <AdminUsedCodesTab accessCodes={accessCodes} />}
 
-        {selectedTab === 'setup' && (
-          <AdminFirebaseSetupTab
+        {selectedTab === 'students' && (
+          <AdminStudentsTab
+            students={students}
+            isBusy={isBusy}
+            onToggleStudentAccess={onToggleStudentAccess}
+            onUpdateStudentSubjectAccess={onUpdateStudentSubjectAccess}
+          />
+        )}
+
+        {selectedTab === 'updates' && (
+          <AdminUpdateSettingsTab
             releaseConfig={releaseConfig}
             effectiveGithubRepo={effectiveGithubRepo}
             currentVersionName={currentVersionName}
             isBusy={isBusy}
             isCheckingUpdate={isCheckingUpdate}
-            isFirebaseConnected={isFirebaseConnected}
-            onConnectFirebaseGoogle={onConnectFirebaseGoogle}
             onSaveGithubRepo={onSaveGithubRepo}
             onTestUpdateCheck={onTestUpdateCheck}
           />

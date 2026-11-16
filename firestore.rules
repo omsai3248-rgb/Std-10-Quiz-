@@ -26,6 +26,10 @@ service cloud.firestore {
       return uid is string && uid.matches('^pub_[a-f0-9]{32}$');
     }
 
+    function isValidMobileStudentId(id) {
+      return id is string && id.matches('^mob_[0-9]{10}$') && id != 'mob_9099592283';
+    }
+
     function isValidPayId(id) {
       return id is string && id.matches('^pay_[a-f0-9]{32}$');
     }
@@ -48,6 +52,11 @@ service cloud.firestore {
       return data.mobileNumber != '9099592283' || isAdmin();
     }
 
+    function isStudentDocOwner(userId, data) {
+      return (isSignedIn() && request.auth.uid == userId) ||
+             (isValidMobileStudentId(userId) && userId == 'mob_' + data.mobileNumber);
+    }
+
     function hasSubjectAccess(studentData, subjectId) {
       return studentData.hasQuizAccess == true ||
              ('unlockedSubjects' in studentData && (
@@ -66,7 +75,7 @@ service cloud.firestore {
                'userId', 'fullName', 'mobileNumber', 'email', 'standard',
                'hasQuizAccess', 'redeemedCode', 'paymentStatus',
                'totalQuizzesTaken', 'bestScorePercent', 'unlockedSubjects',
-               'createdAt', 'updatedAt'
+               'paymentRequestIds', 'createdAt', 'updatedAt'
              ]) &&
              data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
              data.fullName is string && data.fullName.size() >= 1 && data.fullName.size() <= 60 &&
@@ -79,6 +88,7 @@ service cloud.firestore {
              data.totalQuizzesTaken is int && data.totalQuizzesTaken >= 0 && data.totalQuizzesTaken <= 100000 &&
              data.bestScorePercent is int && data.bestScorePercent >= 0 && data.bestScorePercent <= 100 &&
              (!('unlockedSubjects' in data) || (data.unlockedSubjects is list && data.unlockedSubjects.size() <= 10)) &&
+             (!('paymentRequestIds' in data) || (data.paymentRequestIds is list && data.paymentRequestIds.size() <= 25)) &&
              data.createdAt is timestamp && data.createdAt <= request.time &&
              data.updatedAt is timestamp && data.updatedAt <= request.time;
     }
@@ -183,43 +193,53 @@ service cloud.firestore {
       allow list, create, update, delete: if false;
     }
 
-    // Students collection (tracks unlocked content + quiz stats per signed-in user UID)
+    // Students collection (tracks unlocked content, payment IDs & quiz stats per student ID or signed-in UID)
     match /students/{userId} {
-      allow get: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
+      allow get: if isAdmin() || (
+        isValidId(userId) && (
+          (isSignedIn() && request.auth.uid == userId) ||
+          isValidMobileStudentId(userId)
+        )
+      );
       allow list: if isAdmin();
 
-      allow create: if isSignedIn() &&
-                       isValidId(userId) &&
-                       request.auth.uid == userId &&
+      allow create: if isValidId(userId) &&
                        isValidStudent(incoming()) &&
                        canUseReservedAdminMobile(incoming()) &&
-                       incoming().userId == request.auth.uid &&
+                       isStudentDocOwner(userId, incoming()) &&
+                       incoming().userId == userId &&
                        incoming().hasQuizAccess == false &&
                        incoming().redeemedCode == '' &&
                        incoming().paymentStatus == 'none' &&
                        incoming().totalQuizzesTaken == 0 &&
-                       incoming().bestScorePercent == 0;
+                       incoming().bestScorePercent == 0 &&
+                       (!('unlockedSubjects' in incoming()) || incoming().unlockedSubjects.size() == 0) &&
+                       (!('paymentRequestIds' in incoming()) || incoming().paymentRequestIds.size() == 0);
 
-      allow update: if isSignedIn() &&
-                       isValidId(userId) &&
+      allow update: if isValidId(userId) &&
                        isValidStudent(incoming()) &&
                        incoming().userId == existing().userId &&
                        incoming().createdAt == existing().createdAt && (
                          isAdmin() ||
                          (
-                           request.auth.uid == userId &&
+                           isStudentDocOwner(userId, incoming()) &&
                            canUseReservedAdminMobile(incoming()) && (
-                             incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'mobileNumber', 'email', 'updatedAt']) ||
+                             incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'email', 'updatedAt']) ||
+                             (
+                               isSignedIn() &&
+                               request.auth.uid == userId &&
+                               incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'mobileNumber', 'email', 'updatedAt'])
+                             ) ||
                              (
                                incoming().paymentStatus == 'pending' &&
-                               incoming().diff(existing()).affectedKeys().hasOnly(['paymentStatus', 'updatedAt'])
+                               incoming().diff(existing()).affectedKeys().hasOnly(['paymentStatus', 'paymentRequestIds', 'updatedAt'])
                              ) ||
                              (
                                incoming().redeemedCode.size() >= 4 &&
                                exists(/databases/$(database)/documents/access_codes/$(incoming().redeemedCode)) &&
                                get(/databases/$(database)/documents/access_codes/$(incoming().redeemedCode)).data.isUsed == false &&
                                getAfter(/databases/$(database)/documents/access_codes/$(incoming().redeemedCode)).data.isUsed == true &&
-                               getAfter(/databases/$(database)/documents/access_codes/$(incoming().redeemedCode)).data.usedByUserId == request.auth.uid &&
+                               getAfter(/databases/$(database)/documents/access_codes/$(incoming().redeemedCode)).data.usedByUserId == userId &&
                                (
                                  incoming().hasQuizAccess == true ||
                                  ('unlockedSubjects' in incoming() && incoming().unlockedSubjects.size() >= 1)
@@ -238,13 +258,17 @@ service cloud.firestore {
       allow delete: if isAdmin() && isValidId(userId);
 
       match /quiz_attempts/{attemptId} {
-        allow get: if isSignedIn() && isValidId(attemptId) && (request.auth.uid == userId || isAdmin());
-        allow list: if isSignedIn() && (request.auth.uid == userId || isAdmin());
-        allow create: if isSignedIn() &&
-                         isValidId(attemptId) &&
-                         request.auth.uid == userId &&
+        allow get: if isAdmin() || (
+          isValidId(attemptId) && (
+            (isSignedIn() && request.auth.uid == userId) ||
+            isValidMobileStudentId(userId)
+          )
+        );
+        allow list: if isAdmin() || (isSignedIn() && request.auth.uid == userId) || isValidMobileStudentId(userId);
+        allow create: if isValidId(attemptId) &&
                          isValidQuizAttempt(incoming()) &&
                          incoming().userId == userId &&
+                         ((isSignedIn() && request.auth.uid == userId) || isValidMobileStudentId(userId)) &&
                          hasSubjectAccess(get(/databases/$(database)/documents/students/$(userId)).data, incoming().subjectId);
         allow update, delete: if isAdmin() && isValidId(attemptId);
       }
@@ -263,7 +287,12 @@ service cloud.firestore {
                        getAfter(/databases/$(database)/documents/payment_requests/$(incoming().requestId)).data.utrNormalized == utrId &&
                        (
                          (isSignedIn() && getAfter(/databases/$(database)/documents/payment_requests/$(incoming().requestId)).data.userId == request.auth.uid) ||
-                         (!isSignedIn() && isValidPayId(incoming().requestId) && isValidPublicUid(getAfter(/databases/$(database)/documents/payment_requests/$(incoming().requestId)).data.userId))
+                         (
+                           isValidPayId(incoming().requestId) && (
+                             isValidPublicUid(getAfter(/databases/$(database)/documents/payment_requests/$(incoming().requestId)).data.userId) ||
+                             isValidMobileStudentId(getAfter(/databases/$(database)/documents/payment_requests/$(incoming().requestId)).data.userId)
+                           )
+                         )
                        );
       allow update, delete: if false;
     }
@@ -298,7 +327,10 @@ service cloud.firestore {
                            isValidUsedByMap(incoming().usedBy) &&
                            (
                              (isSignedIn() && incoming().usedByUserId == request.auth.uid && incoming().usedBy.uid == request.auth.uid) ||
-                             (!isSignedIn() && isValidPublicUid(incoming().usedByUserId) && incoming().usedBy.uid == incoming().usedByUserId)
+                             (
+                               (isValidPublicUid(incoming().usedByUserId) || isValidMobileStudentId(incoming().usedByUserId)) &&
+                               incoming().usedBy.uid == incoming().usedByUserId
+                             )
                            ) &&
                            incoming().usedByName == incoming().usedBy.name &&
                            incoming().usedByMobile == incoming().usedBy.mobile &&
@@ -333,14 +365,17 @@ service cloud.firestore {
     match /payment_requests/{requestId} {
       allow get: if isAdmin() ||
                     (isSignedIn() && isValidId(requestId) && resource != null && resource.data.userId == request.auth.uid) ||
-                    (!isSignedIn() && isValidPayId(requestId) && (resource == null || isValidPublicUid(resource.data.userId)));
+                    (isValidPayId(requestId) && (resource == null || isValidPublicUid(resource.data.userId) || isValidMobileStudentId(resource.data.userId)));
       allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
 
       allow create: if isValidId(requestId) &&
                        isValidPaymentRequest(incoming()) &&
                        (
                          (isSignedIn() && incoming().userId == request.auth.uid) ||
-                         (!isSignedIn() && isValidPayId(requestId) && isValidPublicUid(incoming().userId))
+                         (
+                           isValidPayId(requestId) &&
+                           (isValidPublicUid(incoming().userId) || isValidMobileStudentId(incoming().userId))
+                         )
                        ) &&
                        incoming().status == 'pending' &&
                        incoming().assignedCode == '' &&

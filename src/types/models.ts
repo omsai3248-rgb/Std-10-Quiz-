@@ -16,6 +16,7 @@ export interface StudentProfile {
   totalQuizzesTaken: number;
   bestScorePercent: number;
   unlockedSubjects: string[];
+  paymentRequestIds?: string[];
   createdAt: Timestamp | null;
   updatedAt: Timestamp | null;
 }

@@ -1,10 +1,19 @@
-import {
+import { createRequire } from "node:module";
+import { test, before, after, beforeEach } from "node:test";
+import fs from "node:fs";
+
+const require = createRequire(import.meta.url);
+const {
   initializeTestEnvironment,
   assertFails,
   assertSucceeds,
-} from "@firebase/rules-unit-testing";
-import { test, before, after, beforeEach } from "node:test";
-import fs from "node:fs";
+} = (() => {
+  try {
+    return require("@firebase/rules-unit-testing");
+  } catch {
+    return require("/usr/local/lib/node_modules/@firebase/rules-unit-testing");
+  }
+})();
 
 let testEnv;
 const PROJECT_ID = process.env.GCP_PROJECT || "demo-no-project";
@@ -339,6 +348,158 @@ test("Public user can redeem an unused code once with usedBy + deviceInfo, and r
       usedByName: "Bob",
       usedByMobile: "9123456789",
       updatedAt: new Date(),
+    })
+  );
+});
+
+test("Mobile student (mob_9876543210) persists profile, links paymentRequestIds, unlocks only via valid transaction, and saves quiz attempts", async () => {
+  const unauthDb = testEnv.unauthenticatedContext().firestore();
+  const studentId = "mob_9876543210";
+  const now = new Date();
+
+  // Cannot create profile with pre-unlocked quiz access or reserved admin number
+  await assertFails(
+    unauthDb.collection("students").doc(studentId).set({
+      userId: studentId,
+      fullName: "Hacker",
+      mobileNumber: "9876543210",
+      email: "",
+      standard: "ધોરણ 10",
+      hasQuizAccess: true,
+      redeemedCode: "",
+      paymentStatus: "none",
+      totalQuizzesTaken: 0,
+      bestScorePercent: 0,
+      unlockedSubjects: ["all"],
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+  await assertFails(
+    unauthDb.collection("students").doc("mob_9099592283").set({
+      userId: "mob_9099592283",
+      fullName: "Fake Admin",
+      mobileNumber: "9099592283",
+      email: "",
+      standard: "ધોરણ 10",
+      hasQuizAccess: false,
+      redeemedCode: "",
+      paymentStatus: "none",
+      totalQuizzesTaken: 0,
+      bestScorePercent: 0,
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  // Valid initial locked student profile creation succeeds
+  await assertSucceeds(
+    unauthDb.collection("students").doc(studentId).set({
+      userId: studentId,
+      fullName: "Aarav Patel",
+      mobileNumber: "9876543210",
+      email: "",
+      standard: "ધોરણ 10",
+      hasQuizAccess: false,
+      redeemedCode: "",
+      paymentStatus: "none",
+      totalQuizzesTaken: 0,
+      bestScorePercent: 0,
+      unlockedSubjects: [],
+      paymentRequestIds: [],
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  // Cannot record quiz attempt before subject is unlocked
+  await assertFails(
+    unauthDb.collection("students").doc(studentId).collection("quiz_attempts").doc("att_1").set({
+      userId: studentId,
+      subjectId: "maths",
+      subjectTitle: "ગણિત",
+      chapterTitle: "Ch 1",
+      score: 8,
+      totalQuestions: 10,
+      percentage: 80,
+      timeTakenSeconds: 45,
+      createdAt: now,
+    })
+  );
+
+  // Cannot self-unlock without redeeming a real unused access_code in the same transaction
+  await assertFails(
+    unauthDb.collection("students").doc(studentId).update({
+      hasQuizAccess: true,
+      redeemedCode: "FAKECODE",
+      unlockedSubjects: ["all"],
+      updatedAt: now,
+    })
+  );
+
+  // Seed unused code & redeem atomically + update student profile in same transaction/batch
+  const code = "M7N8P9Q2";
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await ctx.firestore().collection("access_codes").doc(code).set(
+      makeCodePayload(code, { subjectId: "maths", amountRupees: 24 })
+    );
+  });
+
+  const redeemBatch = unauthDb.batch();
+  redeemBatch.update(unauthDb.collection("access_codes").doc(code), {
+    status: "used",
+    isUsed: true,
+    usedAt: now,
+    usedBy: {
+      uid: studentId,
+      name: "Aarav Patel",
+      mobile: "9876543210",
+      deviceInfo: "Android App",
+    },
+    usedByUserId: studentId,
+    usedByName: "Aarav Patel",
+    usedByMobile: "9876543210",
+    updatedAt: now,
+  });
+  redeemBatch.update(unauthDb.collection("students").doc(studentId), {
+    hasQuizAccess: false,
+    redeemedCode: code,
+    unlockedSubjects: ["maths"],
+    updatedAt: now,
+  });
+  await assertSucceeds(redeemBatch.commit());
+
+  // Now student CAN record a quiz attempt for unlocked subject 'maths', but NOT locked 'science'
+  const attBatch = unauthDb.batch();
+  attBatch.set(unauthDb.collection("students").doc(studentId).collection("quiz_attempts").doc("att_1"), {
+    userId: studentId,
+    subjectId: "maths",
+    subjectTitle: "ગણિત",
+    chapterTitle: "Ch 1",
+    score: 9,
+    totalQuestions: 10,
+    percentage: 90,
+    timeTakenSeconds: 42,
+    createdAt: now,
+  });
+  attBatch.update(unauthDb.collection("students").doc(studentId), {
+    totalQuizzesTaken: 1,
+    bestScorePercent: 90,
+    updatedAt: now,
+  });
+  await assertSucceeds(attBatch.commit());
+
+  await assertFails(
+    unauthDb.collection("students").doc(studentId).collection("quiz_attempts").doc("att_2").set({
+      userId: studentId,
+      subjectId: "science",
+      subjectTitle: "વિજ્ઞાન",
+      chapterTitle: "Ch 1",
+      score: 5,
+      totalQuestions: 10,
+      percentage: 50,
+      timeTakenSeconds: 30,
+      createdAt: now,
     })
   );
 });

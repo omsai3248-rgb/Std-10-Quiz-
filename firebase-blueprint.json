@@ -16,6 +16,7 @@
         "totalQuizzesTaken": { "type": "integer" },
         "bestScorePercent": { "type": "integer" },
         "unlockedSubjects": { "type": "array", "items": { "type": "string" } },
+        "paymentRequestIds": { "type": "array", "items": { "type": "string" } },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },

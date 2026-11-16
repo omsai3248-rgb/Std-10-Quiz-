@@ -6,7 +6,6 @@ import { UpdateAvailableModal } from './components/AppUpdateComponents';
 import { useTranslation } from './i18n/translations';
 import { StudentMobileLoginScreen } from './screens/StudentMobileLoginScreen';
 import { UseCodeScreen } from './screens/UseCodeScreen';
-import { AdminPhoneLoginScreen } from './screens/AdminPhoneLoginScreen';
 import { AdminPanelScreen, type AdminLiveAlert } from './screens/AdminPanelScreen';
 import { SubjectChaptersScreen } from './screens/SubjectChaptersScreen';
 import { QuizPlayScreen } from './screens/QuizPlayScreen';
@@ -15,11 +14,12 @@ import { extractReadableErrorMessage } from './services/firestoreErrorHandler';
 import {
   approvePaymentAndAssignCode,
   generateBulkAccessCodes,
-  hasNativeFirebaseBridge,
+  getStudentDocId,
   isAdminAccount,
   loadMyPaymentRequestIds,
   observeAllAccessCodes,
   observeAllPaymentRequests,
+  observeAllStudents,
   observeAppAuthState,
   observeMyPaymentRequests,
   observeMyQuizAttempts,
@@ -28,12 +28,14 @@ import {
   observeStudentProfile,
   recordQuizAttempt,
   redeemAccessCodePublic,
+  registerOrUpdateStudentProfile,
   rejectPaymentRequest,
   saveMyPaymentRequestId,
   saveReleaseConfig,
-  signInAdminWithGoogle,
   signOutAdminSession,
   submitPaymentRequest,
+  toggleStudentQuizAccess,
+  updateStudentSubjectAccess,
   type AppAuthUser,
 } from './services/quizRepository';
 import {
@@ -98,7 +100,6 @@ export const App: React.FC = () => {
 
   const [authUser, setAuthUser] = useState<AppAuthUser | null>(null);
   const [authInitialized, setAuthInitialized] = useState(false);
-  const [localAdminAuthed, setLocalAdminAuthed] = useState(false);
 
   const [student, setStudent] = useState<StudentProfile | null>(null);
   const [savedUserMeta, setSavedUserMeta] = useState<{ name: string; mobile: string }>(
@@ -116,6 +117,7 @@ export const App: React.FC = () => {
   const [myAttempts, setMyAttempts] = useState<QuizAttempt[]>([]);
   const [allPayments, setAllPayments] = useState<PaymentRequest[]>([]);
   const [allCodes, setAllCodes] = useState<AccessCode[]>([]);
+  const [allStudents, setAllStudents] = useState<StudentProfile[]>([]);
   const [releaseConfig, setReleaseConfig] = useState<AppReleaseConfig | null>(null);
 
   const [syncVersion, setSyncVersion] = useState(0);
@@ -213,10 +215,9 @@ export const App: React.FC = () => {
     const unsub = observeAppAuthState((user) => {
       if (!user) {
         setAuthUser(null);
-        setStudent(null);
-        setMyAttempts([]);
         setAllPayments([]);
         setAllCodes([]);
+        setAllStudents([]);
         knownPendingIdsRef.current = null;
         knownUsedCodesRef.current = null;
       } else {
@@ -232,16 +233,42 @@ export const App: React.FC = () => {
     return isAdminAccount(authUser.phoneNumber ?? '', authUser.email ?? '');
   }, [authUser]);
 
-  const isAdmin = localAdminAuthed || isFirebaseAdmin;
+  const isAdmin = isFirebaseAdmin;
+
+  const studentDocId = useMemo(() => {
+    if (isStudentLoggedIn) {
+      return getStudentDocId(savedUserMeta.mobile);
+    }
+    if (authUser && !isFirebaseAdmin) {
+      return authUser.uid;
+    }
+    return '';
+  }, [authUser, isFirebaseAdmin, isStudentLoggedIn, savedUserMeta.mobile]);
+
+  // Backfill Firestore student doc when app loads with an existing saved mobile session
+  useEffect(() => {
+    if (!isStudentLoggedIn) return;
+    void registerOrUpdateStudentProfile(savedUserMeta.name, savedUserMeta.mobile).catch(() => {});
+  }, [isStudentLoggedIn, savedUserMeta.mobile, savedUserMeta.name]);
+
+  const mergedPaymentIds = useMemo(() => {
+    const set = new Set<string>(myPaymentIds);
+    student?.paymentRequestIds?.forEach((id) => {
+      if (/^pay_[a-f0-9]{32}$/.test(id)) set.add(id);
+    });
+    return Array.from(set).slice(0, 25);
+  }, [myPaymentIds, student?.paymentRequestIds]);
 
   const effectiveUnlockedSubjects = useMemo(() => {
-    const set = new Set<string>(localUnlockedSubjects);
-    if (student?.hasQuizAccess) {
-      set.add('all');
-      ALL_SUBJECT_IDS.forEach((s) => set.add(s));
+    if (student) {
+      const set = new Set<string>(student.unlockedSubjects ?? []);
+      if (student.hasQuizAccess) {
+        set.add('all');
+        ALL_SUBJECT_IDS.forEach((s) => set.add(s));
+      }
+      return Array.from(set);
     }
-    student?.unlockedSubjects?.forEach((s) => set.add(s));
-    return Array.from(set);
+    return localUnlockedSubjects;
   }, [localUnlockedSubjects, student]);
 
   // Realtime Firestore listeners
@@ -251,28 +278,35 @@ export const App: React.FC = () => {
       knownUsedCodesRef.current = null;
       setAllPayments([]);
       setAllCodes([]);
+      setAllStudents([]);
     }
 
     const unsubs = [observeReleaseConfig(setReleaseConfig)];
 
-    if (authUser) {
+    if (studentDocId) {
+      unsubs.push(
+        observeStudentProfile(
+          studentDocId,
+          (profile) => setStudent(profile),
+          () => {}
+        ),
+        observeMyQuizAttempts(studentDocId, setMyAttempts)
+      );
+    } else {
+      setStudent(null);
+      setMyAttempts([]);
+    }
+
+    if (mergedPaymentIds.length > 0) {
+      unsubs.push(observePaymentRequestsByIds(mergedPaymentIds, setMyPayments));
+    } else if (authUser && !isFirebaseAdmin) {
       unsubs.push(
         observeMyPaymentRequests(authUser.uid, (items) => {
           setMyPayments(items);
         })
       );
-      if (!hasNativeFirebaseBridge()) {
-        unsubs.push(
-          observeStudentProfile(
-            authUser.uid,
-            (profile) => setStudent(profile),
-            () => {}
-          ),
-          observeMyQuizAttempts(authUser.uid, setMyAttempts)
-        );
-      }
     } else {
-      unsubs.push(observePaymentRequestsByIds(myPaymentIds, setMyPayments));
+      setMyPayments([]);
     }
 
     if (isFirebaseAdmin) {
@@ -284,6 +318,8 @@ export const App: React.FC = () => {
       };
 
       unsubs.push(
+        observeAllStudents(setAllStudents, onAdminListenerError),
+
         observeAllPaymentRequests((items) => {
           setAllPayments(items);
           const pendingItems = items.filter((p) => p.status === 'pending');
@@ -375,7 +411,7 @@ export const App: React.FC = () => {
     return () => {
       unsubs.forEach((u) => u());
     };
-  }, [authUser, isFirebaseAdmin, myPaymentIds, syncVersion]);
+  }, [authUser, isFirebaseAdmin, mergedPaymentIds, studentDocId, syncVersion]);
 
   useEffect(() => {
     if (!banner) return;
@@ -436,7 +472,8 @@ export const App: React.FC = () => {
     setMyPaymentIds(loadMyPaymentRequestIds(cleanMobile));
   };
 
-  const handleStudentLogin = (name: string, mobile: string) => {
+  const handleStudentLogin = async (name: string, mobile: string) => {
+    await registerOrUpdateStudentProfile(name, mobile);
     persistUserMeta(name, mobile);
     setRoute({ name: 'public', tab: 'quiz' });
   };
@@ -444,6 +481,8 @@ export const App: React.FC = () => {
   const handleStudentLogout = () => {
     const empty = { name: '', mobile: '' };
     setSavedUserMeta(empty);
+    setStudent(null);
+    setMyAttempts([]);
     setLocalUnlockedSubjects([]);
     setMyPaymentIds([]);
     setMyPayments([]);
@@ -530,10 +569,6 @@ export const App: React.FC = () => {
     adminNote: string,
     subjectId: string
   ) => {
-    if (!isFirebaseAdmin) {
-      setBanner({ isError: true, message: t.firebaseNeedsAuthDesc });
-      return;
-    }
     setIsBusy(true);
     setBanner(null);
     const resolvedSub = subjectId || resolvePaymentSubjectId(req);
@@ -558,7 +593,6 @@ export const App: React.FC = () => {
             ? `Approved! Generated 8-char code: ${code}`
             : `મંજૂર! 8-અક્ષરનો કોડ જનરેટ થયો: ${code}`,
       });
-      // Immediately launch WhatsApp with the student's details & generated code
       launchExternalUrl(buildPaymentApprovalWhatsAppHref(approvedReq, lang));
     } catch (err) {
       setBanner({
@@ -571,10 +605,6 @@ export const App: React.FC = () => {
   };
 
   const handleRejectPayment = async (req: PaymentRequest, reason: string) => {
-    if (!isFirebaseAdmin) {
-      setBanner({ isError: true, message: t.firebaseNeedsAuthDesc });
-      return;
-    }
     setIsBusy(true);
     setBanner(null);
     try {
@@ -591,10 +621,6 @@ export const App: React.FC = () => {
   };
 
   const handleGenerateBulkCodes = async (count: number, batchName: string, subjectId: string) => {
-    if (!isFirebaseAdmin) {
-      setBanner({ isError: true, message: t.firebaseNeedsAuthDesc });
-      return;
-    }
     setIsBusy(true);
     try {
       const codes = await generateBulkAccessCodes(count, batchName, subjectId);
@@ -613,11 +639,53 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleSaveGithubRepo = async (repo: string, notes: string) => {
-    if (!isFirebaseAdmin) {
-      setBanner({ isError: true, message: t.firebaseNeedsAuthDesc });
-      return;
+  const handleToggleStudentAccess = async (st: StudentProfile, grantAccess: boolean) => {
+    setIsBusy(true);
+    try {
+      await toggleStudentQuizAccess(st, grantAccess);
+      setBanner({
+        isError: false,
+        message:
+          lang === 'en'
+            ? `Updated access for ${st.fullName}`
+            : `${st.fullName} માટે એક્સેસ અપડેટ થયું`,
+      });
+    } catch (err) {
+      setBanner({
+        isError: true,
+        message: formatAppError(err, 'Update failed'),
+      });
+    } finally {
+      setIsBusy(false);
     }
+  };
+
+  const handleUpdateStudentSubjectAccess = async (
+    st: StudentProfile,
+    subjectId: SubjectId,
+    grantAccess: boolean
+  ) => {
+    setIsBusy(true);
+    try {
+      await updateStudentSubjectAccess(st, subjectId, grantAccess);
+      setBanner({
+        isError: false,
+        message:
+          lang === 'en'
+            ? `${st.fullName} • ${getSubjectDisplayName(subjectId, lang)} updated`
+            : `${st.fullName} • ${getSubjectDisplayName(subjectId, lang)} અપડેટ થયું`,
+      });
+    } catch (err) {
+      setBanner({
+        isError: true,
+        message: formatAppError(err, 'Update failed'),
+      });
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const handleSaveGithubRepo = async (repo: string, notes: string) => {
     setIsBusy(true);
     try {
       await saveReleaseConfig(repo, notes);
@@ -636,54 +704,19 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleAdminLoginSuccess = (mode: 'firebase' | 'local') => {
-    setLocalAdminAuthed(true);
+  const handleAdminLoginSuccess = () => {
     setRoute({ name: 'public', tab: 'admin' });
     setBanner({
       isError: false,
       message:
-        mode === 'local'
-          ? t.firebaseNeedsAuthDesc
-          : lang === 'en'
-            ? 'Firebase Admin connected!'
-            : 'Firebase એડમિન સફળતાપૂર્વક ચાલુ થઈ ગયું છે!',
+        lang === 'en'
+          ? 'Firebase Admin connected live!'
+          : 'Firebase એડમિન લાઇવ ચાલુ થઈ ગયું છે!',
     });
-  };
-
-  const handleConnectFirebaseGoogle = async () => {
-    setIsBusy(true);
-    setBanner(null);
-    try {
-      await signInAdminWithGoogle();
-      setLocalAdminAuthed(true);
-      setRoute({ name: 'public', tab: 'admin' });
-      setBanner({
-        isError: false,
-        message:
-          lang === 'en'
-            ? 'Firebase Admin connected via Google (omsai3248@gmail.com)!'
-            : 'Google (omsai3248@gmail.com) વડે Firebase ચાલુ થઈ ગયું છે!',
-      });
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : '';
-      if (msg === 'SIGN_IN_CANCELLED') {
-        return;
-      }
-      setBanner({
-        isError: true,
-        message:
-          msg === 'ONLY_ADMIN_GOOGLE_EMAIL'
-            ? t.errWrongAdminGoogleAccount
-            : formatAppError(err, 'Google Sign-In failed'),
-      });
-    } finally {
-      setIsBusy(false);
-    }
   };
 
   const handleAdminSignOut = async () => {
     try {
-      setLocalAdminAuthed(false);
       await signOutAdminSession();
       setApprovedConfirmation(null);
       setRoute({ name: 'public', tab: 'quiz' });
@@ -711,6 +744,7 @@ export const App: React.FC = () => {
       <AdminPanelScreen
         payments={allPayments}
         accessCodes={allCodes}
+        students={allStudents}
         lastGeneratedBatch={lastGeneratedBatch}
         liveAlerts={liveAlerts}
         isSoundEnabled={isSoundEnabled}
@@ -719,7 +753,6 @@ export const App: React.FC = () => {
         currentVersionName={APP_VERSION_NAME}
         isBusy={isBusy}
         isCheckingUpdate={isCheckingUpdate}
-        isFirebaseConnected={isFirebaseAdmin}
         approvedConfirmation={approvedConfirmation}
         onDismissApprovedConfirmation={() => setApprovedConfirmation(null)}
         onBackToPublic={() => setRoute({ name: 'public', tab: 'quiz' })}
@@ -727,10 +760,13 @@ export const App: React.FC = () => {
         onToggleSound={() => setIsSoundEnabled((prev) => !prev)}
         onClearAlerts={() => setLiveAlerts([])}
         onSignOut={() => void handleAdminSignOut()}
-        onConnectFirebaseGoogle={() => void handleConnectFirebaseGoogle()}
         onGenerateBulkCodes={(c, b, s) => void handleGenerateBulkCodes(c, b, s)}
         onApprovePayment={(r, n, s) => void handleApprovePayment(r, n, s)}
         onRejectPayment={(r, reason) => void handleRejectPayment(r, reason)}
+        onToggleStudentAccess={(st, grant) => void handleToggleStudentAccess(st, grant)}
+        onUpdateStudentSubjectAccess={(st, subId, grant) =>
+          void handleUpdateStudentSubjectAccess(st, subId, grant)
+        }
         onSaveGithubRepo={(repo, notes) => void handleSaveGithubRepo(repo, notes)}
         onTestUpdateCheck={() => void checkForUpdates(true)}
         onNotify={(msg) => setBanner({ isError: false, message: msg })}
@@ -774,6 +810,7 @@ export const App: React.FC = () => {
           chapter={chapter}
           onQuizCompleted={(score, total, elapsedSeconds) => {
             void recordQuizAttempt({
+              studentId: studentDocId,
               subjectId: subject.id,
               subjectTitle: subject.title,
               chapterTitle: chapter.title,
@@ -789,13 +826,12 @@ export const App: React.FC = () => {
       );
     }
   } else {
-    const activeTab: PublicTabId = route.name === 'public' ? route.tab : 'quiz';
     const pendingBadge = allPayments.filter((p) => p.status === 'pending').length;
 
     bodyNode = (
       <div className="min-h-screen bg-[#FAF9F5] dark:bg-[#0B1120] text-[#0F172A] dark:text-[#F8FAFC] flex flex-col">
         <TopNavHeader
-          activeTab={activeTab}
+          activeTab="quiz"
           isStudentLoggedIn={isStudentLoggedIn}
           studentName={savedUserMeta.name}
           studentMobile={savedUserMeta.mobile}
@@ -808,16 +844,14 @@ export const App: React.FC = () => {
         />
 
         <main className="flex-1 pb-14">
-          {activeTab === 'quiz' && !isStudentLoggedIn && (
+          {!isStudentLoggedIn ? (
             <StudentMobileLoginScreen
               initialName={savedUserMeta.name}
               initialMobile={savedUserMeta.mobile}
               onLoginSuccess={handleStudentLogin}
               onAdminAuthenticated={handleAdminLoginSuccess}
             />
-          )}
-
-          {activeTab === 'quiz' && isStudentLoggedIn && (
+          ) : (
             <UseCodeScreen
               studentName={savedUserMeta.name}
               studentMobile={savedUserMeta.mobile}
@@ -831,10 +865,6 @@ export const App: React.FC = () => {
               onOpenSubject={(sub) => setRoute({ name: 'subject', subjectId: sub.id })}
               onNotify={(msg, isErr) => setBanner({ isError: Boolean(isErr), message: msg })}
             />
-          )}
-
-          {activeTab === 'admin' && !isAdmin && (
-            <AdminPhoneLoginScreen onAdminAuthenticated={handleAdminLoginSuccess} />
           )}
         </main>
       </div>
