@@ -308,28 +308,30 @@ function renderEquationTokens(expr: string, keyPrefix: string): React.ReactNode[
 const SKIP_OR_MATH_SEGMENT_REGEX =
   /(^\s*\d+\)\s*|સ્ટેપ\s+\d+\s*:|\((?:March|June|July|May|Aug|Sample)[^)]*\)|\([A-D]\)|_{3,}|(?:∠|Δ|θ|π|α|β|γ|Ω|±|≠|≤|≥|=|<|>|≈|∞|∝|⇒|→|↑|⊥|∥|×|÷|·|[+\-−]?\d+(?:\.\d+)?(?:\s*[A-Za-z°%]+)?|[A-Za-z]+(?:\s*\([A-Za-z0-9,\s+-]+\))?)(?:\s*(?:[=≠≤≥<>+\-×÷±≈⇒→·:/]|°|%)\s*(?:∠|Δ|θ|π|α|β|γ|Ω|±|≠|≤|≥|≈|∞|∝|⇒|→|↑|⊥|∥|×|÷|·|\d+(?:\.\d+)?|[A-Za-z0-9()[\]°%.'+-]+))*)/g;
 
-function renderPlainSegment(
-  text: string,
-  keyPrefix: string,
-  insideMathNode: boolean
-): React.ReactNode {
-  if (insideMathNode) {
-    return <span className="math-eq">{renderEquationTokens(text, keyPrefix)}</span>;
-  }
+type RenderPiece =
+  | { kind: 'prose'; text: string }
+  | { kind: 'glue'; text: string }
+  | { kind: 'eq'; text: string }
+  | { kind: 'node'; node: MathNode };
 
-  const out: React.ReactNode[] = [];
+function splitPlainToPieces(text: string): RenderPiece[] {
+  const pieces: RenderPiece[] = [];
   let lastIdx = 0;
-  let idx = 0;
   SKIP_OR_MATH_SEGMENT_REGEX.lastIndex = 0;
   let match: RegExpExecArray | null;
 
+  const pushProseOrGlue = (rawSlice: string) => {
+    if (!rawSlice) return;
+    if (/^[ \t()[\]+=\-−×÷·<>≠≤≥±≈]+$/.test(rawSlice)) {
+      pieces.push({ kind: 'glue', text: rawSlice });
+    } else {
+      pieces.push({ kind: 'prose', text: rawSlice });
+    }
+  };
+
   while ((match = SKIP_OR_MATH_SEGMENT_REGEX.exec(text)) !== null) {
     if (match.index > lastIdx) {
-      out.push(
-        <React.Fragment key={`${keyPrefix}_gu_${idx++}`}>
-          {text.slice(lastIdx, match.index)}
-        </React.Fragment>
-      );
+      pushProseOrGlue(text.slice(lastIdx, match.index));
     }
 
     const seg = match[0];
@@ -340,7 +342,6 @@ function renderPlainSegment(
       /^\([A-D]\)$/.test(seg) ||
       /^_{3,}$/.test(seg);
 
-    // Avoid styling ordinary multi-word English prose as equations if there's no math operator/digit/symbol
     const hasMathSignal =
       /[\d=≠≤≥<>+\-×÷±≈∞∝⇒→↑∠⊥∥ΔθπαβγΩ°·%√:/]/.test(seg) ||
       /^(?:[a-zA-Z]|[a-zA-Z]\s*\([a-zA-Z0-9,\s+-]+\)|(?:sin|cos|tan|cot|sec|cosec|csc)\b)/.test(
@@ -348,95 +349,208 @@ function renderPlainSegment(
       );
 
     if (isSkippedMeta || !hasMathSignal) {
-      out.push(<React.Fragment key={`${keyPrefix}_txt_${idx++}`}>{seg}</React.Fragment>);
+      pieces.push({ kind: 'prose', text: seg });
+    } else if (/^[ \t]*⇒[ \t]*$/.test(seg)) {
+      pieces.push({ kind: 'prose', text: seg });
     } else {
-      out.push(
-        <span key={`${keyPrefix}_eq_${idx++}`} className="math-eq">
-          {renderEquationTokens(seg, `${keyPrefix}_t${idx}`)}
-        </span>
-      );
+      const leadSpace = seg.match(/^[ \t]+/)?.[0] ?? '';
+      const trailSpace = seg.match(/[ \t]+$/)?.[0] ?? '';
+      const core = seg.slice(leadSpace.length, seg.length - trailSpace.length);
+      if (leadSpace) pieces.push({ kind: 'glue', text: leadSpace });
+      if (core) {
+        if (/^⇒/.test(core)) {
+          pieces.push({ kind: 'prose', text: '⇒ ' });
+          const rest = core.replace(/^⇒\s*/, '');
+          if (rest) pieces.push({ kind: 'eq', text: rest });
+        } else {
+          pieces.push({ kind: 'eq', text: core });
+        }
+      }
+      if (trailSpace) pieces.push({ kind: 'glue', text: trailSpace });
     }
 
     lastIdx = SKIP_OR_MATH_SEGMENT_REGEX.lastIndex;
   }
 
   if (lastIdx < text.length) {
-    out.push(
-      <React.Fragment key={`${keyPrefix}_end_${idx}`}>{text.slice(lastIdx)}</React.Fragment>
-    );
+    pushProseOrGlue(text.slice(lastIdx));
   }
 
-  return out;
+  return pieces;
 }
 
-function renderNodes(
+function renderSingleNode(node: MathNode, key: string, nestedFraction = false): React.ReactNode {
+  switch (node.kind) {
+    case 'plain':
+      return <span className="math-eq">{renderEquationTokens(node.text, key)}</span>;
+    case 'sup':
+      return (
+        <sup key={key} className="math-eq text-[0.74em] leading-none align-super">
+          {renderNodesInline(node.nodes, key, nestedFraction)}
+        </sup>
+      );
+    case 'sub':
+      return (
+        <sub key={key} className="math-eq text-[0.74em] leading-none align-sub">
+          {renderNodesInline(node.nodes, key, nestedFraction)}
+        </sub>
+      );
+    case 'overbar':
+      return (
+        <span
+          key={key}
+          className="math-eq inline-block border-t border-current pt-[2px] mt-[2px] mx-[1px] leading-[1.2]"
+        >
+          {renderNodesInline(node.nodes, `${key}_ob`, nestedFraction)}
+        </span>
+      );
+    case 'sqrt':
+      return (
+        <span
+          key={key}
+          className="math-eq inline-flex items-baseline mx-[2px] py-[2px] whitespace-nowrap"
+        >
+          {node.indexNodes && node.indexNodes.length > 0 && (
+            <sup className="text-[0.65em] leading-none mr-[1px]">
+              {renderNodesInline(node.indexNodes, `${key}_idx`, nestedFraction)}
+            </sup>
+          )}
+          <span className="text-[1.12em] font-medium leading-none">√</span>
+          <span className="border-t border-current px-[3px] pt-[2px] leading-[1.2]">
+            {renderNodesInline(node.inner, key, nestedFraction)}
+          </span>
+        </span>
+      );
+    case 'frac':
+      return (
+        <span
+          key={key}
+          className={`math-eq inline-flex flex-col items-center justify-center align-middle mx-1 py-[2px] whitespace-nowrap ${
+            nestedFraction ? 'text-[0.86em] leading-[1.15]' : 'text-[0.88em] leading-[1.2]'
+          }`}
+        >
+          <span className="px-1.5 border-b border-current pb-[2px]">
+            {renderNodesInline(node.numerator, `${key}_n`, true)}
+          </span>
+          <span className="px-1.5 pt-[2px]">
+            {renderNodesInline(node.denominator, `${key}_d`, true)}
+          </span>
+        </span>
+      );
+  }
+}
+
+function renderNodesInline(
   nodes: MathNode[],
   keyPrefix = 'm',
-  insideMathNode = false
+  nestedFraction = false
 ): React.ReactNode[] {
-  return nodes.map((node, idx) => {
-    const key = `${keyPrefix}_${idx}`;
-    switch (node.kind) {
-      case 'plain':
-        return (
-          <React.Fragment key={key}>
-            {renderPlainSegment(node.text, key, insideMathNode)}
+  return nodes.map((node, idx) => (
+    <React.Fragment key={`${keyPrefix}_${idx}`}>
+      {renderSingleNode(node, `${keyPrefix}_${idx}`, nestedFraction)}
+    </React.Fragment>
+  ));
+}
+
+function isComplexMathRun(pieces: RenderPiece[]): boolean {
+  if (pieces.length > 1) return true;
+  for (const p of pieces) {
+    if (p.kind === 'node') {
+      if (p.node.kind === 'frac' || p.node.kind === 'sqrt' || p.node.kind === 'overbar') {
+        return true;
+      }
+    } else if (p.kind === 'eq') {
+      if (/[=≠≤≥<>+\-×÷±≈⇒→∠⊥∥/]/.test(p.text) || p.text.length >= 6) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function renderTopLevelNodes(nodes: MathNode[], keyPrefix = 'm'): React.ReactNode[] {
+  const flatPieces: RenderPiece[] = [];
+  for (const node of nodes) {
+    if (node.kind === 'plain') {
+      flatPieces.push(...splitPlainToPieces(node.text));
+    } else {
+      flatPieces.push({ kind: 'node', node });
+    }
+  }
+
+  const out: React.ReactNode[] = [];
+  let mathRun: RenderPiece[] = [];
+  let pendingGlue: RenderPiece[] = [];
+  let outIdx = 0;
+
+  const renderPieceNode = (p: RenderPiece, k: string): React.ReactNode => {
+    if (p.kind === 'node') {
+      return renderSingleNode(p.node, k, false);
+    }
+    if (p.kind === 'eq') {
+      return (
+        <span key={k} className="math-eq">
+          {renderEquationTokens(p.text, `${k}_tok`)}
+        </span>
+      );
+    }
+    return <React.Fragment key={k}>{p.text}</React.Fragment>;
+  };
+
+  const flushMathRun = () => {
+    if (mathRun.length > 0) {
+      const k = `${keyPrefix}_run_${outIdx++}`;
+      const children = mathRun.map((p, idx) => (
+        <React.Fragment key={`${k}_${idx}`}>{renderPieceNode(p, `${k}_${idx}`)}</React.Fragment>
+      ));
+      if (isComplexMathRun(mathRun)) {
+        out.push(
+          <span key={k} className="math-formula-line math-eq">
+            {children}
+          </span>
+        );
+      } else {
+        out.push(
+          <span key={k} className="inline whitespace-nowrap">
+            {children}
+          </span>
+        );
+      }
+      mathRun = [];
+    }
+    if (pendingGlue.length > 0) {
+      for (const g of pendingGlue) {
+        out.push(
+          <React.Fragment key={`${keyPrefix}_gl_${outIdx++}`}>
+            {g.kind !== 'node' ? g.text : null}
           </React.Fragment>
         );
-      case 'sup':
-        return (
-          <sup key={key} className="math-eq text-[0.74em] leading-none align-super">
-            {renderNodes(node.nodes, key, true)}
-          </sup>
-        );
-      case 'sub':
-        return (
-          <sub key={key} className="math-eq text-[0.74em] leading-none align-sub">
-            {renderNodes(node.nodes, key, true)}
-          </sub>
-        );
-      case 'overbar':
-        return (
-          <span
-            key={key}
-            className="math-eq inline-block border-t border-current pt-[2px] mt-[2px] mx-[1px] leading-[1.2]"
-          >
-            {renderNodes(node.nodes, `${key}_ob`, true)}
-          </span>
-        );
-      case 'sqrt':
-        return (
-          <span
-            key={key}
-            className="math-eq inline-flex items-baseline mx-[2px] py-[2px] whitespace-nowrap"
-          >
-            {node.indexNodes && node.indexNodes.length > 0 && (
-              <sup className="text-[0.65em] leading-none mr-[1px]">
-                {renderNodes(node.indexNodes, `${key}_idx`, true)}
-              </sup>
-            )}
-            <span className="text-[1.12em] font-medium leading-none">√</span>
-            <span className="border-t border-current px-[3px] pt-[2px] leading-[1.2]">
-              {renderNodes(node.inner, key, true)}
-            </span>
-          </span>
-        );
-      case 'frac':
-        return (
-          <span
-            key={key}
-            className="math-eq inline-flex flex-col items-center justify-center align-middle mx-1 my-0.5 py-0.5 text-[0.9em] leading-[1.25] whitespace-nowrap"
-          >
-            <span className="px-1.5 border-b border-current pb-[2px]">
-              {renderNodes(node.numerator, `${key}_n`, true)}
-            </span>
-            <span className="px-1.5 pt-[2px]">
-              {renderNodes(node.denominator, `${key}_d`, true)}
-            </span>
-          </span>
-        );
+      }
+      pendingGlue = [];
     }
-  });
+  };
+
+  for (const piece of flatPieces) {
+    if (piece.kind === 'prose') {
+      flushMathRun();
+      out.push(<React.Fragment key={`${keyPrefix}_pr_${outIdx++}`}>{piece.text}</React.Fragment>);
+    } else if (piece.kind === 'glue') {
+      if (mathRun.length > 0) {
+        pendingGlue.push(piece);
+      } else {
+        out.push(<React.Fragment key={`${keyPrefix}_gl_${outIdx++}`}>{piece.text}</React.Fragment>);
+      }
+    } else {
+      if (pendingGlue.length > 0) {
+        mathRun.push(...pendingGlue);
+        pendingGlue = [];
+      }
+      mathRun.push(piece);
+    }
+  }
+  flushMathRun();
+
+  return out;
 }
 
 interface MathRichTextProps {
@@ -449,5 +563,9 @@ export const MathRichText: React.FC<MathRichTextProps> = ({ text, className = ''
     const normalized = normalizeMathMacros(text);
     return parseUntil(normalized, 0, null);
   }, [text]);
-  return <span className={`inline leading-[inherit] ${className}`}>{renderNodes(nodes)}</span>;
+  return (
+    <span className={`inline leading-[inherit] ${className}`}>
+      {renderTopLevelNodes(nodes)}
+    </span>
+  );
 };

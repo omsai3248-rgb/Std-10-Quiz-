@@ -21,7 +21,9 @@ import {
   deleteStudentAdmin,
   forceRefreshNativeAdminListeners,
   generateBulkAccessCodes,
+  generateDirectCodeForMobile,
   getCurrentDeviceIdentity,
+  getNativeActiveStudentSnapshot,
   getStudentDocId,
   hasNativeFirebaseBridge,
   isAdminAccount,
@@ -43,6 +45,7 @@ import {
   releaseStudentDeviceLock,
   saveMyPaymentRequestId,
   saveReleaseConfig,
+  setNativeActiveStudentMobile,
   signOutAdminSession,
   submitPaymentRequest,
   toggleStudentQuizAccess,
@@ -50,6 +53,7 @@ import {
   verifyActiveSessionOnResume,
   type AdminPasscodeAuthResult,
   type AppAuthUser,
+  type DirectMobileCodeResult,
 } from './services/quizRepository';
 import {
   APP_VERSION_NAME,
@@ -88,7 +92,9 @@ type AppRoute =
   | { name: 'quiz'; subjectId: SubjectId; chapterId: string };
 
 const LOCAL_UNLOCKS_KEY = 'std10_unlocked_subjects_v2';
+const LEGACY_UNLOCKS_KEY = 'std10_unlocked_subjects_v1';
 const LOCAL_USER_META_KEY = 'std10_public_user_meta_v2';
+const LEGACY_USER_META_KEY = 'std10_public_user_meta_v1';
 
 function loadSavedUnlockedSubjects(mobileNumber = ''): string[] {
   const cleanMob = mobileNumber.replace(/\D/g, '').slice(-10);
@@ -96,7 +102,9 @@ function loadSavedUnlockedSubjects(mobileNumber = ''): string[] {
   try {
     const raw =
       localStorage.getItem(scopedKey) ??
-      (cleanMob ? localStorage.getItem(LOCAL_UNLOCKS_KEY) : null);
+      (cleanMob ? localStorage.getItem(`${LEGACY_UNLOCKS_KEY}_${cleanMob}`) : null) ??
+      localStorage.getItem(LOCAL_UNLOCKS_KEY) ??
+      localStorage.getItem(LEGACY_UNLOCKS_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed.map((x) => String(x)) : [];
@@ -107,34 +115,99 @@ function loadSavedUnlockedSubjects(mobileNumber = ''): string[] {
 
 function loadSavedUserMeta(): { name: string; mobile: string } {
   try {
-    const raw = localStorage.getItem(LOCAL_USER_META_KEY);
+    const raw =
+      localStorage.getItem(LOCAL_USER_META_KEY) ??
+      localStorage.getItem(LEGACY_USER_META_KEY);
     if (!raw) return { name: '', mobile: '' };
     const parsed = JSON.parse(raw) as { name?: string; mobile?: string };
     return {
       name: (parsed.name ?? '').trim(),
-      mobile: (parsed.mobile ?? '').replace(/\D/g, '').slice(0, 10),
+      mobile: (parsed.mobile ?? '').replace(/\D/g, '').slice(-10),
     };
   } catch {
     return { name: '', mobile: '' };
   }
 }
 
+function loadInitialStudentSession(): {
+  meta: { name: string; mobile: string };
+  unlocked: string[];
+  paymentIds: string[];
+  nativeSnapshot: StudentProfile | null;
+} {
+  const webMeta = loadSavedUserMeta();
+  const nativeSnapshot = getNativeActiveStudentSnapshot();
+  const nativeMobile = (nativeSnapshot?.mobileNumber ?? '').replace(/\D/g, '').slice(-10);
+  const nativeName = (nativeSnapshot?.fullName ?? '').trim().slice(0, 60);
+
+  const effectiveMobile = /^[0-9]{10}$/.test(webMeta.mobile) ? webMeta.mobile : nativeMobile;
+  const effectiveName = webMeta.name || nativeName;
+  const meta = {
+    name: effectiveName,
+    mobile: /^[0-9]{10}$/.test(effectiveMobile) ? effectiveMobile : '',
+  };
+
+  if (meta.name && meta.mobile) {
+    try {
+      localStorage.setItem(LOCAL_USER_META_KEY, JSON.stringify(meta));
+    } catch {
+      // Ignore
+    }
+    setNativeActiveStudentMobile(meta.mobile);
+  }
+
+  const unlockedSet = new Set<string>(loadSavedUnlockedSubjects(meta.mobile));
+  if (nativeSnapshot && nativeMobile === meta.mobile) {
+    (nativeSnapshot.unlockedSubjects ?? []).forEach((s) => unlockedSet.add(String(s)));
+    if (nativeSnapshot.hasQuizAccess) {
+      unlockedSet.add('all');
+      ALL_SUBJECT_IDS.forEach((s) => unlockedSet.add(s));
+    }
+    if (unlockedSet.size > 0 && meta.mobile) {
+      try {
+        localStorage.setItem(
+          `${LOCAL_UNLOCKS_KEY}_${meta.mobile}`,
+          JSON.stringify(Array.from(unlockedSet))
+        );
+      } catch {
+        // Ignore
+      }
+    }
+  }
+
+  let paymentIds = loadMyPaymentRequestIds(meta.mobile);
+  if (nativeSnapshot && nativeMobile === meta.mobile && nativeSnapshot.paymentRequestIds?.length) {
+    nativeSnapshot.paymentRequestIds.forEach((pid) => {
+      if (/^pay_[a-f0-9]{32}$/.test(pid)) {
+        paymentIds = saveMyPaymentRequestId(pid, meta.mobile);
+      }
+    });
+  }
+
+  return {
+    meta,
+    unlocked: Array.from(unlockedSet),
+    paymentIds,
+    nativeSnapshot:
+      nativeSnapshot && nativeMobile === meta.mobile ? nativeSnapshot : null,
+  };
+}
+
 export const App: React.FC = () => {
   const { lang, t } = useTranslation();
 
+  const [initialSession] = useState(loadInitialStudentSession);
   const [authUser, setAuthUser] = useState<AppAuthUser | null>(null);
   const [authInitialized, setAuthInitialized] = useState(false);
 
-  const [student, setStudent] = useState<StudentProfile | null>(null);
+  const [student, setStudent] = useState<StudentProfile | null>(initialSession.nativeSnapshot);
   const [savedUserMeta, setSavedUserMeta] = useState<{ name: string; mobile: string }>(
-    loadSavedUserMeta
+    initialSession.meta
   );
-  const [localUnlockedSubjects, setLocalUnlockedSubjects] = useState<string[]>(() =>
-    loadSavedUnlockedSubjects(loadSavedUserMeta().mobile)
+  const [localUnlockedSubjects, setLocalUnlockedSubjects] = useState<string[]>(
+    initialSession.unlocked
   );
-  const [myPaymentIds, setMyPaymentIds] = useState<string[]>(() =>
-    loadMyPaymentRequestIds(loadSavedUserMeta().mobile)
-  );
+  const [myPaymentIds, setMyPaymentIds] = useState<string[]>(initialSession.paymentIds);
   const [prefilledCode] = useState('');
 
   const [myPayments, setMyPayments] = useState<PaymentRequest[]>([]);
@@ -281,8 +354,10 @@ export const App: React.FC = () => {
     setLocalUnlockedSubjects([]);
     setMyPaymentIds([]);
     setMyPayments([]);
+    setNativeActiveStudentMobile('');
     try {
       localStorage.removeItem(LOCAL_USER_META_KEY);
+      localStorage.removeItem(LEGACY_USER_META_KEY);
     } catch {
       // Ignore
     }
@@ -641,9 +716,12 @@ export const App: React.FC = () => {
   }, [isAdmin, effectiveGithubRepo, checkForUpdates]);
 
   const persistUserMeta = (name: string, mobile: string) => {
-    const cleanMobile = mobile.replace(/\D/g, '').slice(0, 10);
+    const cleanMobile = mobile.replace(/\D/g, '').slice(-10);
     const next = { name: name.trim().slice(0, 60), mobile: cleanMobile };
     setSavedUserMeta(next);
+    if (cleanMobile) {
+      setNativeActiveStudentMobile(cleanMobile);
+    }
     try {
       localStorage.setItem(LOCAL_USER_META_KEY, JSON.stringify(next));
     } catch {
@@ -853,6 +931,32 @@ export const App: React.FC = () => {
         isError: true,
         message: formatAppError(err, 'Code generation error'),
       });
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const handleGenerateDirectCode = async (params: {
+    mobileNumber: string;
+    userName?: string;
+    subjectId: string;
+  }): Promise<DirectMobileCodeResult> => {
+    setIsBusy(true);
+    setBanner(null);
+    try {
+      const result = await generateDirectCodeForMobile(params);
+      setBanner({
+        isError: false,
+        message:
+          lang === 'en'
+            ? `Code ${result.code} created for +91 ${result.mobileNumber}`
+            : `+91 ${result.mobileNumber} માટે કોડ ${result.code} તૈયાર છે`,
+      });
+      return result;
+    } catch (err) {
+      const msg = formatAppError(err, 'Direct code generation failed');
+      setBanner({ isError: true, message: msg });
+      throw err;
     } finally {
       setIsBusy(false);
     }
@@ -1113,6 +1217,7 @@ export const App: React.FC = () => {
           onClearAlerts={() => setLiveAlerts([])}
           onSignOut={() => void handleAdminSignOut()}
           onGenerateBulkCodes={(c, b, s) => void handleGenerateBulkCodes(c, b, s)}
+          onGenerateDirectCode={handleGenerateDirectCode}
           onApprovePayment={(r, n, s) => void handleApprovePayment(r, n, s)}
           onRejectPayment={(r, reason) => void handleRejectPayment(r, reason)}
           onToggleStudentAccess={(st, grant) => void handleToggleStudentAccess(st, grant)}

@@ -203,17 +203,24 @@ class NativeFirebaseBridge(
         }.getOrDefault(true)
     }
 
-    private fun saveLocalStudentBackup(profileJson: JSONObject, pendingSync: Boolean = false) {
+    private fun saveLocalStudentBackup(
+        profileJson: JSONObject,
+        pendingSync: Boolean = false,
+        markActive: Boolean = true
+    ) {
         runCatching {
             val studentId = profileJson.optString("id").ifBlank { profileJson.optString("userId") }.trim()
             if (studentId.isBlank()) return
             val copy = JSONObject(profileJson.toString()).apply {
                 put("pendingServerSync", pendingSync)
             }
-            appContext.getSharedPreferences("std10_student_backup_prefs", Context.MODE_PRIVATE)
+            val editor = appContext.getSharedPreferences("std10_student_backup_prefs", Context.MODE_PRIVATE)
                 .edit()
                 .putString(studentId, copy.toString())
-                .apply()
+            if (markActive) {
+                editor.putString("active_student_id", studentId)
+            }
+            editor.apply()
         }
     }
 
@@ -236,6 +243,31 @@ class NativeFirebaseBridge(
                 .putString(studentId, existing.toString())
                 .apply()
         }
+    }
+
+    @JavascriptInterface
+    fun setActiveStudentMobile(mobileOrId: String) {
+        runCatching {
+            val prefs = appContext.getSharedPreferences("std10_student_backup_prefs", Context.MODE_PRIVATE)
+            val clean = mobileOrId.trim()
+            if (clean.isBlank()) {
+                prefs.edit().remove("active_student_id").apply()
+                return
+            }
+            val digits = clean.replace(Regex("\\D"), "").takeLast(10)
+            val studentId = if (Regex("^[0-9]{10}$").matches(digits)) "mob_$digits" else clean
+            prefs.edit().putString("active_student_id", studentId).apply()
+        }
+    }
+
+    @JavascriptInterface
+    fun getActiveStudentSnapshot(): String {
+        return runCatching {
+            val prefs = appContext.getSharedPreferences("std10_student_backup_prefs", Context.MODE_PRIVATE)
+            val activeId = prefs.getString("active_student_id", null).orEmpty().trim()
+            if (activeId.isBlank()) return "null"
+            prefs.getString(activeId, null) ?: "null"
+        }.getOrDefault("null")
     }
 
     private fun saveAdminListBackup(key: String, jsonArrayString: String) {
@@ -1433,6 +1465,42 @@ class NativeFirebaseBridge(
                     }
                 }
 
+                if (canSyncStudent) {
+                    runCatching {
+                        val unlockedCodeSub = resObj.optString("subjectId", "all")
+                        val existingBackup = loadLocalStudentBackup(studentId) ?: buildNewStudentJson(
+                            studentId = studentId,
+                            fullName = cleanName.take(60),
+                            cleanMobile = cleanMobile,
+                            deviceId = getOrCreateDeviceId(),
+                            deviceName = getDeviceModelName()
+                        )
+                        val unlockedSet = linkedSetOf<String>()
+                        val existingArr = existingBackup.optJSONArray("unlockedSubjects")
+                        if (existingArr != null) {
+                            for (i in 0 until existingArr.length()) {
+                                val s = existingArr.optString(i).trim()
+                                if (s.isNotBlank()) unlockedSet.add(s)
+                            }
+                        }
+                        if (unlockedCodeSub == "all") {
+                            unlockedSet.add("all")
+                            unlockedSet.addAll(listOf("maths", "science", "social_science"))
+                        } else if (unlockedCodeSub.isNotBlank()) {
+                            unlockedSet.add(unlockedCodeSub)
+                        }
+                        val hasFull = unlockedSet.contains("all") ||
+                            listOf("maths", "science", "social_science").all { unlockedSet.contains(it) }
+                        val nextArr = JSONArray().apply {
+                            unlockedSet.take(10).forEach { put(it) }
+                        }
+                        existingBackup.put("hasQuizAccess", hasFull)
+                        existingBackup.put("redeemedCode", cleanCode)
+                        existingBackup.put("unlockedSubjects", nextArr)
+                        saveLocalStudentBackup(existingBackup, pendingSync = false, markActive = true)
+                    }
+                }
+
                 resolveCallSuccess(callId, resObj.toString())
             } catch (e: Exception) {
                 val msg = e.message.orEmpty()
@@ -2009,6 +2077,101 @@ class NativeFirebaseBridge(
             } catch (e: Exception) {
                 handleFirestoreError(e, OperationType.CREATE, "access_codes")
                 resolveCallError(callId, e.localizedMessage ?: "Code generation failed")
+            }
+        }
+    }
+
+    @JavascriptInterface
+    fun generateDirectCodeForMobile(callId: String, payloadJson: String) {
+        val localDb = db ?: run {
+            resolveCallError(callId, "Native Firebase is not initialized.")
+            return
+        }
+        activity.lifecycleScope.launch(Dispatchers.IO) {
+            if (!isCurrentUserAdmin()) {
+                resolveCallError(callId, "Authentication session not ready.")
+                return@launch
+            }
+            try {
+                val obj = JSONObject(payloadJson)
+                val cleanMobile = obj.getString("mobileNumber").replace(Regex("\\D"), "").takeLast(10)
+                if (!Regex("^[0-9]{10}$").matches(cleanMobile)) {
+                    resolveCallError(callId, "INVALID_MOBILE")
+                    return@launch
+                }
+                val rawName = obj.optString("userName", "").trim().take(60)
+                val rawSub = obj.optString("subjectId", "all").trim()
+                val subjectId = if (rawSub in listOf("maths", "science", "social_science", "all")) rawSub else "all"
+                val amountRupees = if (subjectId == "all") 49 else 24
+                val subjectLabel = when (subjectId) {
+                    "maths" -> "ગણિત (Maths)"
+                    "science" -> "વિજ્ઞાન (Science)"
+                    "social_science" -> "સામાજિક વિજ્ઞાન (SS)"
+                    else -> "બધા વિષયો (All)"
+                }
+                val batchLabel = "$subjectLabel • ₹$amountRupees".take(60)
+
+                val effectiveName = if (rawName.isNotBlank()) {
+                    rawName
+                } else {
+                    val stSnap = runCatching {
+                        withTimeoutOrNull(2_500L) {
+                            localDb.collection("students").document("mob_$cleanMobile").get().awaitResult()
+                        }
+                    }.getOrNull()
+                    stSnap?.getString("fullName")?.trim()?.take(60)?.ifBlank { "Student" } ?: "Student"
+                }
+
+                val chosenCode = localDb.runTransaction { tx ->
+                    var uniqueCode = ""
+                    for (attempt in 0 until 10) {
+                        val candidate = generate8CharCode()
+                        val candSnap = tx.get(localDb.collection("access_codes").document(candidate))
+                        if (!candSnap.exists()) {
+                            uniqueCode = candidate
+                            break
+                        }
+                    }
+                    if (uniqueCode.isEmpty()) {
+                        throw IllegalStateException("Failed to generate unique code")
+                    }
+                    val codeRef = localDb.collection("access_codes").document(uniqueCode)
+                    tx.set(
+                        codeRef,
+                        mapOf(
+                            "code" to uniqueCode,
+                            "requestId" to "ADMIN-DIRECT",
+                            "userName" to effectiveName,
+                            "mobileNumber" to cleanMobile,
+                            "amountRupees" to amountRupees,
+                            "batchName" to batchLabel,
+                            "status" to "unused",
+                            "isUsed" to false,
+                            "usedAt" to null,
+                            "usedBy" to null,
+                            "usedByUserId" to "",
+                            "usedByMobile" to "",
+                            "usedByName" to "",
+                            "source" to "upi_payment",
+                            "subjectId" to subjectId,
+                            "createdAt" to FieldValue.serverTimestamp(),
+                            "updatedAt" to FieldValue.serverTimestamp(),
+                        )
+                    )
+                    uniqueCode
+                }.awaitResult()
+
+                val resJson = JSONObject().apply {
+                    put("code", chosenCode)
+                    put("mobileNumber", cleanMobile)
+                    put("userName", effectiveName)
+                    put("subjectId", subjectId)
+                    put("amountRupees", amountRupees)
+                }
+                resolveCallSuccess(callId, resJson.toString())
+            } catch (e: Exception) {
+                handleFirestoreError(e, OperationType.CREATE, "access_codes")
+                resolveCallError(callId, e.localizedMessage ?: "Direct code generation failed")
             }
         }
     }

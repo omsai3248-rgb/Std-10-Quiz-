@@ -28,11 +28,13 @@ import { auth, db, googleProvider, storage } from '../firebase';
 import {
   forceRefreshNativeAdminListeners,
   getActiveFirebaseSummary,
+  getNativeActiveStudentSnapshot,
   getNativeCurrentAuthUser,
   hasNativeFirebaseBridge,
   invokeNativeBridgeCall,
   notifyNativeAuthUser,
   resetNativeAdminSessionDeviceCache,
+  setNativeActiveStudentMobile,
   subscribeNativeAdminSessionDevice,
   subscribeNativeAllCodes,
   subscribeNativeAllPayments,
@@ -86,7 +88,9 @@ export {
   forceRefreshNativeAdminListeners,
   getActiveFirebaseSummary,
   getCurrentDeviceIdentity,
+  getNativeActiveStudentSnapshot,
   hasNativeFirebaseBridge,
+  setNativeActiveStudentMobile,
   type AppAuthUser,
 };
 
@@ -1291,12 +1295,26 @@ export async function redeemAccessCodePublic(params: {
           const hasFull =
             unlockedSet.has('all') || ALL_SUBJECT_IDS.every((s) => unlockedSet.has(s));
 
+          const nextUnlocked = Array.from(unlockedSet).slice(0, 10);
           tx.update(studentRef, {
             hasQuizAccess: hasFull,
             redeemedCode: cleanCode,
-            unlockedSubjects: Array.from(unlockedSet).slice(0, 10),
+            unlockedSubjects: nextUnlocked,
             updatedAt: serverTimestamp(),
           });
+
+          const existingBackup = loadWebStudentBackup(studentId);
+          if (existingBackup) {
+            saveWebStudentBackup(
+              {
+                ...existingBackup,
+                hasQuizAccess: hasFull,
+                redeemedCode: cleanCode,
+                unlockedSubjects: nextUnlocked,
+              },
+              false
+            );
+          }
         }
 
         return {
@@ -1398,6 +1416,109 @@ export async function generateBulkAccessCodes(
       await batch.commit();
     }
     return generated;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, COLLECTION_ACCESS_CODES);
+  }
+}
+
+export interface DirectMobileCodeResult {
+  code: string;
+  mobileNumber: string;
+  userName: string;
+  subjectId: string;
+  amountRupees: number;
+}
+
+export async function generateDirectCodeForMobile(params: {
+  mobileNumber: string;
+  userName?: string;
+  subjectId?: string;
+}): Promise<DirectMobileCodeResult> {
+  const cleanMobile = params.mobileNumber.replace(/\D/g, '').slice(-10);
+  if (!/^[0-9]{10}$/.test(cleanMobile)) {
+    throw new Error('INVALID_MOBILE');
+  }
+  const rawName = (params.userName ?? '').trim().slice(0, 60);
+  const normalizedSubject = ALL_SUBJECT_IDS.includes(params.subjectId as SubjectId)
+    ? (params.subjectId as SubjectId)
+    : 'all';
+
+  if (hasNativeFirebaseBridge()) {
+    return invokeNativeBridgeCall<DirectMobileCodeResult>((callId) => {
+      window.AndroidFirebaseBridge?.generateDirectCodeForMobile?.(
+        callId,
+        JSON.stringify({
+          mobileNumber: cleanMobile,
+          userName: rawName,
+          subjectId: normalizedSubject,
+        })
+      );
+    });
+  }
+
+  requireUserId();
+  const amountRupees = getFixedPlanPrice(normalizedSubject);
+  const batchLabel = `${getSubjectDisplayName(normalizedSubject)} • ₹${amountRupees}`.slice(0, 60);
+
+  let effectiveName = rawName;
+  if (!effectiveName) {
+    try {
+      const stSnap = await getDoc(doc(db, COLLECTION_STUDENTS, `mob_${cleanMobile}`));
+      if (stSnap.exists()) {
+        effectiveName = String(stSnap.data().fullName ?? '').trim().slice(0, 60);
+      }
+    } catch {
+      // Ignore optional name lookup errors
+    }
+  }
+  if (!effectiveName) effectiveName = 'Student';
+
+  try {
+    const chosenCode = await runTransaction(db, async (tx) => {
+      let chosen = '';
+      for (let attempt = 0; attempt < 10; attempt++) {
+        const candidate = generateUnique8CharCode();
+        const candRef = doc(db, COLLECTION_ACCESS_CODES, candidate);
+        const candSnap = await tx.get(candRef);
+        if (!candSnap.exists()) {
+          chosen = candidate;
+          break;
+        }
+      }
+      if (!chosen) {
+        throw new Error('Failed to generate unique 8-character code.');
+      }
+
+      const codeRef = doc(db, COLLECTION_ACCESS_CODES, chosen);
+      tx.set(codeRef, {
+        code: chosen,
+        requestId: 'ADMIN-DIRECT',
+        userName: effectiveName,
+        mobileNumber: cleanMobile,
+        amountRupees,
+        batchName: batchLabel,
+        status: 'unused',
+        isUsed: false,
+        usedAt: null,
+        usedBy: null,
+        usedByUserId: '',
+        usedByMobile: '',
+        usedByName: '',
+        source: 'upi_payment',
+        subjectId: normalizedSubject,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      return chosen;
+    });
+
+    return {
+      code: chosenCode,
+      mobileNumber: cleanMobile,
+      userName: effectiveName,
+      subjectId: normalizedSubject,
+      amountRupees,
+    };
   } catch (error) {
     handleFirestoreError(error, OperationType.CREATE, COLLECTION_ACCESS_CODES);
   }

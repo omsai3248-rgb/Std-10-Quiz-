@@ -262,6 +262,50 @@ export function buildStudentProofWhatsAppHref(params: {
   return `https://wa.me/91${ADMIN_PHONE_TEN_DIGITS}?text=${encodeURIComponent(lines.join('\n'))}`;
 }
 
+export function buildDirectCodeWhatsAppHref(
+  params: {
+    code: string;
+    mobileNumber: string;
+    userName?: string;
+    subjectId: string;
+    amountRupees?: number;
+  },
+  lang: 'gu' | 'en' = 'gu'
+): string {
+  const subjectName = getSubjectDisplayName(params.subjectId, lang);
+  const displayName = (params.userName ?? '').trim();
+  const cleanMob = params.mobileNumber.replace(/\D/g, '').slice(-10);
+  const greetingGu = displayName ? `નમસ્તે ${displayName},` : 'નમસ્તે,';
+  const greetingEn = displayName ? `Hello ${displayName},` : 'Hello,';
+  const amt = params.amountRupees ?? (params.subjectId === 'all' ? 49 : 24);
+
+  const lines =
+    lang === 'en'
+      ? [
+          greetingEn,
+          `Your Std 10 Quiz Access Code is ready ✅`,
+          '',
+          `🔑 Access Code: *${params.code}*`,
+          `• Subject: ${subjectName} (₹${amt})`,
+          `• Mobile: +91 ${cleanMob}`,
+          '',
+          'Open the app, go to "Use Code", and enter this 8-character code to unlock your quizzes.',
+        ]
+      : [
+          greetingGu,
+          `તમારો ધોરણ ૧૦ ક્વિઝનો એક્સેસ કોડ તૈયાર છે ✅`,
+          '',
+          `🔑 એક્સેસ કોડ: *${params.code}*`,
+          `• વિષય: ${subjectName} (₹${amt})`,
+          `• મોબાઇલ: +91 ${cleanMob}`,
+          '',
+          'એપ ખોલી "કોડ વાપરો (Use Code)" માં જઈને આ 8-અક્ષરનો કોડ નાખીને તરત અનલૉક કરો.',
+        ];
+
+  const phone = formatIndianWhatsAppPhone(cleanMob);
+  return `https://wa.me/${phone}?text=${encodeURIComponent(lines.join('\n'))}`;
+}
+
 export function launchWhatsAppPaymentWithScreenshot(params: {
   studentName: string;
   mobileNumber: string;

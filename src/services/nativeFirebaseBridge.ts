@@ -46,6 +46,9 @@ interface AndroidFirebaseBridgeApi {
   deletePaymentRequest?: (callId: string, payloadJson: string) => void;
   deleteAccessCode?: (callId: string, payloadJson: string) => void;
   deleteStudent?: (callId: string, payloadJson: string) => void;
+  generateDirectCodeForMobile?: (callId: string, payloadJson: string) => void;
+  setActiveStudentMobile?: (mobileOrId: string) => void;
+  getActiveStudentSnapshot?: () => string;
   claimAdminSessionDevice?: (callId: string, payloadJson: string) => void;
   verifyActiveSessionNow?: () => void;
 }
@@ -72,6 +75,28 @@ export function hasNativeFirebaseBridge(): boolean {
     typeof window !== 'undefined' &&
     Boolean(window.AndroidFirebaseBridge?.hasNativeFirebase?.())
   );
+}
+
+export function getNativeActiveStudentSnapshot(): StudentProfile | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.AndroidFirebaseBridge?.getActiveStudentSnapshot?.();
+    if (!raw || raw === 'null') return null;
+    const parsed = JSON.parse(raw) as StudentProfile | null;
+    if (!parsed || typeof parsed !== 'object' || !parsed.mobileNumber) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+export function setNativeActiveStudentMobile(mobileOrId: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.AndroidFirebaseBridge?.setActiveStudentMobile?.(mobileOrId);
+  } catch {
+    // Ignore bridge error
+  }
 }
 
 export function getActiveFirebaseSummary(): { projectId: string; databaseId: string } {

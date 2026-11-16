@@ -177,6 +177,15 @@ export interface Translations {
   deleteConfirmTitle: string;
   deleteConfirmDesc: string;
   deleteSuccessMsg: string;
+  directCodeSectionTitle: string;
+  directCodeSectionSubtitle: string;
+  directCodeMobilePlaceholder: string;
+  directCodeNamePlaceholder: string;
+  directCodeGenerateBtn: string;
+  directCodeGeneratingBtn: string;
+  directCodeReadyLabel: string;
+  directCodeSendWhatsAppBtn: string;
+  directCodeStudentMatched: string;
 
   // Validation & Errors
   errInvalidName: string;
@@ -366,6 +375,15 @@ const GU: Translations = {
   deleteConfirmTitle: 'એડમિન ડિલીટ કન્ફર્મેશન',
   deleteConfirmDesc: 'આ વિગત કાયમ માટે ડિલીટ કરવા માટે એડમિન પાસવર્ડ દાખલ કરો:',
   deleteSuccessMsg: 'સફળતાપૂર્વક ડિલીટ થઈ ગયું.',
+  directCodeSectionTitle: 'મોબાઇલ નંબર પરથી ડાયરેક્ટ કોડ બનાવો અને WhatsApp મોકલો',
+  directCodeSectionSubtitle: 'વિદ્યાર્થીનો ૧૦ અંકનો નંબર નાખી કોડ બનાવો અને તરત WhatsApp પર મોકલો.',
+  directCodeMobilePlaceholder: 'મોબાઇલ નંબર (દા.ત. 9876543210)',
+  directCodeNamePlaceholder: 'વિદ્યાર્થીનું નામ (વૈકલ્પિક)',
+  directCodeGenerateBtn: 'કોડ બનાવો',
+  directCodeGeneratingBtn: 'કોડ બની રહ્યો છે...',
+  directCodeReadyLabel: 'કોડ તૈયાર છે (WhatsApp મોકલો):',
+  directCodeSendWhatsAppBtn: 'WhatsApp પર કોડ મોકલો',
+  directCodeStudentMatched: 'રજિસ્ટર્ડ વિદ્યાર્થી:',
 
   errInvalidName: 'કૃપા કરીને માન્ય પૂરું નામ લખો.',
   errInvalidMobile: 'કૃપા કરીને ૧૦ અંકનો માન્ય મોબાઇલ નંબર લખો.',
@@ -555,6 +573,15 @@ const EN: Translations = {
   deleteConfirmTitle: 'Confirm Admin Delete',
   deleteConfirmDesc: 'Enter Admin Password to permanently delete this record:',
   deleteSuccessMsg: 'Deleted successfully.',
+  directCodeSectionTitle: 'Generate Direct Code by Mobile & Send on WhatsApp',
+  directCodeSectionSubtitle: 'Enter a 10-digit mobile number to create a code and send it straight via WhatsApp.',
+  directCodeMobilePlaceholder: 'Mobile Number (e.g. 9876543210)',
+  directCodeNamePlaceholder: 'Student Name (optional)',
+  directCodeGenerateBtn: 'Generate Code',
+  directCodeGeneratingBtn: 'Generating...',
+  directCodeReadyLabel: 'Code Ready (Send via WhatsApp):',
+  directCodeSendWhatsAppBtn: 'Send Code on WhatsApp',
+  directCodeStudentMatched: 'Matched Student:',
 
   errInvalidName: 'Please enter a valid full name.',
   errInvalidMobile: 'Please enter a valid 10-digit mobile number.',

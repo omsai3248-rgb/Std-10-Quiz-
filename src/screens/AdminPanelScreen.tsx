@@ -23,7 +23,7 @@ import {
   X,
 } from 'lucide-react';
 import { useTranslation } from '../i18n/translations';
-import { ADMIN_PASSCODE } from '../services/quizRepository';
+import { ADMIN_PASSCODE, type DirectMobileCodeResult } from '../services/quizRepository';
 import {
   displayPaymentTransactionRef,
   getSubjectDisplayName,
@@ -74,6 +74,11 @@ interface AdminPanelScreenProps {
   onClearAlerts: () => void;
   onSignOut: () => void;
   onGenerateBulkCodes: (count: number, batchName: string, subjectId: string) => void;
+  onGenerateDirectCode: (params: {
+    mobileNumber: string;
+    userName?: string;
+    subjectId: string;
+  }) => Promise<DirectMobileCodeResult>;
   onApprovePayment: (req: PaymentRequest, adminNote: string, subjectId: string) => void;
   onRejectPayment: (req: PaymentRequest, reason: string) => void;
   onToggleStudentAccess: (student: StudentProfile, grantAccess: boolean) => void;
@@ -116,6 +121,7 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
   onClearAlerts,
   onSignOut,
   onGenerateBulkCodes,
+  onGenerateDirectCode,
   onApprovePayment,
   onRejectPayment,
   onToggleStudentAccess,
@@ -381,10 +387,12 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
         {selectedTab === 'requests' && (
           <AdminRequestsTab
             payments={payments}
+            students={students}
             isBusy={isBusy}
             onZoomScreenshot={setZoomedScreenshotUrl}
             onApprove={onApprovePayment}
             onReject={onRejectPayment}
+            onGenerateDirectCode={onGenerateDirectCode}
             onDeleteRequest={(req) =>
               openDeleteModal({
                 kind: 'payment',
@@ -400,9 +408,11 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
         {selectedTab === 'all_codes' && (
           <AdminAllCodesTab
             accessCodes={accessCodes}
+            students={students}
             lastGeneratedBatch={lastGeneratedBatch}
             isBusy={isBusy}
             onGenerateBulkCodes={onGenerateBulkCodes}
+            onGenerateDirectCode={onGenerateDirectCode}
             onDeleteCode={(item) =>
               openDeleteModal({
                 kind: 'code',

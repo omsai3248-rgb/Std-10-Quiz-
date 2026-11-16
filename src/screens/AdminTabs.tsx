@@ -7,6 +7,7 @@ import {
   FileText,
   Filter,
   Image as ImageIcon,
+  KeyRound,
   PlusCircle,
   Search,
   Send,
@@ -19,9 +20,11 @@ import {
   X,
 } from 'lucide-react';
 import { useTranslation } from '../i18n/translations';
+import type { DirectMobileCodeResult } from '../services/quizRepository';
 import {
   ALL_SUBJECT_IDS,
   displayPaymentTransactionRef,
+  getFixedPlanPrice,
   getSubjectDisplayName,
   resolveCodeSubjectId,
   resolvePaymentSubjectId,
@@ -31,14 +34,202 @@ import {
   type SubjectId,
 } from '../types/models';
 import {
+  buildDirectCodeWhatsAppHref,
   buildPaymentApprovalWhatsAppHref,
   exportAccessCodesToCsv,
   formatTimestampLabel,
   launchExternalUrl,
+  normalizeIndianMobileInput,
   resolvePaymentImageSrc,
 } from '../utils/imageUtils';
 
 const SUBJECT_LIST = ['all', 'maths', 'science', 'social_science'] as const;
+
+const DirectMobileCodeCard: React.FC<{
+  students: StudentProfile[];
+  isBusy: boolean;
+  onGenerateDirectCode: (params: {
+    mobileNumber: string;
+    userName?: string;
+    subjectId: string;
+  }) => Promise<DirectMobileCodeResult>;
+  onNotify?: (message: string) => void;
+}> = ({ students, isBusy, onGenerateDirectCode, onNotify }) => {
+  const { lang, t } = useTranslation();
+  const [mobileInput, setMobileInput] = useState('');
+  const [nameInput, setNameInput] = useState('');
+  const [subjectId, setSubjectId] = useState<string>('all');
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [generatedResult, setGeneratedResult] = useState<DirectMobileCodeResult | null>(null);
+
+  const cleanMobile = normalizeIndianMobileInput(mobileInput);
+  const matchedStudent = useMemo(() => {
+    if (cleanMobile.length !== 10) return null;
+    return (
+      students.find((s) => s.mobileNumber.replace(/\D/g, '').slice(-10) === cleanMobile) ?? null
+    );
+  }, [cleanMobile, students]);
+
+  const handleGenerate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (cleanMobile.length !== 10) {
+      onNotify?.(t.errInvalidMobile);
+      return;
+    }
+    setIsGenerating(true);
+    try {
+      const effectiveName = nameInput.trim() || matchedStudent?.fullName || '';
+      const res = await onGenerateDirectCode({
+        mobileNumber: cleanMobile,
+        userName: effectiveName,
+        subjectId,
+      });
+      setGeneratedResult(res);
+    } catch {
+      // Banner handles error feedback
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  return (
+    <div className="rounded-2xl bg-white dark:bg-[#1E293B] border-2 border-[#047857]/35 dark:border-[#6EE7B7]/35 p-4 space-y-3 shadow-sm">
+      <div className="flex items-start gap-2.5">
+        <div className="h-10 w-10 rounded-xl bg-[#D1FAE5] dark:bg-[#064E3B] text-[#047857] dark:text-[#6EE7B7] flex items-center justify-center shrink-0">
+          <KeyRound className="h-5 w-5" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <h3 className="text-sm sm:text-base font-extrabold text-[#0F172A] dark:text-[#F8FAFC]">
+            {t.directCodeSectionTitle}
+          </h3>
+          <p className="text-xs text-[#475569] dark:text-[#94A3B8]">
+            {t.directCodeSectionSubtitle}
+          </p>
+        </div>
+      </div>
+
+      <form onSubmit={(e) => void handleGenerate(e)} className="space-y-2.5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+          <div className="flex items-center h-12 rounded-xl border border-[#CBD5E1] dark:border-[#334155] bg-[#FAF9F5] dark:bg-[#0F172A] px-3 focus-within:border-[#1E3A8A]">
+            <span className="text-xs font-extrabold text-[#475569] dark:text-[#94A3B8] mr-2 shrink-0">
+              +91
+            </span>
+            <input
+              type="tel"
+              inputMode="numeric"
+              maxLength={14}
+              value={mobileInput}
+              onChange={(e) => {
+                setMobileInput(normalizeIndianMobileInput(e.target.value));
+                setGeneratedResult(null);
+              }}
+              placeholder={t.directCodeMobilePlaceholder}
+              className="w-full bg-transparent text-sm font-bold tracking-wide outline-none"
+            />
+          </div>
+
+          <input
+            type="text"
+            maxLength={60}
+            value={nameInput}
+            onChange={(e) => setNameInput(e.target.value.slice(0, 60))}
+            placeholder={
+              matchedStudent?.fullName
+                ? `${matchedStudent.fullName}`
+                : t.directCodeNamePlaceholder
+            }
+            className="h-12 rounded-xl border border-[#CBD5E1] dark:border-[#334155] bg-[#FAF9F5] dark:bg-[#0F172A] px-3.5 text-sm font-semibold outline-none focus:border-[#1E3A8A]"
+          />
+        </div>
+
+        {matchedStudent && (
+          <div className="rounded-xl bg-[#DBEAFE] dark:bg-[#1E3A5F] text-[#1E3A8A] dark:text-[#DBEAFE] px-3 py-2 text-xs font-bold flex items-center justify-between gap-2">
+            <span className="truncate">
+              {t.directCodeStudentMatched} {matchedStudent.fullName}
+            </span>
+            <span className="shrink-0 tabular-nums">+91 {matchedStudent.mobileNumber}</span>
+          </div>
+        )}
+
+        <div className="flex flex-wrap gap-1.5">
+          {SUBJECT_LIST.map((subId) => {
+            const active = subjectId === subId;
+            const price = getFixedPlanPrice(subId);
+            return (
+              <button
+                key={subId}
+                type="button"
+                onClick={() => setSubjectId(subId)}
+                className={`min-h-[40px] rounded-xl px-3 py-1.5 text-xs font-bold border transition-colors cursor-pointer ${
+                  active
+                    ? 'bg-[#1E3A8A] text-white border-[#1E3A8A]'
+                    : 'bg-[#FAF9F5] dark:bg-[#0F172A] border-[#CBD5E1] dark:border-[#334155]'
+                }`}
+              >
+                {getSubjectDisplayName(subId, lang)} • ₹{price}
+              </button>
+            );
+          })}
+        </div>
+
+        <button
+          type="submit"
+          disabled={isBusy || isGenerating || cleanMobile.length !== 10}
+          className="w-full h-12 rounded-xl bg-[#1E3A8A] hover:bg-[#172554] text-white text-sm font-extrabold flex items-center justify-center gap-2 transition-colors disabled:opacity-50 cursor-pointer"
+        >
+          <KeyRound className="h-4 w-4" />
+          <span>{isGenerating ? t.directCodeGeneratingBtn : t.directCodeGenerateBtn}</span>
+        </button>
+      </form>
+
+      {generatedResult && (
+        <div className="rounded-2xl bg-[#D1FAE5] dark:bg-[#064E3B] p-3.5 space-y-2.5 text-[#064E3B] dark:text-[#D1FAE5]">
+          <div className="flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <p className="text-[11px] font-bold opacity-85">{t.directCodeReadyLabel}</p>
+              <p className="text-2xl font-extrabold tracking-widest font-mono">
+                {generatedResult.code}
+              </p>
+              <p className="text-xs font-semibold truncate">
+                {generatedResult.userName} • +91 {generatedResult.mobileNumber} •{' '}
+                {getSubjectDisplayName(generatedResult.subjectId, lang)} (₹
+                {generatedResult.amountRupees})
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(generatedResult.code);
+                  onNotify?.(`${t.payUpiCopied}: ${generatedResult.code}`);
+                } catch {
+                  onNotify?.(generatedResult.code);
+                }
+              }}
+              className="h-11 px-3.5 rounded-xl bg-white/85 dark:bg-black/30 text-xs font-extrabold flex items-center gap-1.5 shrink-0 cursor-pointer"
+            >
+              <Copy className="h-4 w-4" />
+              <span>{t.copyCode}</span>
+            </button>
+          </div>
+
+          <button
+            type="button"
+            onClick={() =>
+              launchExternalUrl(buildDirectCodeWhatsAppHref(generatedResult, lang))
+            }
+            className="w-full h-12 rounded-xl bg-[#047857] hover:bg-[#065F46] text-white text-sm font-extrabold flex items-center justify-center gap-2 transition-colors cursor-pointer"
+          >
+            <Send className="h-4 w-4" />
+            <span>
+              {t.directCodeSendWhatsAppBtn} (+91 {generatedResult.mobileNumber})
+            </span>
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
 
 const EmptyStateCard: React.FC<{ message: string }> = ({ message }) => (
   <div className="rounded-2xl bg-[#EFF4FA] dark:bg-[#1E293B] p-8 flex flex-col items-center justify-center gap-2 text-center border border-[#E2E8F0] dark:border-[#334155]">
@@ -57,15 +248,32 @@ const DetailRow: React.FC<{ label: string; value: string }> = ({ label, value })
 /* --- Tab 1: Live Payment Requests --- */
 export const AdminRequestsTab: React.FC<{
   payments: PaymentRequest[];
+  students: StudentProfile[];
   isBusy: boolean;
   onZoomScreenshot: (url: string) => void;
   onApprove: (req: PaymentRequest, adminNote: string, subjectId: string) => void;
   onReject: (req: PaymentRequest, reason: string) => void;
+  onGenerateDirectCode: (params: {
+    mobileNumber: string;
+    userName?: string;
+    subjectId: string;
+  }) => Promise<DirectMobileCodeResult>;
   onDeleteRequest: (req: PaymentRequest) => void;
   onNotify?: (message: string) => void;
-}> = ({ payments, isBusy, onZoomScreenshot, onApprove, onReject, onDeleteRequest, onNotify }) => {
+}> = ({
+  payments,
+  students,
+  isBusy,
+  onZoomScreenshot,
+  onApprove,
+  onReject,
+  onGenerateDirectCode,
+  onDeleteRequest,
+  onNotify,
+}) => {
   const { lang, t } = useTranslation();
   const [statusFilter, setStatusFilter] = useState<'pending' | 'approved' | 'rejected' | 'all'>('pending');
+  const [showQuickCodeGen, setShowQuickCodeGen] = useState(false);
 
   const pendingPayments = useMemo(() => payments.filter((p) => p.status === 'pending'), [payments]);
   const approvedPayments = useMemo(() => payments.filter((p) => p.status === 'approved'), [payments]);
@@ -82,27 +290,47 @@ export const AdminRequestsTab: React.FC<{
 
   return (
     <div className="p-3 sm:p-4 space-y-4">
-      <div className="flex flex-wrap gap-2">
-        {[
-          { id: 'pending' as const, label: `${t.pendingLabel} (${pendingPayments.length})` },
-          { id: 'approved' as const, label: `${t.approvedLabel} (${approvedPayments.length})` },
-          { id: 'rejected' as const, label: `${t.rejectedLabel} (${rejectedPayments.length})` },
-          { id: 'all' as const, label: `${t.allLabel} (${payments.length})` },
-        ].map((chip) => (
-          <button
-            key={chip.id}
-            type="button"
-            onClick={() => setStatusFilter(chip.id)}
-            className={`rounded-xl px-3.5 py-2 text-xs font-bold border transition-colors cursor-pointer ${
-              statusFilter === chip.id
-                ? 'bg-[#1E3A8A] text-white border-[#1E3A8A]'
-                : 'bg-white dark:bg-[#1E293B] border-[#CBD5E1] dark:border-[#334155]'
-            }`}
-          >
-            {chip.label}
-          </button>
-        ))}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap gap-2">
+          {[
+            { id: 'pending' as const, label: `${t.pendingLabel} (${pendingPayments.length})` },
+            { id: 'approved' as const, label: `${t.approvedLabel} (${approvedPayments.length})` },
+            { id: 'rejected' as const, label: `${t.rejectedLabel} (${rejectedPayments.length})` },
+            { id: 'all' as const, label: `${t.allLabel} (${payments.length})` },
+          ].map((chip) => (
+            <button
+              key={chip.id}
+              type="button"
+              onClick={() => setStatusFilter(chip.id)}
+              className={`min-h-[40px] rounded-xl px-3.5 py-2 text-xs font-bold border transition-colors cursor-pointer ${
+                statusFilter === chip.id
+                  ? 'bg-[#1E3A8A] text-white border-[#1E3A8A]'
+                  : 'bg-white dark:bg-[#1E293B] border-[#CBD5E1] dark:border-[#334155]'
+              }`}
+            >
+              {chip.label}
+            </button>
+          ))}
+        </div>
+
+        <button
+          type="button"
+          onClick={() => setShowQuickCodeGen((prev) => !prev)}
+          className="min-h-[40px] rounded-xl bg-[#047857] hover:bg-[#065F46] text-white px-3.5 py-2 text-xs font-extrabold flex items-center gap-1.5 cursor-pointer"
+        >
+          <KeyRound className="h-3.5 w-3.5" />
+          <span>{t.directCodeGenerateBtn} (WhatsApp)</span>
+        </button>
       </div>
+
+      {showQuickCodeGen && (
+        <DirectMobileCodeCard
+          students={students}
+          isBusy={isBusy}
+          onGenerateDirectCode={onGenerateDirectCode}
+          onNotify={onNotify}
+        />
+      )}
 
       {list.length === 0 ? (
         <EmptyStateCard message={t.noRequestsFound} />
@@ -341,16 +569,24 @@ const PaymentRequestCard: React.FC<{
 /* --- Tab 2: Permanent All Codes Tab --- */
 export const AdminAllCodesTab: React.FC<{
   accessCodes: AccessCode[];
+  students: StudentProfile[];
   lastGeneratedBatch: string[];
   isBusy: boolean;
   onGenerateBulkCodes: (count: number, batchName: string, subjectId: string) => void;
+  onGenerateDirectCode: (params: {
+    mobileNumber: string;
+    userName?: string;
+    subjectId: string;
+  }) => Promise<DirectMobileCodeResult>;
   onDeleteCode: (item: AccessCode) => void;
   onNotify?: (message: string) => void;
 }> = ({
   accessCodes,
+  students,
   lastGeneratedBatch,
   isBusy,
   onGenerateBulkCodes,
+  onGenerateDirectCode,
   onDeleteCode,
   onNotify,
 }) => {
@@ -399,6 +635,13 @@ export const AdminAllCodesTab: React.FC<{
 
   return (
     <div className="p-3 sm:p-4 space-y-4 max-w-5xl mx-auto">
+      <DirectMobileCodeCard
+        students={students}
+        isBusy={isBusy}
+        onGenerateDirectCode={onGenerateDirectCode}
+        onNotify={onNotify}
+      />
+
       <div className="rounded-2xl bg-[#DBEAFE] dark:bg-[#1E3A5F] p-3.5 flex flex-wrap items-center justify-between gap-2 text-[#1E3A8A] dark:text-[#DBEAFE]">
         <div className="flex items-center gap-2 text-xs font-bold">
           <ShieldCheck className="h-4.5 w-4.5 shrink-0" />
@@ -614,6 +857,33 @@ export const AdminAllCodesTab: React.FC<{
                     {t.buyerHeader}: <span className="font-bold">{item.userName}</span> (+91{' '}
                     {item.mobileNumber})
                   </p>
+                )}
+
+                {!isUsed && /^[0-9]{10}$/.test(item.mobileNumber.replace(/\D/g, '').slice(-10)) && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      launchExternalUrl(
+                        buildDirectCodeWhatsAppHref(
+                          {
+                            code: item.code,
+                            mobileNumber: item.mobileNumber,
+                            userName: item.userName,
+                            subjectId: resolvedSub,
+                            amountRupees: item.amountRupees || getFixedPlanPrice(resolvedSub),
+                          },
+                          lang
+                        )
+                      )
+                    }
+                    className="w-full h-10 rounded-xl bg-[#047857] hover:bg-[#065F46] text-white text-xs font-extrabold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <Send className="h-3.5 w-3.5" />
+                    <span>
+                      {t.directCodeSendWhatsAppBtn} (+91{' '}
+                      {item.mobileNumber.replace(/\D/g, '').slice(-10)})
+                    </span>
+                  </button>
                 )}
 
                 {isUsed && (

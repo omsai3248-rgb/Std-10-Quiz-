@@ -270,7 +270,7 @@ export const QuizPlayScreen: React.FC<QuizPlayScreenProps> = ({
 
             {/* Question Card */}
             <div className="rounded-2xl bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] shadow-sm p-5 space-y-3">
-              <div className="text-base sm:text-lg font-semibold leading-[2.1] break-words overflow-x-auto whitespace-pre-line text-[#0F172A] dark:text-[#F8FAFC] py-0.5">
+              <div className="text-base sm:text-lg font-semibold leading-[2.15] whitespace-pre-line text-[#0F172A] dark:text-[#F8FAFC] py-1">
                 <MathRichText text={question.questionText} />
               </div>
               {question.graphPattern && (
@@ -312,7 +312,7 @@ export const QuizPlayScreen: React.FC<QuizPlayScreenProps> = ({
                     type="button"
                     disabled={isAnswered}
                     onClick={() => handleSelectOption(idx)}
-                    className={`w-full min-h-[52px] text-left rounded-xl border ${borderCls} ${bgCls} px-3.5 py-3.5 flex items-center gap-3 transition-all ${
+                    className={`w-full min-h-[54px] text-left rounded-xl border ${borderCls} ${bgCls} px-3.5 py-3 flex items-center gap-3 transition-all ${
                       !isAnswered ? 'cursor-pointer' : 'cursor-default'
                     }`}
                   >
@@ -321,11 +321,11 @@ export const QuizPlayScreen: React.FC<QuizPlayScreenProps> = ({
                     >
                       {OPTION_LABELS[idx] ?? idx + 1}
                     </span>
-                    <span
-                      className={`flex-1 min-w-0 break-words leading-[1.95] overflow-x-auto text-sm sm:text-base py-0.5 ${textCls}`}
+                    <div
+                      className={`flex-1 min-w-0 leading-[2.0] text-sm sm:text-base py-1 ${textCls}`}
                     >
                       <MathRichText text={optionText} />
-                    </span>
+                    </div>
                     {isAnswered && isCorrect && (
                       <CheckCircle2 className="h-5 w-5 text-[#16A34A] shrink-0" />
                     )}
@@ -369,7 +369,7 @@ export const QuizPlayScreen: React.FC<QuizPlayScreenProps> = ({
                   સમજૂતી (બધા સ્ટેપ સાથે):
                 </p>
 
-                <div className="space-y-2 text-sm leading-[2.0] break-words overflow-x-auto text-[#0F172A] dark:text-[#F1F5F9] py-0.5">
+                <div className="space-y-2.5 text-sm leading-[2.1] text-[#0F172A] dark:text-[#F1F5F9] py-1">
                   {question.explanation
                     .split('\n')
                     .map((line) => line.trim())
