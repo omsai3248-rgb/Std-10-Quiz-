@@ -1,5 +1,7 @@
 package com.aistudio.std10quiz.kqxmtv
 
+import android.content.pm.PackageManager
+import android.os.Build
 import android.util.Log
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
@@ -10,9 +12,7 @@ import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialCancellationException
 import androidx.credentials.exceptions.NoCredentialException
-import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
-import androidx.lifecycle.repeatOnLifecycle
 import com.google.android.gms.tasks.Task
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
@@ -39,6 +39,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
+import java.security.MessageDigest
 import java.security.SecureRandom
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -46,6 +47,7 @@ import kotlin.coroutines.resumeWithException
 private const val ADMIN_OWNER_EMAIL = "omsai3248@gmail.com"
 private const val ADMIN_PHONE_E164 = "+919099592283"
 private const val CODE_CHARSET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+private const val EXPECTED_DEBUG_CERT_SHA1 = "7c60102b8ecb85ffd89e24d3c22066150631b33d"
 
 class NativeFirebaseBridge(
     private val activity: ComponentActivity,
@@ -57,6 +59,45 @@ class NativeFirebaseBridge(
     private fun getOptionalStringResource(name: String): String {
         val resId = appContext.resources.getIdentifier(name, "string", appContext.packageName)
         return if (resId != 0) runCatching { appContext.getString(resId) }.getOrDefault("") else ""
+    }
+
+    private fun getApkSigningSha1Hex(): String {
+        return runCatching {
+            val pm = appContext.packageManager
+            val signatures = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                val pkgInfo = pm.getPackageInfo(appContext.packageName, PackageManager.GET_SIGNING_CERTIFICATES)
+                val signingInfo = pkgInfo.signingInfo
+                if (signingInfo?.hasMultipleSigners() == true) {
+                    signingInfo.apkContentsSigners
+                } else {
+                    signingInfo?.signingCertificateHistory
+                }
+            } else {
+                @Suppress("DEPRECATION")
+                pm.getPackageInfo(appContext.packageName, PackageManager.GET_SIGNATURES).signatures
+            }
+            val certBytes = signatures?.firstOrNull()?.toByteArray() ?: return@runCatching ""
+            val digest = MessageDigest.getInstance("SHA-1").digest(certBytes)
+            digest.joinToString("") { "%02x".format(it) }
+        }.getOrDefault("")
+    }
+
+    private fun formatSha1Colons(hex: String): String {
+        return hex.uppercase().chunked(2).joinToString(":")
+    }
+
+    private fun isGoogleConfigFailureMessage(msg: String): Boolean {
+        return msg.contains("action is invalid", ignoreCase = true) ||
+            msg.contains("developer", ignoreCase = true) ||
+            msg.contains("configured", ignoreCase = true) ||
+            msg.contains("provider", ignoreCase = true) ||
+            msg.contains("authorized", ignoreCase = true) ||
+            msg.contains("sync account", ignoreCase = true) ||
+            msg.contains("10:") ||
+            msg.contains("16:") ||
+            msg.contains("28444") ||
+            msg.contains("28436") ||
+            msg.contains("28433")
     }
 
     private fun ensureFirebaseInitialized(): Boolean {
@@ -236,23 +277,41 @@ class NativeFirebaseBridge(
                 }
             } catch (e: GetCredentialCancellationException) {
                 Log.w("Auth", "Google Sign-In flow cancelled or dismissed: ${e.message}", e)
-                resolveCallError(callId, "SIGN_IN_CANCELLED")
+                val apkSha1 = getApkSigningSha1Hex()
+                val msg = e.localizedMessage.orEmpty()
+                when {
+                    apkSha1.isNotBlank() && apkSha1 != EXPECTED_DEBUG_CERT_SHA1 -> {
+                        resolveCallError(callId, "GOOGLE_SIGNIN_SHA1_MISMATCH:${formatSha1Colons(apkSha1)}")
+                    }
+                    isGoogleConfigFailureMessage(msg) -> {
+                        resolveCallError(callId, "GOOGLE_SIGNIN_CONFIG_ERROR")
+                    }
+                    else -> {
+                        resolveCallError(callId, "SIGN_IN_CANCELLED")
+                    }
+                }
             } catch (e: NoCredentialException) {
                 Log.w("Auth", "No Google credentials found on device: ${e.message}", e)
-                resolveCallError(callId, "NO_GOOGLE_CREDENTIAL")
+                val apkSha1 = getApkSigningSha1Hex()
+                if (apkSha1.isNotBlank() && apkSha1 != EXPECTED_DEBUG_CERT_SHA1) {
+                    resolveCallError(callId, "GOOGLE_SIGNIN_SHA1_MISMATCH:${formatSha1Colons(apkSha1)}")
+                } else {
+                    resolveCallError(callId, "NO_GOOGLE_CREDENTIAL")
+                }
             } catch (e: Throwable) {
                 Log.e("Auth", "Google Sign-In failed (${e.javaClass.simpleName}): ${e.message}", e)
+                val apkSha1 = getApkSigningSha1Hex()
                 val msg = e.localizedMessage.orEmpty()
-                if (msg.contains("action is invalid", ignoreCase = true) ||
-                    msg.contains("developer", ignoreCase = true) ||
-                    msg.contains("configured", ignoreCase = true) ||
-                    msg.contains("provider", ignoreCase = true) ||
-                    msg.contains("10:") ||
-                    msg.contains("28436")
-                ) {
-                    resolveCallError(callId, "GOOGLE_SIGNIN_CONFIG_ERROR")
-                } else {
-                    resolveCallError(callId, msg.ifBlank { "Sign in failed" })
+                when {
+                    apkSha1.isNotBlank() && apkSha1 != EXPECTED_DEBUG_CERT_SHA1 -> {
+                        resolveCallError(callId, "GOOGLE_SIGNIN_SHA1_MISMATCH:${formatSha1Colons(apkSha1)}")
+                    }
+                    isGoogleConfigFailureMessage(msg) -> {
+                        resolveCallError(callId, "GOOGLE_SIGNIN_CONFIG_ERROR")
+                    }
+                    else -> {
+                        resolveCallError(callId, msg.ifBlank { "Sign in failed" })
+                    }
                 }
             }
         }

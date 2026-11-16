@@ -101,6 +101,7 @@ export interface Translations {
   errAdminNoGoogleAccount: string;
   errAdminGoogleConfig: string;
   errAdminNativeMissing: string;
+  errAdminSha1Mismatch: string;
   onlyAdminAllowedError: string;
   signOutBtn: string;
 
@@ -264,6 +265,7 @@ const GU: Translations = {
   errAdminNoGoogleAccount: 'ફોનમાં omsai3248@gmail.com Google એકાઉન્ટ ઉમેરેલું હોવું જરૂરી છે.',
   errAdminGoogleConfig: 'Google Sign-In ચકાસણી પૂર્ણ થઈ શકી નથી. કૃપા કરીને GitHub માં GOOGLE_SERVICES_JSON અને DEBUG_KEYSTORE_BASE64 Secrets ઉમેરો અથવા AI Studio APK વાપરો.',
   errAdminNativeMissing: 'આ APK માં Firebase google-services.json જોડાયેલ નથી. GitHub માં GOOGLE_SERVICES_JSON Secret ઉમેરી નવું APK બનાવો.',
+  errAdminSha1Mismatch: 'આ APK ની સાઇનિંગ કી (SHA-1: {sha1}) Firebase સાથે મેચ થતી નથી. GitHub Secrets માં DEBUG_KEYSTORE_BASE64 ઉમેરી નવું APK બનાવો અથવા AI Studio માંથી APK ડાઉનલોડ કરો.',
   onlyAdminAllowedError: 'માત્ર 9099592283 નંબર જ એડમિન લૉગિન માટે માન્ય છે!',
   signOutBtn: 'એડમિન લૉગ આઉટ',
 
@@ -426,6 +428,7 @@ const EN: Translations = {
   errAdminNoGoogleAccount: 'No Google account found on device. Please add omsai3248@gmail.com in Settings.',
   errAdminGoogleConfig: 'Google Sign-In verification could not complete for this APK signature. Add GOOGLE_SERVICES_JSON and DEBUG_KEYSTORE_BASE64 secrets in GitHub or use the AI Studio APK.',
   errAdminNativeMissing: 'Firebase google-services.json is missing from this APK build. Add GOOGLE_SERVICES_JSON secret in GitHub and rebuild the APK.',
+  errAdminSha1Mismatch: 'This APK signing SHA-1 ({sha1}) does not match Firebase. Add DEBUG_KEYSTORE_BASE64 in GitHub Secrets and rebuild, or download the APK from AI Studio.',
   onlyAdminAllowedError: 'Only 9099592283 is allowed for Admin Login!',
   signOutBtn: 'Admin Sign Out',
 

@@ -68,8 +68,10 @@ jobs:
         env:
           DEBUG_KEYSTORE_BASE64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
         run: |
+          KEYSTORE_SOURCE="none"
           if [ ! -f debug.keystore ] && [ -n "${DEBUG_KEYSTORE_BASE64:-}" ]; then
             if printf '%s' "$DEBUG_KEYSTORE_BASE64" | tr -d '[:space:]' | base64 -d > debug.keystore && [ -s debug.keystore ]; then
+              KEYSTORE_SOURCE="secret"
               echo "Restored debug.keystore from DEBUG_KEYSTORE_BASE64 secret."
             else
               rm -f debug.keystore
@@ -78,13 +80,15 @@ jobs:
           fi
           if [ ! -f debug.keystore ] && [ -f debug.keystore.base64 ]; then
             if tr -d '[:space:]' < debug.keystore.base64 | base64 -d > debug.keystore && [ -s debug.keystore ]; then
+              KEYSTORE_SOURCE="repo_file"
               echo "Restored debug.keystore from debug.keystore.base64."
             else
               rm -f debug.keystore
             fi
           fi
           if [ ! -f debug.keystore ]; then
-            echo "WARN: debug.keystore and debug.keystore.base64 are absent in checkout; generating CI signing keystore."
+            KEYSTORE_SOURCE="generated"
+            echo "WARN: debug.keystore and debug.keystore.base64 are absent; generating temporary CI signing keystore. Add DEBUG_KEYSTORE_BASE64 secret so APK SHA-1 matches Firebase."
             keytool -genkeypair -v \
               -keystore debug.keystore \
               -storepass android \
@@ -95,6 +99,7 @@ jobs:
               -validity 10000 \
               -dname "CN=Android Debug,O=Android,C=US"
           fi
+          echo "KEYSTORE_SOURCE=$KEYSTORE_SOURCE" >> "$GITHUB_ENV"
           keytool -list -v -keystore debug.keystore -storepass android -alias androiddebugkey | grep -E "SHA1:|SHA256:" || true
 
       - name: Prepare Google Services configuration
@@ -102,7 +107,10 @@ jobs:
           GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
           GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
         run: |
-          if [ ! -f app/google-services.json ] && [ -n "${GOOGLE_SERVICES_JSON:-}" ]; then
+          if [ ! -f app/google-services.json ] && [ -f google-services.json ]; then
+            cp google-services.json app/google-services.json
+            echo "Copied root google-services.json into app/google-services.json."
+          elif [ ! -f app/google-services.json ] && [ -n "${GOOGLE_SERVICES_JSON:-}" ]; then
             printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json
             echo "Restored app/google-services.json from GOOGLE_SERVICES_JSON secret."
           elif [ ! -f app/google-services.json ] && [ -n "${GOOGLE_SERVICES_JSON_BASE64:-}" ]; then
@@ -114,7 +122,11 @@ jobs:
             fi
           fi
           if [ -f app/google-services.json ]; then
-            echo "app/google-services.json is present for Firebase build."
+            node -e "JSON.parse(require('fs').readFileSync('app/google-services.json', 'utf8'));"
+            echo "app/google-services.json is present and valid JSON for Firebase build."
+            if [ "${KEYSTORE_SOURCE:-}" = "generated" ]; then
+              echo "WARN: Firebase is enabled, but DEBUG_KEYSTORE_BASE64 secret was missing. Google Sign-In may fail unless DEBUG_KEYSTORE_BASE64 matches Firebase SHA-1." >&2
+            fi
           else
             echo "WARN: app/google-services.json not found in checkout; add GOOGLE_SERVICES_JSON secret in GitHub repo settings to enable live Firebase & Google Sign-In in CI APKs." >&2
           fi

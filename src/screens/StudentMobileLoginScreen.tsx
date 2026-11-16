@@ -76,6 +76,9 @@ export const StudentMobileLoginScreen: React.FC<StudentMobileLoginScreenProps> =
           setErrorMsg(t.errAdminNoGoogleAccount);
         } else if (msg === 'GOOGLE_SIGNIN_CONFIG_ERROR') {
           setErrorMsg(t.errAdminGoogleConfig);
+        } else if (msg.startsWith('GOOGLE_SIGNIN_SHA1_MISMATCH:')) {
+          const sha1 = msg.slice('GOOGLE_SIGNIN_SHA1_MISMATCH:'.length) || 'unknown';
+          setErrorMsg(t.errAdminSha1Mismatch.replace('{sha1}', sha1));
         } else if (msg === 'NATIVE_FIREBASE_MISSING') {
           setErrorMsg(t.errAdminNativeMissing);
         } else {
