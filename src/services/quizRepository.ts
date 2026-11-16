@@ -126,10 +126,15 @@ export async function signInAdminWithGoogle(): Promise<void> {
   }
 }
 
+export interface AdminPasscodeAuthResult {
+  mode: 'firebase' | 'passcode';
+  reason?: string;
+}
+
 export async function signInAsAdminWithPasscode(
   phoneInput: string,
   passwordInput: string
-): Promise<'firebase'> {
+): Promise<AdminPasscodeAuthResult> {
   const cleanDigits = phoneInput.replace(/\D/g, '').slice(-10);
   if (cleanDigits !== ADMIN_PHONE_TEN_DIGITS) {
     throw new Error('ONLY_ADMIN_NUMBER');
@@ -141,22 +146,30 @@ export async function signInAsAdminWithPasscode(
   if (hasNativeFirebaseBridge()) {
     const current = getNativeCurrentAuthUser();
     if (current && isAdminAccount(current.phoneNumber, current.email)) {
-      return 'firebase';
+      return { mode: 'firebase' };
     }
-    await signInAdminWithGoogle();
-    return 'firebase';
+    try {
+      await signInAdminWithGoogle();
+      return { mode: 'firebase' };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err ?? '');
+      if (msg === 'ONLY_ADMIN_GOOGLE_EMAIL') {
+        throw err;
+      }
+      return { mode: 'passcode', reason: msg || 'GOOGLE_SIGNIN_PENDING' };
+    }
   }
 
   if (
     auth.currentUser &&
     isAdminAccount(auth.currentUser.phoneNumber ?? '', auth.currentUser.email ?? '')
   ) {
-    return 'firebase';
+    return { mode: 'firebase' };
   }
 
   try {
     await signInWithEmailAndPassword(auth, ADMIN_AUTH_EMAIL, ADMIN_PASSCODE);
-    return 'firebase';
+    return { mode: 'firebase' };
   } catch (err: unknown) {
     const code = (err as { code?: string })?.code ?? '';
     if (
@@ -166,30 +179,13 @@ export async function signInAsAdminWithPasscode(
     ) {
       try {
         await createUserWithEmailAndPassword(auth, ADMIN_AUTH_EMAIL, ADMIN_PASSCODE);
-        return 'firebase';
+        return { mode: 'firebase' };
       } catch (createErr: unknown) {
         const createCode = (createErr as { code?: string })?.code ?? '';
-        if (createCode === 'auth/email-already-in-use') {
-          throw new Error('INVALID_ADMIN_PASSWORD');
-        }
-        if (
-          createCode === 'auth/operation-not-allowed' ||
-          createCode === 'auth/admin-restricted-operation'
-        ) {
-          await signInAdminWithGoogle();
-          return 'firebase';
-        }
-        throw createErr;
+        return { mode: 'passcode', reason: createCode || code || 'FIREBASE_CONNECT_REQUIRED' };
       }
     }
-    if (
-      code === 'auth/operation-not-allowed' ||
-      code === 'auth/admin-restricted-operation'
-    ) {
-      await signInAdminWithGoogle();
-      return 'firebase';
-    }
-    throw err;
+    return { mode: 'passcode', reason: code || 'FIREBASE_CONNECT_REQUIRED' };
   }
 }
 

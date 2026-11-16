@@ -1,249 +1,58 @@
 import type { QuizChapter } from "../../types/models";
-
-
-
+import {
+  sciencePrashna01Chapter,
+  sciencePrashna02Chapter,
+  sciencePrashna03Chapter,
+} from "./sciencePrashna01To03";
+import {
+  sciencePrashna04Chapter,
+  sciencePrashna05Chapter,
+  sciencePrashna06Chapter,
+} from "./sciencePrashna04To06";
+import {
+  sciencePrashna07Chapter,
+  sciencePrashna08Chapter,
+  sciencePrashna09Chapter,
+  sciencePrashna10Chapter,
+  sciencePrashna11Chapter,
+  sciencePrashna12Chapter,
+} from "./sciencePrashna07To12";
+import {
+  sciencePrashna13Chapter,
+  sciencePrashna14Chapter,
+  sciencePrashna15Chapter,
+  sciencePrashna16Chapter,
+} from "./sciencePrashna13To16";
+import {
+  sciencePrashna17Chapter,
+  sciencePrashna18Chapter,
+  sciencePrashna19Chapter,
+  sciencePrashna20Chapter,
+  sciencePrashna21_22Chapter,
+  sciencePrashna23_24Chapter,
+} from "./sciencePrashna17To24";
 
 export const scienceChapters: QuizChapter[] = [
-        {
-            id: "science_ch1",
-            subjectId: "science",
-            chapterNumber: "પ્રકરણ ૧ અને ૨",
-            title: "રાસાયણિક પ્રક્રિયાઓ અને એસિડ-બેઇઝ",
-            subtitle: "સમીકરણો, pH માપક્રમ અને ક્ષાર",
-            questionTypeLabel: "MCQ",
-            isFreeUnlocked: true,
-            questions: [
-                {
-                    id: "s1_1",
-                    questionText: "શુદ્ધ પાણીનું pH મૂલ્ય કેટલું હોય છે?",
-                    options: ["0", "5", "7", "14"],
-                    correctIndex: 2,
-                    explanation: "શુદ્ધ પાણી તટસ્થ હોવાથી તેનું pH મૂલ્ય 7 હોય છે."
-                },
-                {
-                    id: "s1_2",
-                    questionText: "ખાવાનો સોડા (Baking Soda) નું રાસાયણિક સૂત્ર શું છે?",
-                    options: ["Na₂CO₃", "NaHCO₃", "NaOH", "CaOCl₂"],
-                    correctIndex: 1,
-                    explanation: "સોડિયમ હાઇડ્રોજન કાર્બોનેટ (NaHCO₃) એ ખાવાનો સોડા છે."
-                },
-                {
-                    id: "s1_3",
-                    questionText: "મેગ્નેશિયમની પટ્ટીને હવામાં સળગાવતાં કયો સફેદ પાઉડર બને છે?",
-                    options: ["MgCl₂", "MgO", "MgCO₃", "MgSO₄"],
-                    correctIndex: 1,
-                    explanation: "2Mg + O₂ → 2MgO (મેગ્નેશિયમ ઑક્સાઇડ) બને છે."
-                },
-                {
-                    id: "s1_4",
-                    questionText: "કીડીના ડંખમાં કયો એસિડ હોય છે?",
-                    options: ["એસિટિક એસિડ", "મિથેનોઇક એસિડ", "સાયટ્રિક એસિડ", "ઓક્ઝેલિક એસિડ"],
-                    correctIndex: 1,
-                    explanation: "કીડીના ડંખમાં મિથેનોઇક (ફોર્મિક) એસિડ હોય છે જે બળતરા પેદા કરે છે."
-                },
-                {
-                    id: "s1_5",
-                    questionText: "ચિપ્સની થેલીમાં ખોરાપણું અટકાવવા કયો નિષ્ક્રિય વાયુ ભરવામાં આવે છે?",
-                    options: ["ઑક્સિજન", "નાઇટ્રોજન", "કાર્બન ડાયૉક્સાઇડ", "હાઇડ્રોજન"],
-                    correctIndex: 1,
-                    explanation: "તેલ કે ચરબીનું ઉપચયન અટકાવવા નાઇટ્રોજન (N₂) વાયુ ભરવામાં આવે છે."
-                },
-                {
-                    id: "s1_6",
-                    questionText: "પ્લાસ્ટર ઑફ પેરિસ (POP) નું રાસાયણિક સૂત્ર કયું છે?",
-                    options: ["CaSO₄ · 2H₂O", "CaSO₄ · ½H₂O", "CaCO₃", "Ca(OH)₂"],
-                    correctIndex: 1,
-                    explanation: "કેલ્શિયમ સલ્ફેટ હેમીહાઇડ્રેટ (CaSO₄ · ½H₂O) ને પ્લાસ્ટર ઑફ પેરિસ કહેવાય છે."
-                },
-                {
-                    id: "s1_7",
-                    questionText: "એસિડ અને બેઇઝ વચ્ચે પ્રક્રિયા થઈ ક્ષાર અને પાણી બને તે પ્રક્રિયાને શું કહેવાય?",
-                    options: ["સંયોગીકરણ", "વિઘટન", "તટસ્થીકરણ", "વિસ્થાપન"],
-                    correctIndex: 2,
-                    explanation: "એસિડ + બેઇઝ → ક્ષાર + પાણી, આ પ્રક્રિયાને તટસ્થીકરણ કહે છે."
-                },
-                {
-                    id: "s1_8",
-                    questionText: "આપણા જઠરમાં ખોરાકના પાચન માટે કયો એસિડ ઉત્પન્ન થાય છે?",
-                    options: ["H₂SO₄", "HNO₃", "HCl", "CH₃COOH"],
-                    correctIndex: 2,
-                    explanation: "જઠરમાં હાઇડ્રોક્લોરિક એસિડ (HCl) ઉત્પન્ન થાય છે."
-                },
-                {
-                    id: "s1_9",
-                    questionText: "વિરંજન પાઉડર (Bleaching Powder) નું સૂત્ર કયું છે?",
-                    options: ["CaOCl₂", "CaCl₂", "NaOCl", "CaO"],
-                    correctIndex: 0,
-                    explanation: "શુષ્ક ફોડેલા ચૂના પર ક્લોરિનની પ્રક્રિયાથી CaOCl₂ બને છે."
-                },
-                {
-                    id: "s1_10",
-                    questionText: "દાંતનું બહારનું આવરણ (ઇનેમલ) શાનું બનેલું હોય છે?",
-                    options: ["કેલ્શિયમ ક્લોરાઇડ", "કેલ્શિયમ હાઇડ્રોક્સીએપેટાઇટ", "સોડિયમ કાર્બોનેટ", "મેગ્નેશિયમ ઑક્સાઇડ"],
-                    correctIndex: 1,
-                    explanation: "દાંતનું ઇનેમલ કેલ્શિયમ ફોસ્ફેટના સ્ફટિકમય સ્વરૂપ કેલ્શિયમ હાઇડ્રોક્સીએપેટાઇટનું બનેલું છે."
-                }
-            ]
-        },
-        {
-            id: "science_ch2",
-            subjectId: "science",
-            chapterNumber: "પ્રકરણ ૬ અને ૭",
-            title: "જૈવિક ક્રિયાઓ અને નિયંત્રણ-સંકલન",
-            subtitle: "શ્વસન, ઉત્સર્જન, મગજ અને અંતઃસ્ત્રાવો",
-            questionTypeLabel: "MCQ",
-            questions: [
-                {
-                    id: "s2_1",
-                    questionText: "મનુષ્યમાં મૂત્રપિંડ (Kidney) શાની સાથે સંકળાયેલ તંત્રનો ભાગ છે?",
-                    options: ["પોષણ", "શ્વસન", "ઉત્સર્જન", "વહન"],
-                    correctIndex: 2,
-                    explanation: "મૂત્રપિંડ લોહીમાંથી નાઇટ્રોજનયુક્ત નકામા દ્રવ્યો દૂર કરવાનું ઉત્સર્જન કાર્ય કરે છે."
-                },
-                {
-                    id: "s2_2",
-                    questionText: "વનસ્પતિમાં જલવાહક પેશી (Xylem) શાના વહન માટે જવાબદાર છે?",
-                    options: ["ખોરાકનું વહન", "પાણી અને ખનીજક્ષારનું વહન", "એમિનો એસિડનું વહન", "ઑક્સિજનનું વહન"],
-                    correctIndex: 1,
-                    explanation: "જલવાહક મૂળથી પર્ણો સુધી પાણી અને ખનીજ ક્ષારોનું વહન કરે છે."
-                },
-                {
-                    id: "s2_3",
-                    questionText: "પાયરુવેટના વિઘટનથી કાર્બન ડાયૉક્સાઇડ, પાણી અને ઊર્જા ક્યાં ઉત્પન્ન થાય છે?",
-                    options: ["કોષરસ", "કણાભસૂત્ર", "હરિતકણ", "કોષકેન્દ્ર"],
-                    correctIndex: 1,
-                    explanation: "જારક શ્વસનમાં પાયરુવેટનું સંપૂર્ણ વિઘટન કણાભસૂત્ર (Mitochondria) માં થાય છે."
-                },
-                {
-                    id: "s2_4",
-                    questionText: "બે ચેતાકોષો વચ્ચે આવેલા ખાલી સ્થાનને શું કહે છે?",
-                    options: ["શિખાતંતુ", "ચેતોપાગમ (Synapse)", "અક્ષતંતુ", "ચેતાપેશી"],
-                    correctIndex: 1,
-                    explanation: "બે ચેતાકોષો વચ્ચેના સૂક્ષ્મ અવકાશને ચેતોપાગમ (Synapse) કહેવામાં આવે છે."
-                },
-                {
-                    id: "s2_5",
-                    questionText: "મગજનો કયો ભાગ શરીરની સમસ્થિતિ અને સંતુલન જાળવવા માટે જવાબદાર છે?",
-                    options: ["બૃહદમસ્તિષ્ક", "અનુમસ્તિષ્ક", "લંબમજ્જા", "મેડ્યુલા"],
-                    correctIndex: 1,
-                    explanation: "અનુમસ્તિષ્ક (Cerebellum) ઐચ્છિક ક્રિયાઓની ચોકસાઈ અને શરીરનું સંતુલન જાળવે છે."
-                },
-                {
-                    id: "s2_6",
-                    questionText: "રુધિરમાં શર્કરા (Sugar) ના સ્તરનું નિયમન કયો અંતઃસ્ત્રાવ કરે છે?",
-                    options: ["થાયરોક્સિન", "ઇન્સ્યુલિન", "એડ્રિનાલિન", "વૃદ્ધિ અંતઃસ્ત્રાવ"],
-                    correctIndex: 1,
-                    explanation: "સ્વાદુપિંડ દ્વારા સ્ત્રવતો ઇન્સ્યુલિન રુધિરમાં શર્કરાનું પ્રમાણ નિયંત્રિત કરે છે."
-                },
-                {
-                    id: "s2_7",
-                    questionText: "થાયરોક્સિન અંતઃસ્ત્રાવના સંશ્લેષણ માટે કયું તત્વ જરૂરી છે?",
-                    options: ["લોહ", "આયોડિન", "કેલ્શિયમ", "સોડિયમ"],
-                    correctIndex: 1,
-                    explanation: "થાયરોઇડ ગ્રંથિને થાયરોક્સિન બનાવવા માટે આયોડિન જરૂરી છે; તેની ઊણપથી ગોઇટર થાય છે."
-                },
-                {
-                    id: "s2_8",
-                    questionText: "સ્વયંપોષી પોષણ માટે નીચેનામાંથી શું જરૂરી છે?",
-                    options: ["CO₂ અને પાણી", "ક્લોરોફિલ", "સૂર્યપ્રકાશ", "આપેલ તમામ"],
-                    correctIndex: 3,
-                    explanation: "પ્રકાશસંશ્લેષણ માટે CO₂, પાણી, ક્લોરોફિલ અને સૂર્યપ્રકાશ ચારેય જરૂરી છે."
-                },
-                {
-                    id: "s2_9",
-                    questionText: "સામાન્ય તંદુરસ્ત પુખ્ત વ્યક્તિનું સિસ્ટોલિક અને ડાયસ્ટોલિક બ્લડ પ્રેશર કેટલું હોય છે?",
-                    options: ["120/80 mmHg", "80/120 mmHg", "140/90 mmHg", "100/60 mmHg"],
-                    correctIndex: 0,
-                    explanation: "સામાન્ય સિસ્ટોલિક દબાણ 120 mmHg અને ડાયસ્ટોલિક દબાણ 80 mmHg હોય છે."
-                },
-                {
-                    id: "s2_10",
-                    questionText: "વનસ્પતિના પર્ણોમાં પર્ણરંધ્ર ખૂલવા અને બંધ થવાની ક્રિયાનું નિયમન કોણ કરે છે?",
-                    options: ["રક્ષક કોષો", "મૂળરોમ", "ફ્લોએમ", "પરાગનલિકા"],
-                    correctIndex: 0,
-                    explanation: "રક્ષક કોષોમાં પાણી ભરાતાં તે ફૂલે છે અને પર્ણરંધ્ર ખૂલે છે."
-                }
-            ]
-        },
-        {
-            id: "science_ch3",
-            subjectId: "science",
-            chapterNumber: "પ્રકરણ ૧૦ અને ૧૨",
-            title: "પ્રકાશ અને વિદ્યુત",
-            subtitle: "અરીસા-લેન્સ, ઓહ્મનો નિયમ અને વિદ્યુત પાવર",
-            questionTypeLabel: "MCQ",
-            questions: [
-                {
-                    id: "s3_1",
-                    questionText: "વાહનોમાં પાછળનું દ્રશ્ય જોવા (Rear-view mirror) માટે કયો અરીસો વપરાય છે?",
-                    options: ["અંતર્ગોળ અરીસો", "બહિર્ગોળ અરીસો", "સમતલ અરીસો", "દ્વિ-અંતર્ગોળ"],
-                    correctIndex: 1,
-                    explanation: "બહિર્ગોળ અરીસો હંમેશા આભાસી, ચત્તું અને નાનું પ્રતિબિંબ તથા વિશાળ દ્રષ્ટિક્ષેત્ર આપે છે."
-                },
-                {
-                    id: "s3_2",
-                    questionText: "લેન્સના પાવરનો SI એકમ શું છે?",
-                    options: ["મીટર", "વોટ", "ડાયોપ્ટર (D)", "ઓહ્મ"],
-                    correctIndex: 2,
-                    explanation: "લેન્સનો પાવર P = 1/f (મીટરમાં) નો SI એકમ ડાયોપ્ટર (D) છે."
-                },
-                {
-                    id: "s3_3",
-                    questionText: "વિદ્યુત પ્રવાહનો SI એકમ કયો છે?",
-                    options: ["વોલ્ટ", "એમ્પિયર", "કુલંબ", "વોટ"],
-                    correctIndex: 1,
-                    explanation: "વિદ્યુત પ્રવાહ (I) નો SI એકમ એમ્પિયર (A) છે."
-                },
-                {
-                    id: "s3_4",
-                    questionText: "ઓહ્મનો નિયમ કયું સૂત્ર દર્શાવે છે?",
-                    options: ["V = I / R", "V = I × R", "I = V × R", "R = V × I"],
-                    correctIndex: 1,
-                    explanation: "અચળ તાપમાને V ∝ I એટલે કે V = I × R."
-                },
-                {
-                    id: "s3_5",
-                    questionText: "1 kWh (કિલોવોટ અવર) બરાબર કેટલા જૂલ થાય?",
-                    options: ["3.6 × 10⁵ J", "3.6 × 10⁶ J", "36 × 10⁶ J", "3.6 × 10⁴ J"],
-                    correctIndex: 1,
-                    explanation: "1 kWh = 1000 W × 3600 s = 3.6 × 10⁶ જૂલ."
-                },
-                {
-                    id: "s3_6",
-                    questionText: "વિદ્યુત બલ્બના ફિલામેન્ટ બનાવવા માટે કઈ ધાતુ વપરાય છે?",
-                    options: ["તાંબું", "ટંગસ્ટન", "નિક્રોમ", "એલ્યુમિનિયમ"],
-                    correctIndex: 1,
-                    explanation: "ટંગસ્ટનનું ગલનબિંદુ ખૂબ ઊંચું (3380°C) હોવાથી તે ફિલામેન્ટમાં વપરાય છે."
-                },
-                {
-                    id: "s3_7",
-                    questionText: "શૂન્યાવકાશમાં પ્રકાશની ઝડપ કેટલી હોય છે?",
-                    options: ["3 × 10⁶ m/s", "3 × 10⁸ m/s", "3 × 10¹⁰ m/s", "2 × 10⁸ m/s"],
-                    correctIndex: 1,
-                    explanation: "શૂન્યાવકાશમાં પ્રકાશની ઝડપ c = 3 × 10⁸ મીટર/સેકન્ડ હોય છે."
-                },
-                {
-                    id: "s3_8",
-                    questionText: "અરીસાનું સૂત્ર કયું છે?",
-                    options: ["1/v - 1/u = 1/f", "1/v + 1/u = 1/f", "v + u = f", "1/u - 1/v = 1/f"],
-                    correctIndex: 1,
-                    explanation: "ગોલીય અરીસા માટે 1/v + 1/u = 1/f સૂત્ર વપરાય છે."
-                },
-                {
-                    id: "s3_9",
-                    questionText: "અવરોધનો SI એકમ શું છે?",
-                    options: ["વોલ્ટ", "એમ્પિયર", "ઓહ્મ (Ω)", "જૂલ"],
-                    correctIndex: 2,
-                    explanation: "વિદ્યુત અવરોધ (R) નો SI એકમ ઓહ્મ (Ω) છે."
-                },
-                {
-                    id: "s3_10",
-                    questionText: "ઘરવપરાશના વિદ્યુત પરિપથમાં ઉપકરણો કયા જોડાણમાં જોડાયેલા હોય છે?",
-                    options: ["શ્રેણી જોડાણ", "સમાંતર જોડાણ", "મિશ્ર જોડાણ", "એકપણ નહીં"],
-                    correctIndex: 1,
-                    explanation: "સમાંતર જોડાણમાં દરેક ઉપકરણને પૂરતો વોલ્ટેજ (220V) મળે છે અને સ્વતંત્ર સ્વિચથી ચાલુ-બંધ કરી શકાય છે."
-                }
-            ]
-        }
-    ]
-
+  sciencePrashna01Chapter,
+  sciencePrashna02Chapter,
+  sciencePrashna03Chapter,
+  sciencePrashna04Chapter,
+  sciencePrashna05Chapter,
+  sciencePrashna06Chapter,
+  sciencePrashna07Chapter,
+  sciencePrashna08Chapter,
+  sciencePrashna09Chapter,
+  sciencePrashna10Chapter,
+  sciencePrashna11Chapter,
+  sciencePrashna12Chapter,
+  sciencePrashna13Chapter,
+  sciencePrashna14Chapter,
+  sciencePrashna15Chapter,
+  sciencePrashna16Chapter,
+  sciencePrashna17Chapter,
+  sciencePrashna18Chapter,
+  sciencePrashna19Chapter,
+  sciencePrashna20Chapter,
+  sciencePrashna21_22Chapter,
+  sciencePrashna23_24Chapter,
+];

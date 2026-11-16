@@ -703,7 +703,7 @@ const mathsPrashna05QuestionsPart1: QuizQuestion[] = [
         questionText: "22) tan 30° = ________.",
         options: ["\\sqrt{3}", "\\frac{1}{\\sqrt{3}}", "1", "\\frac{1}{\\sqrt{2}}"],
         correctIndex: 1,
-        explanation: "સ્ટેપ 1: tan 30° = \\frac{sin 30°}{cos 30°} = \\frac{1/2}{\\sqrt{3}/2} = \\frac{1}{\\sqrt{3}}."
+        explanation: "સ્ટેપ 1: tan 30° = \\frac{sin 30°}{cos 30°} = \\frac{\\frac{1}{2}}{\\frac{\\sqrt{3}}{2}} = \\frac{1}{\\sqrt{3}}."
     },
     {
         id: "m_q05_23",
@@ -717,7 +717,7 @@ const mathsPrashna05QuestionsPart1: QuizQuestion[] = [
         questionText: "24) tan 60° = ________.",
         options: ["\\sqrt{3}", "\\frac{1}{\\sqrt{3}}", "1", "\\frac{1}{\\sqrt{2}}"],
         correctIndex: 0,
-        explanation: "સ્ટેપ 1: tan 60° = \\frac{sin 60°}{cos 60°} = \\frac{\\sqrt{3}/2}{1/2} = \\sqrt{3}."
+        explanation: "સ્ટેપ 1: tan 60° = \\frac{sin 60°}{cos 60°} = \\frac{\\frac{\\sqrt{3}}{2}}{\\frac{1}{2}} = \\sqrt{3}."
     },
     {
         id: "m_q05_25",
@@ -749,7 +749,7 @@ const mathsPrashna05QuestionsPart2: QuizQuestion[] = [
         questionText: "28) cot 30° = ________.",
         options: ["\\sqrt{3}", "\\frac{1}{\\sqrt{3}}", "1", "\\frac{1}{\\sqrt{2}}"],
         correctIndex: 0,
-        explanation: "સ્ટેપ 1: cot 30° = \\frac{1}{tan 30°} = \\frac{1}{1/\\sqrt{3}} = \\sqrt{3}."
+        explanation: "સ્ટેપ 1: cot 30° = \\frac{1}{tan 30°} = \\frac{1}{\\frac{1}{\\sqrt{3}}} = \\sqrt{3}."
     },
     {
         id: "m_q05_29",
@@ -791,21 +791,21 @@ const mathsPrashna05QuestionsPart2: QuizQuestion[] = [
         questionText: "34) sec 30° = ________.",
         options: ["\\sqrt{2}", "\\frac{2}{\\sqrt{3}}", "2", "\\frac{3}{\\sqrt{2}}"],
         correctIndex: 1,
-        explanation: "સ્ટેપ 1: sec 30° = \\frac{1}{cos 30°} = \\frac{1}{\\sqrt{3}/2} = \\frac{2}{\\sqrt{3}}."
+        explanation: "સ્ટેપ 1: sec 30° = \\frac{1}{cos 30°} = \\frac{1}{\\frac{\\sqrt{3}}{2}} = \\frac{2}{\\sqrt{3}}."
     },
     {
         id: "m_q05_35",
         questionText: "35) sec 45° = ________.",
         options: ["\\sqrt{2}", "\\frac{2}{\\sqrt{3}}", "2", "\\frac{3}{\\sqrt{2}}"],
         correctIndex: 0,
-        explanation: "સ્ટેપ 1: sec 45° = \\frac{1}{cos 45°} = \\frac{1}{1/\\sqrt{2}} = \\sqrt{2}."
+        explanation: "સ્ટેપ 1: sec 45° = \\frac{1}{cos 45°} = \\frac{1}{\\frac{1}{\\sqrt{2}}} = \\sqrt{2}."
     },
     {
         id: "m_q05_36",
         questionText: "36) sec 60° = ________.",
         options: ["\\sqrt{2}", "\\frac{2}{\\sqrt{3}}", "2", "\\frac{3}{\\sqrt{2}}"],
         correctIndex: 2,
-        explanation: "સ્ટેપ 1: sec 60° = \\frac{1}{cos 60°} = \\frac{1}{1/2} = 2."
+        explanation: "સ્ટેપ 1: sec 60° = \\frac{1}{cos 60°} = \\frac{1}{\\frac{1}{2}} = 2."
     },
     {
         id: "m_q05_37",
@@ -833,21 +833,21 @@ const mathsPrashna05QuestionsPart2: QuizQuestion[] = [
         questionText: "40) cosec 30° = ________.",
         options: ["\\sqrt{2}", "\\frac{2}{\\sqrt{3}}", "2", "\\frac{3}{\\sqrt{2}}"],
         correctIndex: 2,
-        explanation: "સ્ટેપ 1: cosec 30° = \\frac{1}{sin 30°} = \\frac{1}{1/2} = 2."
+        explanation: "સ્ટેપ 1: cosec 30° = \\frac{1}{sin 30°} = \\frac{1}{\\frac{1}{2}} = 2."
     },
     {
         id: "m_q05_41",
         questionText: "41) cosec 45° = ________.",
         options: ["\\sqrt{2}", "\\frac{2}{\\sqrt{3}}", "2", "\\frac{3}{\\sqrt{2}}"],
         correctIndex: 0,
-        explanation: "સ્ટેપ 1: cosec 45° = \\frac{1}{sin 45°} = \\frac{1}{1/\\sqrt{2}} = \\sqrt{2}."
+        explanation: "સ્ટેપ 1: cosec 45° = \\frac{1}{sin 45°} = \\frac{1}{\\frac{1}{\\sqrt{2}}} = \\sqrt{2}."
     },
     {
         id: "m_q05_42",
         questionText: "42) cosec 60° = ________.",
         options: ["\\sqrt{2}", "\\frac{2}{\\sqrt{3}}", "2", "\\frac{3}{\\sqrt{2}}"],
         correctIndex: 1,
-        explanation: "સ્ટેપ 1: cosec 60° = \\frac{1}{sin 60°} = \\frac{1}{\\sqrt{3}/2} = \\frac{2}{\\sqrt{3}}."
+        explanation: "સ્ટેપ 1: cosec 60° = \\frac{1}{sin 60°} = \\frac{1}{\\frac{\\sqrt{3}}{2}} = \\frac{2}{\\sqrt{3}}."
     },
     {
         id: "m_q05_43",
@@ -910,7 +910,7 @@ const mathsPrashna05QuestionsPart2: QuizQuestion[] = [
         questionText: "51) જો sin^2 θ = \\frac{1}{2} છે, તો tan^2 θ નું માપ ________ થાય. (March-2025)",
         options: ["\\frac{1}{\\sqrt{3}}", "\\sqrt{3}", "0", "1"],
         correctIndex: 3,
-        explanation: "સ્ટેપ 1: cos^2 θ = 1 - sin^2 θ = 1 - \\frac{1}{2} = \\frac{1}{2}.\nસ્ટેપ 2: tan^2 θ = \\frac{sin^2 θ}{cos^2 θ} = \\frac{1/2}{1/2} = 1.\nસ્ટેપ 3: અથવા sin θ = \\frac{1}{\\sqrt{2}} ⇒ θ = 45° ⇒ tan^2 45° = 1."
+        explanation: "સ્ટેપ 1: cos^2 θ = 1 - sin^2 θ = 1 - \\frac{1}{2} = \\frac{1}{2}.\nસ્ટેપ 2: tan^2 θ = \\frac{sin^2 θ}{cos^2 θ} = \\frac{\\frac{1}{2}}{\\frac{1}{2}} = 1.\nસ્ટેપ 3: અથવા sin θ = \\frac{1}{\\sqrt{2}} ⇒ θ = 45° ⇒ tan^2 45° = 1."
     },
     {
         id: "m_q05_52",

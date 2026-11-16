@@ -14,6 +14,7 @@ import { extractReadableErrorMessage } from '../services/firestoreErrorHandler';
 import {
   ADMIN_PHONE_TEN_DIGITS,
   signInAsAdminWithPasscode,
+  type AdminPasscodeAuthResult,
 } from '../services/quizRepository';
 import { normalizeIndianMobileInput } from '../utils/imageUtils';
 
@@ -21,7 +22,7 @@ interface StudentMobileLoginScreenProps {
   initialName?: string;
   initialMobile?: string;
   onLoginSuccess: (name: string, mobile: string) => Promise<void> | void;
-  onAdminAuthenticated: () => void;
+  onAdminAuthenticated: (result: AdminPasscodeAuthResult) => void;
 }
 
 export const StudentMobileLoginScreen: React.FC<StudentMobileLoginScreenProps> = ({
@@ -58,9 +59,9 @@ export const StudentMobileLoginScreen: React.FC<StudentMobileLoginScreenProps> =
       }
       setIsLoading(true);
       try {
-        await signInAsAdminWithPasscode(cleanDigits, passwordInput);
+        const result = await signInAsAdminWithPasscode(cleanDigits, passwordInput);
         setPasswordInput('');
-        onAdminAuthenticated();
+        onAdminAuthenticated(result);
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : '';
         if (msg === 'INVALID_ADMIN_PASSWORD') {
@@ -69,8 +70,6 @@ export const StudentMobileLoginScreen: React.FC<StudentMobileLoginScreenProps> =
           setErrorMsg(t.onlyAdminAllowedError);
         } else if (msg === 'ONLY_ADMIN_GOOGLE_EMAIL') {
           setErrorMsg(t.errWrongAdminGoogleAccount);
-        } else if (msg === 'SIGN_IN_CANCELLED') {
-          setErrorMsg(null);
         } else {
           setErrorMsg(extractReadableErrorMessage(err, lang));
         }

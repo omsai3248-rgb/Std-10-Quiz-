@@ -9,6 +9,7 @@ import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialCancellationException
+import androidx.credentials.exceptions.NoCredentialException
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
@@ -188,7 +189,18 @@ class NativeFirebaseBridge(
 
         activity.lifecycleScope.launch {
             try {
-                val result = localCreds.getCredential(activity, request)
+                val result = try {
+                    localCreds.getCredential(activity, request)
+                } catch (_: NoCredentialException) {
+                    val fallbackOption = GetGoogleIdOption.Builder()
+                        .setFilterByAuthorizedAccounts(false)
+                        .setServerClientId(clientId)
+                        .build()
+                    val fallbackRequest = GetCredentialRequest.Builder()
+                        .addCredentialOption(fallbackOption)
+                        .build()
+                    localCreds.getCredential(activity, fallbackRequest)
+                }
                 val credential = result.credential
                 if (credential is CustomCredential && credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
                     val googleCred = GoogleIdTokenCredential.createFrom(credential.data)
@@ -210,6 +222,9 @@ class NativeFirebaseBridge(
             } catch (e: GetCredentialCancellationException) {
                 Log.w("Auth", "Google Sign-In flow cancelled or dismissed: ${e.message}", e)
                 resolveCallError(callId, "SIGN_IN_CANCELLED")
+            } catch (e: NoCredentialException) {
+                Log.w("Auth", "No Google credentials found on device: ${e.message}", e)
+                resolveCallError(callId, "NO_GOOGLE_CREDENTIAL")
             } catch (e: Throwable) {
                 Log.e("Auth", "Google Sign-In failed", e)
                 resolveCallError(callId, e.localizedMessage ?: "Sign in failed")

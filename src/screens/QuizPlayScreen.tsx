@@ -14,7 +14,50 @@ import {
 import { MathRichText } from '../components/MathRichText';
 import { PolynomialGraphCard } from '../components/PolynomialGraphCard';
 import { quizAudioPlayer } from '../services/audioPlayer';
-import type { QuizChapter, QuizSubject } from '../types/models';
+import type { QuizChapter, QuizQuestion, QuizSubject } from '../types/models';
+
+const LETTER_PREFIX_REGEX = /^\([A-D]\)\s+/;
+const POSITIONAL_TAIL_OPTION_REGEX =
+  /(આપેલ\s*(તમામ|બંને|બધા|પૈકી\s*કોઈ\s*નહીં)|ઉપરના\s*(તમામ|બધા|બંને)|(?:^|\s)(?:A|a)\s*અને\s*(?:B|b)|માત્ર\s*(?:A|B)|એક\s*પણ\s*નહીં|ત્રણેયમાંથી\s*એક\s*પણ\s*નહીં)/i;
+
+function shuffleQuestionOptions(question: QuizQuestion): QuizQuestion {
+  const rawOptions = question.options;
+  if (rawOptions.length <= 1) return question;
+
+  const shouldStripPrefix =
+    rawOptions.every((opt) => LETTER_PREFIX_REGEX.test(opt)) &&
+    rawOptions.every((opt) => {
+      const withoutLeading = opt.replace(LETTER_PREFIX_REGEX, '');
+      return !/\([A-D]\)/.test(withoutLeading);
+    });
+
+  const indexed = rawOptions.map((text, origIdx) => ({
+    text: shouldStripPrefix ? text.replace(LETTER_PREFIX_REGEX, '') : text,
+    isCorrect: origIdx === question.correctIndex,
+  }));
+
+  let splitAt = indexed.length;
+  while (splitAt > 0 && POSITIONAL_TAIL_OPTION_REGEX.test(indexed[splitAt - 1].text)) {
+    splitAt--;
+  }
+
+  const head = indexed.slice(0, splitAt);
+  const tail = indexed.slice(splitAt);
+
+  for (let i = head.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [head[i], head[j]] = [head[j], head[i]];
+  }
+
+  const combined = [...head, ...tail];
+  const nextCorrectIndex = combined.findIndex((item) => item.isCorrect);
+
+  return {
+    ...question,
+    options: combined.map((item) => item.text),
+    correctIndex: nextCorrectIndex >= 0 ? nextCorrectIndex : question.correctIndex,
+  };
+}
 
 interface QuizPlayScreenProps {
   subject: QuizSubject;
@@ -31,7 +74,7 @@ export const QuizPlayScreen: React.FC<QuizPlayScreenProps> = ({
   onQuizCompleted,
   onExit,
 }) => {
-  const questions = chapter.questions;
+  const [shuffleSeed, setShuffleSeed] = useState(0);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [selectedAnswers, setSelectedAnswers] = useState<Record<number, number>>({});
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
@@ -39,6 +82,21 @@ export const QuizPlayScreen: React.FC<QuizPlayScreenProps> = ({
   const [isMuted, setIsMuted] = useState(false);
   const [showNavigatorDialog, setShowNavigatorDialog] = useState(false);
   const contentScrollRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    setShuffleSeed((prev) => prev + 1);
+    setCurrentIndex(0);
+    setSelectedAnswers({});
+    setElapsedSeconds(0);
+    setIsFinished(false);
+    setShowNavigatorDialog(false);
+  }, [chapter.id]);
+
+  const questions = useMemo(
+    () => chapter.questions.map((q) => shuffleQuestionOptions(q)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [chapter.id, shuffleSeed]
+  );
 
   useEffect(() => {
     return () => {
@@ -105,6 +163,7 @@ export const QuizPlayScreen: React.FC<QuizPlayScreenProps> = ({
 
   const handleReplay = () => {
     quizAudioPlayer.stopCurrent();
+    setShuffleSeed((prev) => prev + 1);
     setSelectedAnswers({});
     setCurrentIndex(0);
     setElapsedSeconds(0);
@@ -211,7 +270,7 @@ export const QuizPlayScreen: React.FC<QuizPlayScreenProps> = ({
 
             {/* Question Card */}
             <div className="rounded-2xl bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] shadow-sm p-5 space-y-3">
-              <div className="text-base sm:text-lg font-semibold leading-relaxed text-[#0F172A] dark:text-[#F8FAFC]">
+              <div className="text-base sm:text-lg font-semibold leading-[2.1] break-words overflow-x-auto whitespace-pre-line text-[#0F172A] dark:text-[#F8FAFC] py-0.5">
                 <MathRichText text={question.questionText} />
               </div>
               {question.graphPattern && (
@@ -253,7 +312,7 @@ export const QuizPlayScreen: React.FC<QuizPlayScreenProps> = ({
                     type="button"
                     disabled={isAnswered}
                     onClick={() => handleSelectOption(idx)}
-                    className={`w-full text-left rounded-xl border ${borderCls} ${bgCls} px-3.5 py-3.5 flex items-center gap-3 transition-all ${
+                    className={`w-full min-h-[52px] text-left rounded-xl border ${borderCls} ${bgCls} px-3.5 py-3.5 flex items-center gap-3 transition-all ${
                       !isAnswered ? 'cursor-pointer' : 'cursor-default'
                     }`}
                   >
@@ -262,7 +321,9 @@ export const QuizPlayScreen: React.FC<QuizPlayScreenProps> = ({
                     >
                       {OPTION_LABELS[idx] ?? idx + 1}
                     </span>
-                    <span className={`flex-1 text-sm sm:text-base ${textCls}`}>
+                    <span
+                      className={`flex-1 min-w-0 break-words leading-[1.95] overflow-x-auto text-sm sm:text-base py-0.5 ${textCls}`}
+                    >
                       <MathRichText text={optionText} />
                     </span>
                     {isAnswered && isCorrect && (
@@ -308,7 +369,7 @@ export const QuizPlayScreen: React.FC<QuizPlayScreenProps> = ({
                   સમજૂતી (બધા સ્ટેપ સાથે):
                 </p>
 
-                <div className="space-y-1.5 text-sm text-[#0F172A] dark:text-[#F1F5F9]">
+                <div className="space-y-2 text-sm leading-[2.0] break-words overflow-x-auto text-[#0F172A] dark:text-[#F1F5F9] py-0.5">
                   {question.explanation
                     .split('\n')
                     .map((line) => line.trim())

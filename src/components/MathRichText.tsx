@@ -4,35 +4,48 @@ type MathNode =
   | { kind: 'plain'; text: string }
   | { kind: 'sup'; nodes: MathNode[] }
   | { kind: 'sub'; nodes: MathNode[] }
-  | { kind: 'overbar'; content: string }
-  | { kind: 'sqrt'; inner: MathNode[] }
+  | { kind: 'overbar'; nodes: MathNode[] }
+  | { kind: 'sqrt'; indexNodes?: MathNode[]; inner: MathNode[] }
   | { kind: 'frac'; numerator: MathNode[]; denominator: MathNode[] };
 
-function readRawBracedText(input: string, openBraceIndex: number): [string, number] {
-  if (openBraceIndex >= input.length || input[openBraceIndex] !== '{') {
-    return ['', openBraceIndex];
-  }
-  let depth = 0;
-  let i = openBraceIndex;
-  let out = '';
-  while (i < input.length) {
-    const c = input[i];
-    if (c === '{') {
-      if (depth > 0) out += c;
-      depth++;
-    } else if (c === '}') {
-      depth--;
-      if (depth === 0) return [out, i + 1];
-      out += c;
-    } else {
-      out += c;
-    }
-    i++;
-  }
-  return [out, i];
+function normalizeMathMacros(raw: string): string {
+  return raw
+    .replace(/\\overline\s*\{/g, '\\bar{')
+    .replace(/\\dfrac\s*\{/g, '\\frac{')
+    .replace(/\\tfrac\s*\{/g, '\\frac{')
+    .replace(/\^\{\\circ\}|\^\\circ|\\degree|\\circ/g, '°')
+    .replace(/\\times/g, '×')
+    .replace(/\\div/g, '÷')
+    .replace(/\\pm/g, '±')
+    .replace(/\\neq/g, '≠')
+    .replace(/\\leq/g, '≤')
+    .replace(/\\geq/g, '≥')
+    .replace(/\\approx/g, '≈')
+    .replace(/\\infty/g, '∞')
+    .replace(/\\theta/g, 'θ')
+    .replace(/\\pi/g, 'π')
+    .replace(/\\alpha/g, 'α')
+    .replace(/\\beta/g, 'β')
+    .replace(/\\gamma/g, 'γ')
+    .replace(/\\Delta/g, 'Δ')
+    .replace(/\\angle/g, '∠')
+    .replace(/\\perp/g, '⊥')
+    .replace(/\\parallel/g, '∥')
+    .replace(/\\Rightarrow/g, '⇒')
+    .replace(/\\rightarrow|\\to\b/g, '→')
+    .replace(/\\cdot/g, '·')
+    .replace(/\\left\(/g, '(')
+    .replace(/\\right\)/g, ')')
+    .replace(/\\left\[/g, '[')
+    .replace(/\\right\]/g, ']')
+    .replace(/\\,/g, ' ');
 }
 
-function parseUntil(input: string, startIndex: number, stopChar: string | null): [MathNode[], number] {
+function parseUntil(
+  input: string,
+  startIndex: number,
+  stopChar: string | null
+): [MathNode[], number] {
   const nodes: MathNode[] = [];
   let textBuffer = '';
   let index = startIndex;
@@ -60,6 +73,17 @@ function parseUntil(input: string, startIndex: number, stopChar: string | null):
           : [[{ kind: 'plain', text: '' } as MathNode], afterNum];
       nodes.push({ kind: 'frac', numerator: num, denominator: den });
       index = afterDen;
+    } else if (input.startsWith('\\sqrt[', index)) {
+      flushPlain();
+      const [indexNodes, afterIndex] = parseUntil(input, index + 6, ']');
+      if (afterIndex < input.length && input[afterIndex] === '{') {
+        const [inner, nextIdx] = parseBracedGroup(input, afterIndex);
+        nodes.push({ kind: 'sqrt', indexNodes, inner });
+        index = nextIdx;
+      } else {
+        nodes.push({ kind: 'sqrt', indexNodes, inner: [] });
+        index = afterIndex;
+      }
     } else if (input.startsWith('\\sqrt{', index)) {
       flushPlain();
       const [inner, nextIdx] = parseBracedGroup(input, index + 5);
@@ -67,8 +91,8 @@ function parseUntil(input: string, startIndex: number, stopChar: string | null):
       index = nextIdx;
     } else if (input.startsWith('\\bar{', index)) {
       flushPlain();
-      const [innerText, nextIdx] = readRawBracedText(input, index + 4);
-      nodes.push({ kind: 'overbar', content: innerText });
+      const [inner, nextIdx] = parseBracedGroup(input, index + 4);
+      nodes.push({ kind: 'overbar', nodes: inner });
       index = nextIdx;
     } else if (ch === '^') {
       flushPlain();
@@ -136,16 +160,21 @@ function renderNodes(nodes: MathNode[], keyPrefix = 'm'): React.ReactNode[] {
         return (
           <span
             key={key}
-            className="inline-block border-t border-current pt-[1px] mx-[1px] leading-tight"
+            className="inline-block border-t border-current pt-[2px] mt-[2px] mx-[1px] leading-[1.2]"
           >
-            {node.content}
+            {renderNodes(node.nodes, `${key}_ob`)}
           </span>
         );
       case 'sqrt':
         return (
-          <span key={key} className="inline-flex items-baseline mx-[1px]">
-            <span className="text-[1.06em] font-medium leading-none">√</span>
-            <span className="border-t border-current px-[2px] pt-[1px] leading-tight">
+          <span key={key} className="inline-flex items-baseline mx-[2px] py-[2px] whitespace-nowrap">
+            {node.indexNodes && node.indexNodes.length > 0 && (
+              <sup className="text-[0.65em] leading-none mr-[1px]">
+                {renderNodes(node.indexNodes, `${key}_idx`)}
+              </sup>
+            )}
+            <span className="text-[1.08em] font-medium leading-none">√</span>
+            <span className="border-t border-current px-[3px] pt-[2px] leading-[1.2]">
               {renderNodes(node.inner, key)}
             </span>
           </span>
@@ -154,12 +183,12 @@ function renderNodes(nodes: MathNode[], keyPrefix = 'm'): React.ReactNode[] {
         return (
           <span
             key={key}
-            className="inline-flex flex-col items-center justify-center align-middle mx-1 text-[0.86em] leading-tight"
+            className="inline-flex flex-col items-center justify-center align-middle mx-1 my-0.5 py-0.5 text-[0.88em] leading-[1.25] whitespace-nowrap"
           >
-            <span className="px-1 border-b border-current pb-[1px]">
+            <span className="px-1.5 border-b border-current pb-[2px]">
               {renderNodes(node.numerator, `${key}_n`)}
             </span>
-            <span className="px-1 pt-[1px]">
+            <span className="px-1.5 pt-[2px]">
               {renderNodes(node.denominator, `${key}_d`)}
             </span>
           </span>
@@ -174,6 +203,9 @@ interface MathRichTextProps {
 }
 
 export const MathRichText: React.FC<MathRichTextProps> = ({ text, className = '' }) => {
-  const [nodes] = React.useMemo(() => parseUntil(text, 0, null), [text]);
-  return <span className={className}>{renderNodes(nodes)}</span>;
+  const [nodes] = React.useMemo(() => {
+    const normalized = normalizeMathMacros(text);
+    return parseUntil(normalized, 0, null);
+  }, [text]);
+  return <span className={`inline leading-[inherit] ${className}`}>{renderNodes(nodes)}</span>;
 };

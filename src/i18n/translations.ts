@@ -99,6 +99,11 @@ export interface Translations {
   errWrongAdminGoogleAccount: string;
   onlyAdminAllowedError: string;
   signOutBtn: string;
+  adminConnectFirebaseTitle: string;
+  adminConnectFirebaseDesc: string;
+  adminConnectFirebaseBtn: string;
+  adminConnectingBtn: string;
+  offlineSyncBadge: string;
 
   // Admin Panel
   adminPanelTitle: string;
@@ -258,6 +263,12 @@ const GU: Translations = {
   errWrongAdminGoogleAccount: 'માત્ર અધિકૃત એડમિન Google એકાઉન્ટ (omsai3248@gmail.com) જ માન્ય છે!',
   onlyAdminAllowedError: 'માત્ર 9099592283 નંબર જ એડમિન લૉગિન માટે માન્ય છે!',
   signOutBtn: 'એડમિન લૉગ આઉટ',
+  adminConnectFirebaseTitle: 'Live Firebase ડેટા હજી કનેક્ટ નથી',
+  adminConnectFirebaseDesc:
+    'વિદ્યાર્થીઓની પેમેન્ટ વિનંતીઓ, કોડ્સ અને મંજૂરી માટે અધિકૃત એડમિન Google એકાઉન્ટ (omsai3248@gmail.com) થી 1-ટેપ કનેક્ટ કરો.',
+  adminConnectFirebaseBtn: 'Google થી Live Firebase જોડો',
+  adminConnectingBtn: 'કનેક્ટ થઈ રહ્યું છે...',
+  offlineSyncBadge: 'કનેક્ટ બાકી',
 
   adminPanelTitle: 'એડમિન કંટ્રોલ પેનલ',
   liveBadge: 'લાઇવ',
@@ -416,6 +427,12 @@ const EN: Translations = {
   errWrongAdminGoogleAccount: 'Only authorized owner Google account (omsai3248@gmail.com) is allowed!',
   onlyAdminAllowedError: 'Only 9099592283 is allowed for Admin Login!',
   signOutBtn: 'Admin Sign Out',
+  adminConnectFirebaseTitle: 'Live Firebase Sync Not Connected Yet',
+  adminConnectFirebaseDesc:
+    'Connect your authorized Google account (omsai3248@gmail.com) with 1 tap to view live payment requests, approve codes, and manage students.',
+  adminConnectFirebaseBtn: 'Connect Live Firebase via Google',
+  adminConnectingBtn: 'Connecting...',
+  offlineSyncBadge: 'Sync Offline',
 
   adminPanelTitle: 'Admin Control Panel',
   liveBadge: 'LIVE',
