@@ -20,6 +20,12 @@ export interface Translations {
   payUpiCopied: string;
   payUpiOpenApp: string;
   payUpiQuickTip: string;
+  payQrTitle: string;
+  payQrSaveShare: string;
+  payQrSavedMsg: string;
+  payCopyAmount: string;
+  payCopyUpiId: string;
+  payUpiBankLimitNote: string;
   loginTitle: string;
   loginSubtitle: string;
   loginBtn: string;
@@ -152,6 +158,10 @@ export interface Translations {
   alertsLabel: string;
   clearAlertsBtn: string;
   noAlertsYet: string;
+  deleteBtn: string;
+  deleteConfirmTitle: string;
+  deleteConfirmDesc: string;
+  deleteSuccessMsg: string;
 
   // Validation & Errors
   errInvalidName: string;
@@ -182,8 +192,15 @@ const GU: Translations = {
   payUpiCardTitle: 'UPI દ્વારા પેમેન્ટ કરો',
   payUpiCopy: 'કોપી',
   payUpiCopied: 'કોપી થઈ ગયો',
-  payUpiOpenApp: 'UPI એપ દ્વારા ચૂકવો',
-  payUpiQuickTip: 'ફક્ત UPI દ્વારા પેમેન્ટ કરો, ત્યારબાદ UTR નંબર અને સ્ક્રીનશોટ સીધો એડમિન પેનલમાં મોકલો.',
+  payUpiOpenApp: 'ડાયરેક્ટ UPI એપ ખોલો',
+  payUpiQuickTip: 'પેમેન્ટ કર્યા બાદ Transaction / UTR નંબર અને સ્ક્રીનશોટ નીચે અપલોડ કરો.',
+  payQrTitle: 'UPI QR કોડ સ્કેન કરો (Bank Limit Error વગર)',
+  payQrSaveShare: 'QR સેવ / શેર કરો (Gallery થી સ્કેન કરો)',
+  payQrSavedMsg: 'QR ફોટો તૈયાર છે — GPay / PhonePe માં "Scan from gallery" વડે પેમેન્ટ કરો.',
+  payCopyAmount: 'રકમ કોપી',
+  payCopyUpiId: 'UPI ID કોપી',
+  payUpiBankLimitNote:
+    'જો "ડાયરેક્ટ UPI એપ" બટનમાં HDFC/Bank Limit Error આવે, તો ઉપરનો QR કોડ સેવ કરી GPay/PhonePe માં "Scan from Gallery" કરો અથવા UPI ID કોપી કરી સીધું પેમેન્ટ કરો.',
   loginTitle: 'મોબાઇલ નંબરથી લૉગિન કરો',
   loginSubtitle: 'તમારું નામ અને ૧૦ અંકનો મોબાઇલ નંબર દાખલ કરી ધોરણ ૧૦ ક્વિઝ પ્લેટફોર્મ ખોલો.',
   loginBtn: 'લૉગિન કરી ક્વિઝ શરૂ કરો',
@@ -303,7 +320,7 @@ const GU: Translations = {
   filterUsed: 'વપરાયેલ (Used)',
   exportCsvBtn: 'CSV ડાઉનલોડ',
   exportPdfBtn: 'A4 PDF',
-  permanentCodesNote: 'બધા જનરેટ થયેલા કોડ્સ કાયમ માટે સુરક્ષિત છે (ક્યારેય ડિલીટ થતા નથી).',
+  permanentCodesNote: 'એડમિન પાસવર્ડ વડે જરૂર મુજબ કોડ્સ મેનેજ અથવા ડિલીટ કરી શકાય છે.',
   noCodesFound: 'કોઈ કોડ મળ્યો નથી.',
   noUsedCodesYet: 'હજી સુધી કોઈ કોડ વપરાયો નથી.',
   usedByHeader: 'કોણે વાપર્યો (Live Detail)',
@@ -315,6 +332,10 @@ const GU: Translations = {
   alertsLabel: 'લાઇવ એલર્ટ્સ',
   clearAlertsBtn: 'બધા સાફ કરો',
   noAlertsYet: 'હજી કોઈ નવું લાઇવ એલર્ટ નથી.',
+  deleteBtn: 'ડિલીટ',
+  deleteConfirmTitle: 'એડમિન ડિલીટ કન્ફર્મેશન',
+  deleteConfirmDesc: 'આ વિગત કાયમ માટે ડિલીટ કરવા માટે એડમિન પાસવર્ડ દાખલ કરો:',
+  deleteSuccessMsg: 'સફળતાપૂર્વક ડિલીટ થઈ ગયું.',
 
   errInvalidName: 'કૃપા કરીને માન્ય પૂરું નામ લખો.',
   errInvalidMobile: 'કૃપા કરીને ૧૦ અંકનો માન્ય મોબાઇલ નંબર લખો.',
@@ -344,8 +365,15 @@ const EN: Translations = {
   payUpiCardTitle: 'Pay via UPI',
   payUpiCopy: 'Copy',
   payUpiCopied: 'Copied',
-  payUpiOpenApp: 'Pay via UPI',
-  payUpiQuickTip: 'Pay strictly via UPI, then upload the UTR ID and screenshot straight to the Admin Panel.',
+  payUpiOpenApp: 'Open UPI App Directly',
+  payUpiQuickTip: 'After paying, upload the Transaction / UTR ID and screenshot below.',
+  payQrTitle: 'Scan UPI QR Code (No Intent Limit)',
+  payQrSaveShare: 'Save / Share QR (Scan from Gallery)',
+  payQrSavedMsg: 'QR image ready — open GPay / PhonePe and select "Scan from gallery".',
+  payCopyAmount: 'Copy ₹',
+  payCopyUpiId: 'Copy UPI ID',
+  payUpiBankLimitNote:
+    'If direct UPI intent shows a Bank Limit error (common in HDFC/GPay), save/scan this QR from Gallery or copy the UPI ID and pay directly inside GPay/PhonePe.',
   loginTitle: 'Login with Mobile Number',
   loginSubtitle: 'Enter your name and 10-digit mobile number to open the Std 10 Quiz platform.',
   loginBtn: 'Login & Open Quiz Platform',
@@ -466,7 +494,7 @@ const EN: Translations = {
   filterUsed: 'Used',
   exportCsvBtn: 'Export CSV',
   exportPdfBtn: 'A4 PDF',
-  permanentCodesNote: 'All generated codes are stored permanently (never deleted).',
+  permanentCodesNote: 'Admin can manage or permanently delete codes using the Admin password.',
   noCodesFound: 'No matching codes found.',
   noUsedCodesYet: 'No codes have been used yet.',
   usedByHeader: 'Used By (Live Audit)',
@@ -478,6 +506,10 @@ const EN: Translations = {
   alertsLabel: 'Live Alerts',
   clearAlertsBtn: 'Clear All',
   noAlertsYet: 'No live alerts yet.',
+  deleteBtn: 'Delete',
+  deleteConfirmTitle: 'Confirm Admin Delete',
+  deleteConfirmDesc: 'Enter Admin Password to permanently delete this record:',
+  deleteSuccessMsg: 'Deleted successfully.',
 
   errInvalidName: 'Please enter a valid full name.',
   errInvalidMobile: 'Please enter a valid 10-digit mobile number.',

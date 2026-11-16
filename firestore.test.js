@@ -268,10 +268,31 @@ test("Only authorized admin (+919099592283, admin9099592283@std10quiz.app, or ve
   await assertSucceeds(verifiedOwnerDb.collection("payment_requests").get());
 });
 
-test("Admin (+919099592283) can approve payment + create permanent 8-char code, and codes can NEVER be deleted", async () => {
+test("Admin (+919099592283) can approve payment + create 8-char code, and only admin can delete requests/locks/codes/students", async () => {
   await testEnv.withSecurityRulesDisabled(async (ctx) => {
     const db = ctx.firestore();
+    await db.collection("utr_locks").doc("UTR123456789").set({
+      utrNormalized: "UTR123456789",
+      requestId: "pay_1",
+      createdAt: new Date(),
+    });
     await db.collection("payment_requests").doc("pay_1").set(makePaymentPayload(ALICE_UID));
+    await db.collection("students").doc("mob_9876543210").set({
+      userId: "mob_9876543210",
+      fullName: "Aarav Patel",
+      mobileNumber: "9876543210",
+      email: "",
+      standard: "ધોરણ 10",
+      hasQuizAccess: false,
+      redeemedCode: "",
+      paymentStatus: "none",
+      totalQuizzesTaken: 0,
+      bestScorePercent: 0,
+      unlockedSubjects: [],
+      paymentRequestIds: [],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
   });
 
   const adminDb = testEnv.authenticatedContext(ADMIN_UID, {
@@ -293,8 +314,22 @@ test("Admin (+919099592283) can approve payment + create permanent 8-char code, 
   });
   await assertSucceeds(batch.commit());
 
-  // Even admin cannot delete a generated code (permanent storage)
-  await assertFails(adminDb.collection("access_codes").doc(code).delete());
+  // Non-admin & unauthenticated CANNOT delete codes, payment requests, UTR locks, or students
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const unauthDb = testEnv.unauthenticatedContext().firestore();
+  await assertFails(aliceDb.collection("access_codes").doc(code).delete());
+  await assertFails(unauthDb.collection("access_codes").doc(code).delete());
+  await assertFails(aliceDb.collection("payment_requests").doc("pay_1").delete());
+  await assertFails(aliceDb.collection("utr_locks").doc("UTR123456789").delete());
+  await assertFails(aliceDb.collection("students").doc("mob_9876543210").delete());
+
+  // Admin CAN delete access codes, payment requests + UTR lock, and students
+  await assertSucceeds(adminDb.collection("access_codes").doc(code).delete());
+  const delReqBatch = adminDb.batch();
+  delReqBatch.delete(adminDb.collection("payment_requests").doc("pay_1"));
+  delReqBatch.delete(adminDb.collection("utr_locks").doc("UTR123456789"));
+  await assertSucceeds(delReqBatch.commit());
+  await assertSucceeds(adminDb.collection("students").doc("mob_9876543210").delete());
 });
 
 test("Public user can redeem an unused code once with usedBy + deviceInfo, and reuse is strictly blocked", async () => {

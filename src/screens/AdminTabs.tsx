@@ -12,12 +12,12 @@ import {
   Send,
   ShieldCheck,
   Smartphone,
+  Trash2,
   UserCheck,
   Wallet,
   X,
 } from 'lucide-react';
 import { useTranslation } from '../i18n/translations';
-import { exportAccessCodesA4Pdf } from '../services/pdfGenerator';
 import {
   ALL_SUBJECT_IDS,
   displayPaymentTransactionRef,
@@ -60,8 +60,9 @@ export const AdminRequestsTab: React.FC<{
   onZoomScreenshot: (url: string) => void;
   onApprove: (req: PaymentRequest, adminNote: string, subjectId: string) => void;
   onReject: (req: PaymentRequest, reason: string) => void;
+  onDeleteRequest: (req: PaymentRequest) => void;
   onNotify?: (message: string) => void;
-}> = ({ payments, isBusy, onZoomScreenshot, onApprove, onReject, onNotify }) => {
+}> = ({ payments, isBusy, onZoomScreenshot, onApprove, onReject, onDeleteRequest, onNotify }) => {
   const { lang, t } = useTranslation();
   const [statusFilter, setStatusFilter] = useState<'pending' | 'approved' | 'rejected' | 'all'>('pending');
 
@@ -115,6 +116,7 @@ export const AdminRequestsTab: React.FC<{
               onZoomScreenshot={onZoomScreenshot}
               onApprove={onApprove}
               onReject={onReject}
+              onDeleteRequest={onDeleteRequest}
               onNotify={onNotify}
             />
           ))}
@@ -131,8 +133,9 @@ const PaymentRequestCard: React.FC<{
   onZoomScreenshot: (url: string) => void;
   onApprove: (req: PaymentRequest, adminNote: string, subjectId: string) => void;
   onReject: (req: PaymentRequest, reason: string) => void;
+  onDeleteRequest: (req: PaymentRequest) => void;
   onNotify?: (message: string) => void;
-}> = ({ req, lang, isBusy, onZoomScreenshot, onApprove, onReject, onNotify }) => {
+}> = ({ req, lang, isBusy, onZoomScreenshot, onApprove, onReject, onDeleteRequest, onNotify }) => {
   const { t } = useTranslation();
   const requestedSubject = resolvePaymentSubjectId(req);
   const [selectedApproveSubject, setSelectedApproveSubject] = useState<string>(requestedSubject);
@@ -160,25 +163,37 @@ const PaymentRequestCard: React.FC<{
             +91 {req.mobileNumber} • {req.id}
           </p>
         </div>
-        <div className="flex flex-col items-end gap-1 shrink-0">
-          <span
-            className={`rounded-md px-2 py-0.5 text-[11px] font-bold ${
-              req.status === 'approved'
-                ? 'bg-[#D1FAE5] text-[#064E3B] dark:bg-[#064E3B] dark:text-[#D1FAE5]'
+        <div className="flex items-start gap-1.5 shrink-0">
+          <div className="flex flex-col items-end gap-1">
+            <span
+              className={`rounded-md px-2 py-0.5 text-[11px] font-bold ${
+                req.status === 'approved'
+                  ? 'bg-[#D1FAE5] text-[#064E3B] dark:bg-[#064E3B] dark:text-[#D1FAE5]'
+                  : req.status === 'rejected'
+                    ? 'bg-[#FEE2E2] text-[#7F1D1D] dark:bg-[#7F1D1D] dark:text-[#FEE2E2]'
+                    : 'bg-[#FEF3C7] text-[#92400E] dark:bg-[#451A03] dark:text-[#FDE68A]'
+              }`}
+            >
+              {req.status === 'approved'
+                ? t.statusApproved
                 : req.status === 'rejected'
-                  ? 'bg-[#FEE2E2] text-[#7F1D1D] dark:bg-[#7F1D1D] dark:text-[#FEE2E2]'
-                  : 'bg-[#FEF3C7] text-[#92400E] dark:bg-[#451A03] dark:text-[#FDE68A]'
-            }`}
+                  ? t.statusRejected
+                  : t.statusPending}
+            </span>
+            <span className="rounded-md bg-[#DBEAFE] dark:bg-[#1E3A5F] text-[#1E3A8A] dark:text-[#DBEAFE] px-2 py-0.5 text-[11px] font-bold">
+              {getSubjectDisplayName(requestedSubject, lang)}
+            </span>
+          </div>
+          <button
+            type="button"
+            disabled={isBusy}
+            onClick={() => onDeleteRequest(req)}
+            title={t.deleteBtn}
+            aria-label={`${t.deleteBtn} ${req.studentName}`}
+            className="h-9 w-9 rounded-xl border border-red-200 dark:border-red-900/70 text-red-600 dark:text-red-400 flex items-center justify-center hover:bg-red-50 dark:hover:bg-red-950/40 disabled:opacity-50 cursor-pointer shrink-0"
           >
-            {req.status === 'approved'
-              ? t.statusApproved
-              : req.status === 'rejected'
-                ? t.statusRejected
-                : t.statusPending}
-          </span>
-          <span className="rounded-md bg-[#DBEAFE] dark:bg-[#1E3A5F] text-[#1E3A8A] dark:text-[#DBEAFE] px-2 py-0.5 text-[11px] font-bold">
-            {getSubjectDisplayName(requestedSubject, lang)}
-          </span>
+            <Trash2 className="h-4 w-4" />
+          </button>
         </div>
       </div>
 
@@ -328,8 +343,16 @@ export const AdminAllCodesTab: React.FC<{
   lastGeneratedBatch: string[];
   isBusy: boolean;
   onGenerateBulkCodes: (count: number, batchName: string, subjectId: string) => void;
+  onDeleteCode: (item: AccessCode) => void;
   onNotify?: (message: string) => void;
-}> = ({ accessCodes, lastGeneratedBatch, isBusy, onGenerateBulkCodes, onNotify }) => {
+}> = ({
+  accessCodes,
+  lastGeneratedBatch,
+  isBusy,
+  onGenerateBulkCodes,
+  onDeleteCode,
+  onNotify,
+}) => {
   const { lang, t } = useTranslation();
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'unused' | 'used'>('all');
@@ -482,8 +505,9 @@ export const AdminAllCodesTab: React.FC<{
           <button
             type="button"
             disabled={filteredCodes.length === 0}
-            onClick={() => {
+            onClick={async () => {
               try {
+                const { exportAccessCodesA4Pdf } = await import('../services/pdfGenerator');
                 exportAccessCodesA4Pdf(filteredCodes, statusFilter);
                 onNotify?.(`${t.exportPdfBtn} (${filteredCodes.length})`);
               } catch (err) {
@@ -555,10 +579,20 @@ export const AdminAllCodesTab: React.FC<{
                     <button
                       type="button"
                       onClick={() => void copyText(item.code, `${t.payUpiCopied}: ${item.code}`)}
-                      className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                      className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
                       aria-label={t.copyCode}
                     >
                       <Copy className="h-4 w-4" />
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isBusy}
+                      onClick={() => onDeleteCode(item)}
+                      title={t.deleteBtn}
+                      aria-label={`${t.deleteBtn} ${item.code}`}
+                      className="p-2 rounded-lg text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 disabled:opacity-50 cursor-pointer"
+                    >
+                      <Trash2 className="h-4 w-4" />
                     </button>
                   </div>
                 </div>
@@ -604,7 +638,9 @@ export const AdminAllCodesTab: React.FC<{
 /* --- Tab 3: Used Codes Live Audit Tab --- */
 export const AdminUsedCodesTab: React.FC<{
   accessCodes: AccessCode[];
-}> = ({ accessCodes }) => {
+  isBusy: boolean;
+  onDeleteCode: (item: AccessCode) => void;
+}> = ({ accessCodes, isBusy, onDeleteCode }) => {
   const { lang, t } = useTranslation();
 
   const usedCodes = useMemo(() => {
@@ -657,9 +693,21 @@ export const AdminUsedCodesTab: React.FC<{
                   <span className="text-base font-extrabold tracking-widest font-mono text-[#1E3A8A] dark:text-[#93C5FD]">
                     {item.code}
                   </span>
-                  <span className="rounded-md bg-[#DBEAFE] dark:bg-[#1E3A5F] text-[#1E3A8A] dark:text-[#DBEAFE] px-2 py-0.5 text-[11px] font-bold">
-                    {getSubjectDisplayName(resolvedSub, lang)}
-                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="rounded-md bg-[#DBEAFE] dark:bg-[#1E3A5F] text-[#1E3A8A] dark:text-[#DBEAFE] px-2 py-0.5 text-[11px] font-bold">
+                      {getSubjectDisplayName(resolvedSub, lang)}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={isBusy}
+                      onClick={() => onDeleteCode(item)}
+                      title={t.deleteBtn}
+                      aria-label={`${t.deleteBtn} ${item.code}`}
+                      className="p-1.5 rounded-lg text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 disabled:opacity-50 cursor-pointer"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
                 </div>
 
                 <div className="rounded-xl bg-[#D1FAE5]/60 dark:bg-[#064E3B]/50 p-3 space-y-1 text-xs">
@@ -711,7 +759,14 @@ export const AdminStudentsTab: React.FC<{
     subjectId: SubjectId,
     grantAccess: boolean
   ) => void;
-}> = ({ students, isBusy, onToggleStudentAccess, onUpdateStudentSubjectAccess }) => {
+  onDeleteStudent: (student: StudentProfile) => void;
+}> = ({
+  students,
+  isBusy,
+  onToggleStudentAccess,
+  onUpdateStudentSubjectAccess,
+  onDeleteStudent,
+}) => {
   const { lang, t } = useTranslation();
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -824,18 +879,30 @@ export const AdminStudentsTab: React.FC<{
                   })}
                 </div>
 
-                <button
-                  type="button"
-                  disabled={isBusy}
-                  onClick={() => onToggleStudentAccess(st, !hasFull)}
-                  className={`w-full h-10 rounded-xl text-xs font-extrabold transition-colors cursor-pointer disabled:opacity-60 ${
-                    hasFull
-                      ? 'border border-red-300 dark:border-red-800 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40'
-                      : 'bg-[#1E3A8A] hover:bg-[#172554] text-white'
-                  }`}
-                >
-                  {hasFull ? t.revokeAccessBtn : t.grantAllAccessBtn}
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={isBusy}
+                    onClick={() => onToggleStudentAccess(st, !hasFull)}
+                    className={`flex-1 h-11 rounded-xl text-xs font-extrabold transition-colors cursor-pointer disabled:opacity-60 ${
+                      hasFull
+                        ? 'border border-red-300 dark:border-red-800 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40'
+                        : 'bg-[#1E3A8A] hover:bg-[#172554] text-white'
+                    }`}
+                  >
+                    {hasFull ? t.revokeAccessBtn : t.grantAllAccessBtn}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isBusy}
+                    onClick={() => onDeleteStudent(st)}
+                    title={t.deleteBtn}
+                    aria-label={`${t.deleteBtn} ${st.fullName}`}
+                    className="h-11 w-11 rounded-xl border border-red-300 dark:border-red-800 text-red-600 dark:text-red-400 flex items-center justify-center hover:bg-red-50 dark:hover:bg-red-950/40 disabled:opacity-60 cursor-pointer shrink-0"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
               </div>
             );
           })}

@@ -1,7 +1,9 @@
 import {
   collection,
+  deleteDoc,
   doc,
   getDoc,
+  getDocs,
   onSnapshot,
   query,
   runTransaction,
@@ -204,6 +206,7 @@ export async function signInAsAdminWithPasscode(
 const PUBLIC_VISITOR_UID_KEY = 'std10_public_visitor_uid_v1';
 const MY_PAYMENT_IDS_KEY = 'std10_my_payment_ids_v1';
 let memoryPublicVisitorId = '';
+const knownSyncedStudentIds = new Set<string>();
 
 function randomHex32(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -328,9 +331,11 @@ export function observeStudentProfile(
     ref,
     (snap) => {
       if (!snap.exists()) {
+        knownSyncedStudentIds.delete(userId);
         onData(null);
         return;
       }
+      knownSyncedStudentIds.add(userId);
       const d = snap.data();
       onData({
         id: snap.id,
@@ -429,12 +434,19 @@ export async function registerOrUpdateStudentProfile(
         updatedAt: serverTimestamp(),
       });
     } else {
-      await updateDoc(ref, {
-        fullName: trimmedName,
-        email: email.slice(0, 120),
-        updatedAt: serverTimestamp(),
-      });
+      const prevData = existing.data();
+      if (
+        String(prevData.fullName ?? '') !== trimmedName ||
+        String(prevData.email ?? '') !== email.slice(0, 120)
+      ) {
+        await updateDoc(ref, {
+          fullName: trimmedName,
+          email: email.slice(0, 120),
+          updatedAt: serverTimestamp(),
+        });
+      }
     }
+    knownSyncedStudentIds.add(studentId);
     return studentId;
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, ref.path);
@@ -812,103 +824,124 @@ export async function redeemAccessCodePublic(params: {
   const codeRef = doc(db, COLLECTION_ACCESS_CODES, cleanCode);
   const studentRef = doc(db, COLLECTION_STUDENTS, studentId);
 
-  try {
-    if (canSyncStudent) {
-      const existingStudent = await getDoc(studentRef);
-      if (!existingStudent.exists()) {
-        await setDoc(studentRef, {
-          userId: studentId,
-          fullName: cleanName,
-          mobileNumber: cleanMobile,
-          email: '',
-          standard: 'ધોરણ 10',
-          hasQuizAccess: false,
-          redeemedCode: '',
-          paymentStatus: 'none',
-          totalQuizzesTaken: 0,
-          bestScorePercent: 0,
-          unlockedSubjects: [],
-          paymentRequestIds: [],
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
-      }
-    }
-
-    const result = await runTransaction(db, async (tx) => {
-      const codeSnap = await tx.get(codeRef);
-      const stSnap = canSyncStudent ? await tx.get(studentRef) : null;
-      if (!codeSnap.exists()) {
-        throw new Error('CODE_NOT_FOUND');
-      }
-      const d = codeSnap.data();
-      if (d.status === 'used' || d.isUsed === true) {
-        throw new Error('CODE_ALREADY_USED');
-      }
-
-      const codeSubjectId = resolveCodeSubjectId(
-        cleanCode,
-        String(d.batchName ?? ''),
-        String(d.subjectId ?? '')
-      );
-      if (
-        params.expectedSubjectId &&
-        params.expectedSubjectId !== 'all' &&
-        codeSubjectId !== 'all' &&
-        codeSubjectId !== params.expectedSubjectId
-      ) {
-        throw new Error(`SUBJECT_MISMATCH:${codeSubjectId}`);
-      }
-
-      const usedByPayload: AccessCodeUsedBy = {
-        uid,
-        name: cleanName,
-        mobile: cleanMobile,
-        deviceInfo: deviceInfo || 'Web Browser',
-      };
-
-      tx.update(codeRef, {
-        status: 'used',
-        isUsed: true,
-        usedAt: serverTimestamp(),
-        usedBy: usedByPayload,
-        usedByUserId: uid,
-        usedByMobile: cleanMobile,
-        usedByName: cleanName,
+  const ensureStudentExistsWeb = async () => {
+    if (!canSyncStudent) return;
+    const existingStudent = await getDoc(studentRef);
+    if (!existingStudent.exists()) {
+      await setDoc(studentRef, {
+        userId: studentId,
+        fullName: cleanName,
+        mobileNumber: cleanMobile,
+        email: '',
+        standard: 'ધોરણ 10',
+        hasQuizAccess: false,
+        redeemedCode: '',
+        paymentStatus: 'none',
+        totalQuizzesTaken: 0,
+        bestScorePercent: 0,
+        unlockedSubjects: [],
+        paymentRequestIds: [],
+        createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
+    }
+    knownSyncedStudentIds.add(studentId);
+  };
 
-      if (canSyncStudent && stSnap && stSnap.exists()) {
-        const unlockedSet = new Set<string>(
-          Array.isArray(stSnap.data().unlockedSubjects)
-            ? stSnap.data().unlockedSubjects.map((x: unknown) => String(x))
-            : []
-        );
-        if (codeSubjectId === 'all') {
-          unlockedSet.add('all');
-          ALL_SUBJECT_IDS.forEach((s) => unlockedSet.add(s));
-        } else {
-          unlockedSet.add(codeSubjectId);
+  try {
+    if (canSyncStudent && !knownSyncedStudentIds.has(studentId)) {
+      await ensureStudentExistsWeb();
+    }
+
+    const executeRedeemTx = () =>
+      runTransaction(db, async (tx) => {
+        const [codeSnap, stSnap] = await Promise.all([
+          tx.get(codeRef),
+          canSyncStudent ? tx.get(studentRef) : Promise.resolve(null),
+        ]);
+        if (!codeSnap.exists()) {
+          throw new Error('CODE_NOT_FOUND');
         }
-        const hasFull =
-          unlockedSet.has('all') || ALL_SUBJECT_IDS.every((s) => unlockedSet.has(s));
+        const d = codeSnap.data();
+        if (d.status === 'used' || d.isUsed === true) {
+          throw new Error('CODE_ALREADY_USED');
+        }
+        if (canSyncStudent && (!stSnap || !stSnap.exists())) {
+          knownSyncedStudentIds.delete(studentId);
+          throw new Error('STUDENT_DOC_MISSING_RETRY');
+        }
 
-        tx.update(studentRef, {
-          hasQuizAccess: hasFull,
-          redeemedCode: cleanCode,
-          unlockedSubjects: Array.from(unlockedSet).slice(0, 10),
+        const codeSubjectId = resolveCodeSubjectId(
+          cleanCode,
+          String(d.batchName ?? ''),
+          String(d.subjectId ?? '')
+        );
+        if (
+          params.expectedSubjectId &&
+          params.expectedSubjectId !== 'all' &&
+          codeSubjectId !== 'all' &&
+          codeSubjectId !== params.expectedSubjectId
+        ) {
+          throw new Error(`SUBJECT_MISMATCH:${codeSubjectId}`);
+        }
+
+        const usedByPayload: AccessCodeUsedBy = {
+          uid,
+          name: cleanName,
+          mobile: cleanMobile,
+          deviceInfo: deviceInfo || 'Web Browser',
+        };
+
+        tx.update(codeRef, {
+          status: 'used',
+          isUsed: true,
+          usedAt: serverTimestamp(),
+          usedBy: usedByPayload,
+          usedByUserId: uid,
+          usedByMobile: cleanMobile,
+          usedByName: cleanName,
           updatedAt: serverTimestamp(),
         });
+
+        if (canSyncStudent && stSnap && stSnap.exists()) {
+          const unlockedSet = new Set<string>(
+            Array.isArray(stSnap.data().unlockedSubjects)
+              ? stSnap.data().unlockedSubjects.map((x: unknown) => String(x))
+              : []
+          );
+          if (codeSubjectId === 'all') {
+            unlockedSet.add('all');
+            ALL_SUBJECT_IDS.forEach((s) => unlockedSet.add(s));
+          } else {
+            unlockedSet.add(codeSubjectId);
+          }
+          const hasFull =
+            unlockedSet.has('all') || ALL_SUBJECT_IDS.every((s) => unlockedSet.has(s));
+
+          tx.update(studentRef, {
+            hasQuizAccess: hasFull,
+            redeemedCode: cleanCode,
+            unlockedSubjects: Array.from(unlockedSet).slice(0, 10),
+            updatedAt: serverTimestamp(),
+          });
+        }
+
+        return {
+          code: cleanCode,
+          subjectId: codeSubjectId,
+          amountRupees: Number(d.amountRupees ?? 0),
+        };
+      });
+
+    try {
+      return await executeRedeemTx();
+    } catch (innerErr) {
+      if (innerErr instanceof Error && innerErr.message === 'STUDENT_DOC_MISSING_RETRY') {
+        await ensureStudentExistsWeb();
+        return await executeRedeemTx();
       }
-
-      return {
-        code: cleanCode,
-        subjectId: codeSubjectId,
-        amountRupees: Number(d.amountRupees ?? 0),
-      };
-    });
-
-    return result;
+      throw innerErr;
+    }
   } catch (error) {
     if (
       error instanceof Error &&
@@ -1490,5 +1523,90 @@ export async function saveReleaseConfig(
     });
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, ref.path);
+  }
+}
+
+export async function deletePaymentRequestAdmin(req: PaymentRequest): Promise<void> {
+  const utrNorm = req.utrNormalized?.trim() || normalizeUtrId(req.upiTransactionRef || '');
+  if (hasNativeFirebaseBridge()) {
+    await invokeNativeBridgeCall((callId) => {
+      window.AndroidFirebaseBridge?.deletePaymentRequest?.(
+        callId,
+        JSON.stringify({ requestId: req.id, utrNormalized: utrNorm })
+      );
+    });
+    return;
+  }
+  requireUserId();
+  const reqRef = doc(db, COLLECTION_PAYMENT_REQUESTS, req.id);
+  try {
+    const batch = writeBatch(db);
+    batch.delete(reqRef);
+    if (/^[A-Z0-9_-]{4,64}$/.test(utrNorm)) {
+      batch.delete(doc(db, COLLECTION_UTR_LOCKS, utrNorm));
+    }
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, reqRef.path);
+  }
+}
+
+export async function deleteAccessCodeAdmin(code: string): Promise<void> {
+  const cleanCode = code.trim();
+  if (!cleanCode) return;
+  if (hasNativeFirebaseBridge()) {
+    await invokeNativeBridgeCall((callId) => {
+      window.AndroidFirebaseBridge?.deleteAccessCode?.(
+        callId,
+        JSON.stringify({ code: cleanCode })
+      );
+    });
+    return;
+  }
+  requireUserId();
+  const codeRef = doc(db, COLLECTION_ACCESS_CODES, cleanCode);
+  try {
+    await deleteDoc(codeRef);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, codeRef.path);
+  }
+}
+
+export async function deleteStudentAdmin(student: StudentProfile): Promise<void> {
+  const studentId = (student.id || student.userId).trim();
+  if (!studentId) return;
+  if (hasNativeFirebaseBridge()) {
+    await invokeNativeBridgeCall((callId) => {
+      window.AndroidFirebaseBridge?.deleteStudent?.(
+        callId,
+        JSON.stringify({ studentId })
+      );
+    });
+    knownSyncedStudentIds.delete(studentId);
+    return;
+  }
+  requireUserId();
+  const studentRef = doc(db, COLLECTION_STUDENTS, studentId);
+  try {
+    const attemptsSnap = await getDocs(
+      collection(db, COLLECTION_STUDENTS, studentId, SUBCOLLECTION_QUIZ_ATTEMPTS)
+    );
+    const attemptRefs = attemptsSnap.docs.map((d) => d.ref);
+    if (attemptRefs.length === 0) {
+      await deleteDoc(studentRef);
+    } else {
+      for (let i = 0; i < attemptRefs.length; i += 400) {
+        const chunk = attemptRefs.slice(i, i + 400);
+        const batch = writeBatch(db);
+        chunk.forEach((r) => batch.delete(r));
+        if (i + 400 >= attemptRefs.length) {
+          batch.delete(studentRef);
+        }
+        await batch.commit();
+      }
+    }
+    knownSyncedStudentIds.delete(studentId);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, studentRef.path);
   }
 }

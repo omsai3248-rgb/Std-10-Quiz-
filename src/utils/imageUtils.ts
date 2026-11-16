@@ -76,6 +76,7 @@ export function buildUpiPaymentHref(
     `am=${encodeURIComponent(cleanAmount)}`,
     'cu=INR',
     `tn=${encodeURIComponent(note)}`,
+    'mode=02',
   ].join('&');
 
   return `upi://pay?${query}`;
@@ -88,6 +89,20 @@ export function launchUpiPayment(upiUrl: string): void {
     return;
   }
   window.location.href = upiUrl;
+}
+
+export function saveOrSharePngDataUrl(suggestedName: string, dataUrl: string): void {
+  if (typeof window === 'undefined' || !dataUrl) return;
+  if (window.AndroidBridge?.saveExportedFile) {
+    window.AndroidBridge.saveExportedFile(suggestedName, dataUrl);
+    return;
+  }
+  const link = document.createElement('a');
+  link.href = dataUrl;
+  link.download = suggestedName;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
 }
 
 export function launchExternalUrl(url: string): void {

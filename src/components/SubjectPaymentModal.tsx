@@ -9,7 +9,9 @@ import {
   IndianRupee,
   KeyRound,
   LockOpen,
+  QrCode,
   Radio,
+  Share2,
   Upload,
   X,
   XCircle,
@@ -36,8 +38,10 @@ import {
   formatTimestampLabel,
   launchUpiPayment,
   resolvePaymentImageSrc,
+  saveOrSharePngDataUrl,
   toImageDataUrl,
 } from '../utils/imageUtils';
+import { generateQrMatrix, renderQrToPngDataUrl } from '../utils/qrGenerator';
 
 interface SubjectPaymentModalProps {
   isOpen: boolean;
@@ -121,6 +125,13 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
 
   const fixedAmount = getFixedPlanPrice(selectedPlanSubject);
 
+  const upiPaymentUrl = useMemo(
+    () => buildUpiPaymentHref(ADMIN_UPI_ID, ADMIN_UPI_NAME, fixedAmount, studentMobile),
+    [fixedAmount, studentMobile]
+  );
+
+  const qrMatrix = useMemo(() => generateQrMatrix(upiPaymentUrl), [upiPaymentUrl]);
+
   const relevantPayments = useMemo(() => {
     if (submittedRequestId) {
       const matched = myPayments.filter((p) => p.id === submittedRequestId);
@@ -130,6 +141,18 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
   }, [myPayments, submittedRequestId]);
 
   if (!isOpen) return null;
+
+  const handleSaveShareQr = () => {
+    const pngDataUrl = renderQrToPngDataUrl(
+      upiPaymentUrl,
+      ADMIN_UPI_NAME,
+      `₹${fixedAmount} • ${ADMIN_UPI_ID}`
+    );
+    if (pngDataUrl) {
+      saveOrSharePngDataUrl(`Std10Quiz_UPI_${fixedAmount}.png`, pngDataUrl);
+      onNotify?.(t.payQrSavedMsg);
+    }
+  };
 
   const handleCopy = async (value: string) => {
     try {
@@ -409,43 +432,102 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
               </div>
             </section>
 
-            {/* Single Clean UPI Payment Card (Only UPI) */}
+            {/* Single Clean UPI Payment Card (QR + Copy UPI + Intent Fallback) */}
             <section className="rounded-2xl bg-[#FEF3C7] dark:bg-[#451A03] border border-[#F59E0B]/40 p-4 text-[#92400E] dark:text-[#FDE68A] space-y-3 shadow-sm">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="text-xs sm:text-sm font-extrabold break-words">
-                  {ADMIN_UPI_NAME}
+                <span className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-extrabold break-words">
+                  <QrCode className="h-4 w-4 shrink-0" />
+                  <span>{t.payQrTitle}</span>
                 </span>
                 <span className="rounded-lg bg-white/85 dark:bg-black/30 px-3 py-1 text-sm font-extrabold tabular-nums">
                   ₹{fixedAmount}
                 </span>
               </div>
 
-              <div className="flex items-center justify-between gap-2 rounded-xl bg-white/85 dark:bg-black/25 px-3.5 py-2.5">
-                <div className="min-w-0">
-                  <p className="text-[10px] font-bold opacity-75">UPI ID</p>
-                  <p className="text-sm sm:text-base font-extrabold break-all">{ADMIN_UPI_ID}</p>
+              {/* Crisp Scannable UPI QR Code + Payee Name */}
+              <div className="rounded-2xl bg-white p-3.5 flex flex-col items-center gap-2.5 text-[#0F172A] shadow-sm">
+                <p className="text-[11px] sm:text-xs font-extrabold text-center text-[#1E3A8A] break-words">
+                  {ADMIN_UPI_NAME}
+                </p>
+                <div className="p-2 rounded-xl border border-slate-200 bg-white">
+                  <svg
+                    viewBox={`0 0 ${qrMatrix.size + 8} ${qrMatrix.size + 8}`}
+                    className="w-44 h-44 sm:w-48 sm:h-48"
+                    shapeRendering="crispEdges"
+                    role="img"
+                    aria-label={`${t.payQrTitle} ₹${fixedAmount}`}
+                  >
+                    <rect
+                      x={0}
+                      y={0}
+                      width={qrMatrix.size + 8}
+                      height={qrMatrix.size + 8}
+                      fill="#FFFFFF"
+                    />
+                    {qrMatrix.modules.map((row, r) =>
+                      row.map((dark, c) =>
+                        dark ? (
+                          <rect
+                            key={`${r}-${c}`}
+                            x={c + 4}
+                            y={r + 4}
+                            width={1}
+                            height={1}
+                            fill="#000000"
+                          />
+                        ) : null
+                      )
+                    )}
+                  </svg>
                 </div>
+
                 <button
                   type="button"
-                  onClick={() => void handleCopy(ADMIN_UPI_ID)}
-                  className="min-h-[40px] px-3 rounded-lg bg-[#92400E]/15 hover:bg-[#92400E]/25 dark:bg-white/15 text-xs font-extrabold flex items-center gap-1.5 shrink-0 cursor-pointer"
+                  onClick={handleSaveShareQr}
+                  className="w-full min-h-[48px] px-4 py-2 rounded-xl bg-[#047857] hover:bg-[#065F46] text-white text-xs sm:text-sm font-extrabold flex items-center justify-center gap-2 transition-colors cursor-pointer"
                 >
-                  <Copy className="h-3.5 w-3.5" />
-                  <span>{t.payUpiCopy}</span>
+                  <Share2 className="h-4 w-4 shrink-0" />
+                  <span>{t.payQrSaveShare}</span>
                 </button>
+              </div>
+
+              {/* Manual Copy UPI ID + Copy Amount (Bypasses Bank Intent Limits) */}
+              <div className="rounded-xl bg-white/85 dark:bg-black/25 p-3 space-y-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-bold opacity-75">UPI ID</p>
+                    <p className="text-sm sm:text-base font-extrabold break-all">{ADMIN_UPI_ID}</p>
+                  </div>
+                  <span className="text-sm font-extrabold tabular-nums shrink-0">
+                    ₹{fixedAmount}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void handleCopy(ADMIN_UPI_ID)}
+                    className="min-h-[44px] px-3 rounded-lg bg-[#92400E]/15 hover:bg-[#92400E]/25 dark:bg-white/15 text-xs font-extrabold flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <Copy className="h-3.5 w-3.5 shrink-0" />
+                    <span>{t.payCopyUpiId}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleCopy(String(fixedAmount))}
+                    className="min-h-[44px] px-3 rounded-lg bg-[#92400E]/15 hover:bg-[#92400E]/25 dark:bg-white/15 text-xs font-extrabold flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <Copy className="h-3.5 w-3.5 shrink-0" />
+                    <span>
+                      {t.payCopyAmount} ({fixedAmount})
+                    </span>
+                  </button>
+                </div>
               </div>
 
               <button
                 type="button"
-                onClick={() => {
-                  const upiUrl = buildUpiPaymentHref(
-                    ADMIN_UPI_ID,
-                    ADMIN_UPI_NAME,
-                    fixedAmount,
-                    studentMobile
-                  );
-                  launchUpiPayment(upiUrl);
-                }}
+                onClick={() => launchUpiPayment(upiPaymentUrl)}
                 className="w-full min-h-[48px] py-2.5 px-4 rounded-xl bg-[#1E3A8A] hover:bg-[#172554] text-white text-sm font-extrabold flex items-center justify-center gap-2 transition-colors cursor-pointer"
               >
                 <ExternalLink className="h-4 w-4 shrink-0" />
@@ -454,7 +536,10 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
                 </span>
               </button>
 
-              <p className="text-xs font-medium opacity-90 leading-relaxed">{t.payUpiQuickTip}</p>
+              <div className="rounded-xl bg-white/75 dark:bg-black/25 p-3 text-xs font-semibold leading-relaxed space-y-1">
+                <p>{t.payUpiBankLimitNote}</p>
+                <p className="opacity-85">{t.payUpiQuickTip}</p>
+              </div>
             </section>
 
             {/* UTR & Screenshot Form */}

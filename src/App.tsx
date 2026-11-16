@@ -1,18 +1,23 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { X } from 'lucide-react';
-import { findChapter, findSubject } from './data/curriculum/std10Curriculum';
+import {
+  getCachedChapter,
+  getCachedSubject,
+  loadSubjectWithChapters,
+} from './data/curriculum/std10Curriculum';
 import { TopNavHeader, type PublicTabId } from './components/TopNavHeader';
 import { UpdateAvailableModal } from './components/AppUpdateComponents';
 import { useTranslation } from './i18n/translations';
 import { StudentMobileLoginScreen } from './screens/StudentMobileLoginScreen';
 import { UseCodeScreen } from './screens/UseCodeScreen';
-import { AdminPanelScreen, type AdminLiveAlert } from './screens/AdminPanelScreen';
-import { SubjectChaptersScreen } from './screens/SubjectChaptersScreen';
-import { QuizPlayScreen } from './screens/QuizPlayScreen';
+import type { AdminLiveAlert } from './screens/AdminPanelScreen';
 import { quizAudioPlayer } from './services/audioPlayer';
 import { extractReadableErrorMessage } from './services/firestoreErrorHandler';
 import {
   approvePaymentAndAssignCode,
+  deleteAccessCodeAdmin,
+  deletePaymentRequestAdmin,
+  deleteStudentAdmin,
   generateBulkAccessCodes,
   getStudentDocId,
   isAdminAccount,
@@ -54,10 +59,21 @@ import {
   type GitHubReleaseInfo,
   type PaymentRequest,
   type QuizAttempt,
+  type QuizSubject,
   type StudentProfile,
   type SubjectId,
 } from './types/models';
 import { buildPaymentApprovalWhatsAppHref, launchExternalUrl } from './utils/imageUtils';
+
+const LazyAdminPanelScreen = lazy(() =>
+  import('./screens/AdminPanelScreen').then((m) => ({ default: m.AdminPanelScreen }))
+);
+const LazySubjectChaptersScreen = lazy(() =>
+  import('./screens/SubjectChaptersScreen').then((m) => ({ default: m.SubjectChaptersScreen }))
+);
+const LazyQuizPlayScreen = lazy(() =>
+  import('./screens/QuizPlayScreen').then((m) => ({ default: m.QuizPlayScreen }))
+);
 
 type AppRoute =
   | { name: 'public'; tab: PublicTabId }
@@ -123,6 +139,7 @@ export const App: React.FC = () => {
 
   const [syncVersion, setSyncVersion] = useState(0);
   const [route, setRoute] = useState<AppRoute>({ name: 'public', tab: 'quiz' });
+  const [loadedSubjects, setLoadedSubjects] = useState<Partial<Record<SubjectId, QuizSubject>>>({});
   const [isBusy, setIsBusy] = useState(false);
   const [banner, setBanner] = useState<ActionBanner | null>(null);
   const [lastGeneratedBatch, setLastGeneratedBatch] = useState<string[]>([]);
@@ -133,6 +150,7 @@ export const App: React.FC = () => {
   const [availableUpdate, setAvailableUpdate] = useState<GitHubReleaseInfo | null>(null);
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
   const lastCheckedConfigKeyRef = useRef<string>('');
+  const lastSyncedProfileKeyRef = useRef<string>('');
   const knownPendingIdsRef = useRef<Set<string> | null>(null);
   const knownUsedCodesRef = useRef<Set<string> | null>(null);
   const isSoundEnabledRef = useRef(isSoundEnabled);
@@ -246,11 +264,45 @@ export const App: React.FC = () => {
     return '';
   }, [authUser, isFirebaseAdmin, isStudentLoggedIn, savedUserMeta.mobile]);
 
-  // Backfill Firestore student doc when app loads with an existing saved mobile session
+  // Backfill Firestore student doc once per mobile/name combination
   useEffect(() => {
     if (!isStudentLoggedIn) return;
+    const syncKey = `${savedUserMeta.mobile}|${savedUserMeta.name}`;
+    if (lastSyncedProfileKeyRef.current === syncKey) return;
+    lastSyncedProfileKeyRef.current = syncKey;
     void registerOrUpdateStudentProfile(savedUserMeta.name, savedUserMeta.mobile).catch(() => {});
   }, [isStudentLoggedIn, savedUserMeta.mobile, savedUserMeta.name]);
+
+  // Dynamically load heavy chapter question banks only when a subject or quiz route is active
+  const activeSubjectId: SubjectId | null =
+    route.name === 'subject' || route.name === 'quiz' ? route.subjectId : null;
+
+  useEffect(() => {
+    if (!activeSubjectId) return;
+    if (loadedSubjects[activeSubjectId] || getCachedSubject(activeSubjectId)) {
+      const cached = getCachedSubject(activeSubjectId);
+      if (cached && !loadedSubjects[activeSubjectId]) {
+        setLoadedSubjects((prev) => ({ ...prev, [activeSubjectId]: cached }));
+      }
+      return;
+    }
+    let cancelled = false;
+    void loadSubjectWithChapters(activeSubjectId)
+      .then((subject) => {
+        if (!cancelled) {
+          setLoadedSubjects((prev) => ({ ...prev, [activeSubjectId]: subject }));
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setBanner({ isError: true, message: extractReadableErrorMessage(err, langRef.current) });
+          setRoute({ name: 'public', tab: 'quiz' });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSubjectId, loadedSubjects]);
 
   const mergedPaymentIds = useMemo(() => {
     const set = new Set<string>(myPaymentIds);
@@ -280,9 +332,11 @@ export const App: React.FC = () => {
       setAllPayments([]);
       setAllCodes([]);
       setAllStudents([]);
+      setReleaseConfig(null);
+      setAvailableUpdate(null);
     }
 
-    const unsubs = [observeReleaseConfig(setReleaseConfig)];
+    const unsubs: Array<() => void> = [];
 
     if (studentDocId) {
       unsubs.push(
@@ -319,6 +373,7 @@ export const App: React.FC = () => {
       };
 
       unsubs.push(
+        observeReleaseConfig(setReleaseConfig),
         observeAllStudents(setAllStudents, onAdminListenerError),
 
         observeAllPaymentRequests((items) => {
@@ -431,7 +486,7 @@ export const App: React.FC = () => {
 
   const checkForUpdates = useCallback(
     async (manual = false) => {
-      if (!effectiveGithubRepo) return;
+      if (!isAdmin || !effectiveGithubRepo) return;
       if (!manual && lastCheckedConfigKeyRef.current === releaseConfigKey) return;
       lastCheckedConfigKeyRef.current = releaseConfigKey;
 
@@ -457,8 +512,15 @@ export const App: React.FC = () => {
         setIsCheckingUpdate(false);
       }
     },
-    [effectiveGithubRepo, releaseConfigKey]
+    [effectiveGithubRepo, isAdmin, releaseConfigKey]
   );
+
+  // Live update notification & automatic check is strictly for Admin only
+  useEffect(() => {
+    if (isAdmin && effectiveGithubRepo) {
+      void checkForUpdates(false);
+    }
+  }, [isAdmin, effectiveGithubRepo, checkForUpdates]);
 
   const persistUserMeta = (name: string, mobile: string) => {
     const cleanMobile = mobile.replace(/\D/g, '').slice(0, 10);
@@ -712,6 +774,42 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleDeletePayment = async (req: PaymentRequest) => {
+    setIsBusy(true);
+    try {
+      await deletePaymentRequestAdmin(req);
+      setBanner({ isError: false, message: t.deleteSuccessMsg });
+    } catch (err) {
+      setBanner({ isError: true, message: formatAppError(err, 'Delete failed') });
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const handleDeleteCode = async (item: AccessCode) => {
+    setIsBusy(true);
+    try {
+      await deleteAccessCodeAdmin(item.code);
+      setBanner({ isError: false, message: t.deleteSuccessMsg });
+    } catch (err) {
+      setBanner({ isError: true, message: formatAppError(err, 'Delete failed') });
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const handleDeleteStudent = async (st: StudentProfile) => {
+    setIsBusy(true);
+    try {
+      await deleteStudentAdmin(st);
+      setBanner({ isError: false, message: t.deleteSuccessMsg });
+    } catch (err) {
+      setBanner({ isError: true, message: formatAppError(err, 'Delete failed') });
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
   const handleAdminLoginSuccess = (result: AdminPasscodeAuthResult) => {
     setAuthUser(result.user);
     setSyncVersion((v) => v + 1);
@@ -747,92 +845,110 @@ export const App: React.FC = () => {
     );
   }
 
+  const routeSpinner = (
+    <div className="min-h-screen bg-[#FAF9F5] dark:bg-[#0B1120] flex flex-col items-center justify-center gap-3 text-[#0F172A] dark:text-[#F8FAFC]">
+      <div className="h-9 w-9 rounded-full border-3 border-[#1E3A8A] border-t-transparent animate-spin" />
+      <p className="text-sm font-semibold">{t.loadingApp}</p>
+    </div>
+  );
+
   let bodyNode: React.ReactNode;
 
   if (route.name === 'public' && route.tab === 'admin' && isAdmin) {
     bodyNode = (
-      <AdminPanelScreen
-        payments={allPayments}
-        accessCodes={allCodes}
-        students={allStudents}
-        lastGeneratedBatch={lastGeneratedBatch}
-        liveAlerts={liveAlerts}
-        isSoundEnabled={isSoundEnabled}
-        releaseConfig={releaseConfig}
-        effectiveGithubRepo={effectiveGithubRepo}
-        currentVersionName={APP_VERSION_NAME}
-        isBusy={isBusy}
-        isCheckingUpdate={isCheckingUpdate}
-        approvedConfirmation={approvedConfirmation}
-        onDismissApprovedConfirmation={() => setApprovedConfirmation(null)}
-        onBackToPublic={() => setRoute({ name: 'public', tab: 'quiz' })}
-        onForceSync={() => setSyncVersion((v) => v + 1)}
-        onToggleSound={() => setIsSoundEnabled((prev) => !prev)}
-        onClearAlerts={() => setLiveAlerts([])}
-        onSignOut={() => void handleAdminSignOut()}
-        onGenerateBulkCodes={(c, b, s) => void handleGenerateBulkCodes(c, b, s)}
-        onApprovePayment={(r, n, s) => void handleApprovePayment(r, n, s)}
-        onRejectPayment={(r, reason) => void handleRejectPayment(r, reason)}
-        onToggleStudentAccess={(st, grant) => void handleToggleStudentAccess(st, grant)}
-        onUpdateStudentSubjectAccess={(st, subId, grant) =>
-          void handleUpdateStudentSubjectAccess(st, subId, grant)
-        }
-        onSaveGithubRepo={(repo, notes) => void handleSaveGithubRepo(repo, notes)}
-        onTestUpdateCheck={() => void checkForUpdates(true)}
-        onNotify={(msg) => setBanner({ isError: false, message: msg })}
-      />
+      <Suspense fallback={routeSpinner}>
+        <LazyAdminPanelScreen
+          payments={allPayments}
+          accessCodes={allCodes}
+          students={allStudents}
+          lastGeneratedBatch={lastGeneratedBatch}
+          liveAlerts={liveAlerts}
+          isSoundEnabled={isSoundEnabled}
+          releaseConfig={releaseConfig}
+          effectiveGithubRepo={effectiveGithubRepo}
+          currentVersionName={APP_VERSION_NAME}
+          isBusy={isBusy}
+          isCheckingUpdate={isCheckingUpdate}
+          approvedConfirmation={approvedConfirmation}
+          onDismissApprovedConfirmation={() => setApprovedConfirmation(null)}
+          onBackToPublic={() => setRoute({ name: 'public', tab: 'quiz' })}
+          onForceSync={() => setSyncVersion((v) => v + 1)}
+          onToggleSound={() => setIsSoundEnabled((prev) => !prev)}
+          onClearAlerts={() => setLiveAlerts([])}
+          onSignOut={() => void handleAdminSignOut()}
+          onGenerateBulkCodes={(c, b, s) => void handleGenerateBulkCodes(c, b, s)}
+          onApprovePayment={(r, n, s) => void handleApprovePayment(r, n, s)}
+          onRejectPayment={(r, reason) => void handleRejectPayment(r, reason)}
+          onToggleStudentAccess={(st, grant) => void handleToggleStudentAccess(st, grant)}
+          onUpdateStudentSubjectAccess={(st, subId, grant) =>
+            void handleUpdateStudentSubjectAccess(st, subId, grant)
+          }
+          onSaveGithubRepo={(repo, notes) => void handleSaveGithubRepo(repo, notes)}
+          onTestUpdateCheck={() => void checkForUpdates(true)}
+          onDeletePayment={handleDeletePayment}
+          onDeleteCode={handleDeleteCode}
+          onDeleteStudent={handleDeleteStudent}
+          onNotify={(msg) => setBanner({ isError: false, message: msg })}
+        />
+      </Suspense>
     );
   } else if (route.name === 'subject' && isStudentLoggedIn) {
-    const subject = findSubject(route.subjectId);
+    const subject = loadedSubjects[route.subjectId] ?? getCachedSubject(route.subjectId);
     if (!subject) {
-      bodyNode = null;
+      bodyNode = routeSpinner;
     } else {
       const hasAccess =
         effectiveUnlockedSubjects.includes('all') ||
         effectiveUnlockedSubjects.includes(subject.id);
       bodyNode = (
-        <SubjectChaptersScreen
-          subject={subject}
-          hasQuizAccess={hasAccess}
-          studentName={savedUserMeta.name}
-          studentMobile={savedUserMeta.mobile}
-          myPayments={myPayments}
-          isBusy={isBusy}
-          onBack={() => setRoute({ name: 'public', tab: 'quiz' })}
-          onStartChapterQuiz={(ch) =>
-            setRoute({ name: 'quiz', subjectId: subject.id, chapterId: ch.id })
-          }
-          onSubmitPayment={handleSubmitPayment}
-          onRedeemCode={handleRedeemCode}
-          onNotify={(msg, isErr) => setBanner({ isError: Boolean(isErr), message: msg })}
-        />
+        <Suspense fallback={routeSpinner}>
+          <LazySubjectChaptersScreen
+            subject={subject}
+            hasQuizAccess={hasAccess}
+            studentName={savedUserMeta.name}
+            studentMobile={savedUserMeta.mobile}
+            myPayments={myPayments}
+            isBusy={isBusy}
+            onBack={() => setRoute({ name: 'public', tab: 'quiz' })}
+            onStartChapterQuiz={(ch) =>
+              setRoute({ name: 'quiz', subjectId: subject.id, chapterId: ch.id })
+            }
+            onSubmitPayment={handleSubmitPayment}
+            onRedeemCode={handleRedeemCode}
+            onNotify={(msg, isErr) => setBanner({ isError: Boolean(isErr), message: msg })}
+          />
+        </Suspense>
       );
     }
   } else if (route.name === 'quiz' && isStudentLoggedIn) {
-    const subject = findSubject(route.subjectId);
-    const chapter = findChapter(route.subjectId, route.chapterId);
+    const subject = loadedSubjects[route.subjectId] ?? getCachedSubject(route.subjectId);
+    const chapter =
+      subject?.chapters.find((c) => c.id === route.chapterId) ??
+      getCachedChapter(route.subjectId, route.chapterId);
     if (!subject || !chapter) {
-      bodyNode = null;
+      bodyNode = routeSpinner;
     } else {
       bodyNode = (
-        <QuizPlayScreen
-          subject={subject}
-          chapter={chapter}
-          onQuizCompleted={(score, total, elapsedSeconds) => {
-            void recordQuizAttempt({
-              studentId: studentDocId,
-              subjectId: subject.id,
-              subjectTitle: subject.title,
-              chapterTitle: chapter.title,
-              score,
-              totalQuestions: total,
-              timeTakenSeconds: elapsedSeconds,
-              previousTotalQuizzes: student?.totalQuizzesTaken ?? 0,
-              previousBestScore: student?.bestScorePercent ?? 0,
-            }).catch(() => {});
-          }}
-          onExit={() => setRoute({ name: 'subject', subjectId: subject.id })}
-        />
+        <Suspense fallback={routeSpinner}>
+          <LazyQuizPlayScreen
+            subject={subject}
+            chapter={chapter}
+            onQuizCompleted={(score, total, elapsedSeconds) => {
+              void recordQuizAttempt({
+                studentId: studentDocId,
+                subjectId: subject.id,
+                subjectTitle: subject.title,
+                chapterTitle: chapter.title,
+                score,
+                totalQuestions: total,
+                timeTakenSeconds: elapsedSeconds,
+                previousTotalQuizzes: student?.totalQuizzesTaken ?? 0,
+                previousBestScore: student?.bestScorePercent ?? 0,
+              }).catch(() => {});
+            }}
+            onExit={() => setRoute({ name: 'subject', subjectId: subject.id })}
+          />
+        </Suspense>
       );
     }
   } else {
@@ -872,7 +988,7 @@ export const App: React.FC = () => {
               isBusy={isBusy}
               onSubmitPayment={handleSubmitPayment}
               onRedeemCode={handleRedeemCode}
-              onOpenSubject={(sub) => setRoute({ name: 'subject', subjectId: sub.id })}
+              onOpenSubject={(subjectId) => setRoute({ name: 'subject', subjectId })}
               onNotify={(msg, isErr) => setBanner({ isError: Boolean(isErr), message: msg })}
             />
           )}
@@ -908,7 +1024,7 @@ export const App: React.FC = () => {
         </div>
       )}
 
-      {availableUpdate && (
+      {isAdmin && availableUpdate && (
         <UpdateAvailableModal
           release={availableUpdate}
           currentVersionName={APP_VERSION_NAME}

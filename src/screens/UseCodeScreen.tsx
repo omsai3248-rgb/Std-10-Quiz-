@@ -13,7 +13,7 @@ import {
   Trophy,
   XCircle,
 } from 'lucide-react';
-import { std10Subjects } from '../data/curriculum/std10Curriculum';
+import { std10SubjectMetas } from '../data/curriculum/std10Curriculum';
 import { SubjectPaymentModal } from '../components/SubjectPaymentModal';
 import { useTranslation } from '../i18n/translations';
 import {
@@ -24,7 +24,6 @@ import {
   resolvePaymentSubjectId,
   type PaymentRequest,
   type QuizAttempt,
-  type QuizSubject,
   type SubjectId,
 } from '../types/models';
 import { formatTimestampLabel, resolvePaymentImageSrc } from '../utils/imageUtils';
@@ -52,7 +51,7 @@ interface UseCodeScreenProps {
     mobile: string;
     expectedSubjectId?: string;
   }) => Promise<{ code: string; subjectId: string } | undefined>;
-  onOpenSubject: (subject: QuizSubject) => void;
+  onOpenSubject: (subjectId: SubjectId) => void;
   onNotify?: (message: string, isError?: boolean) => void;
 }
 
@@ -164,9 +163,8 @@ export const UseCodeScreen: React.FC<UseCodeScreenProps> = ({
 
         {/* Subject Folders List */}
         <div className="space-y-3.5">
-          {std10Subjects.map((subject) => {
+          {std10SubjectMetas.map((subject) => {
             const access = hasSubjectAccess(subject.id);
-            const totalQuestions = subject.chapters.reduce((sum, ch) => sum + ch.questions.length, 0);
             return (
               <div key={subject.id} className="w-full">
                 <div
@@ -179,7 +177,7 @@ export const UseCodeScreen: React.FC<UseCodeScreenProps> = ({
 
                 <button
                   type="button"
-                  onClick={() => onOpenSubject(subject)}
+                  onClick={() => onOpenSubject(subject.id)}
                   className="w-full text-left rounded-tr-2xl rounded-b-2xl rounded-tl-md bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] shadow-sm hover:shadow-md transition-shadow p-3.5 flex items-center gap-3.5 cursor-pointer"
                 >
                   <div className="relative w-22 h-18 sm:w-28 sm:h-20 rounded-xl overflow-hidden shrink-0">
@@ -224,7 +222,7 @@ export const UseCodeScreen: React.FC<UseCodeScreenProps> = ({
                         color: subject.accentHex,
                       }}
                     >
-                      {subject.chapters.length} / {totalQuestions} {t.chaptersAndQuestions}
+                      {subject.chapterCount} / {subject.questionCount} {t.chaptersAndQuestions}
                     </span>
                   </div>
 

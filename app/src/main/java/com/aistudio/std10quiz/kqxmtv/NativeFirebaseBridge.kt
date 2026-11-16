@@ -357,8 +357,18 @@ class NativeFirebaseBridge(
                 }
 
                 val ref = localDb.collection("students").document(studentId)
-                val snap = try {
-                    withTimeoutOrNull(6_000L) { ref.get().awaitResult() }
+                val cachedSnap = runCatching { ref.get(Source.CACHE).awaitResult() }.getOrNull()
+                if (cachedSnap != null && cachedSnap.exists()) {
+                    val sameName = cachedSnap.getString("fullName").orEmpty() == fullName
+                    val sameEmail = cachedSnap.getString("email").orEmpty() == email
+                    if (sameName && sameEmail) {
+                        resolveCallSuccess(callId, JSONObject.quote(studentId))
+                        return@launch
+                    }
+                }
+
+                val snap = cachedSnap?.takeIf { it.exists() } ?: try {
+                    withTimeoutOrNull(4_500L) { ref.get().awaitResult() }
                         ?: runCatching { ref.get(Source.CACHE).awaitResult() }.getOrNull()
                 } catch (e: FirebaseFirestoreException) {
                     if (e.code == FirebaseFirestoreException.Code.PERMISSION_DENIED) throw e
@@ -395,7 +405,7 @@ class NativeFirebaseBridge(
                 }
 
                 try {
-                    withTimeoutOrNull(4_500L) { writeTask.awaitResult() }
+                    withTimeoutOrNull(3_500L) { writeTask.awaitResult() }
                 } catch (e: FirebaseFirestoreException) {
                     if (e.code == FirebaseFirestoreException.Code.PERMISSION_DENIED) throw e
                     // Transient UNAVAILABLE / offline errors stay queued in Firestore persistent cache
@@ -663,9 +673,9 @@ class NativeFirebaseBridge(
             val studentRef = localDb.collection("students").document(studentId)
 
             try {
-                if (canSyncStudent) {
-                    val existingStudent = studentRef.get().awaitResult()
-                    if (!existingStudent.exists()) {
+                suspend fun ensureStudentDocExists() {
+                    val serverStudent = studentRef.get().awaitResult()
+                    if (!serverStudent.exists()) {
                         studentRef.set(
                             mapOf(
                                 "userId" to studentId,
@@ -687,13 +697,23 @@ class NativeFirebaseBridge(
                     }
                 }
 
-                val resObj = localDb.runTransaction { tx ->
+                if (canSyncStudent) {
+                    val cachedStudent = runCatching { studentRef.get(Source.CACHE).awaitResult() }.getOrNull()
+                    if (cachedStudent == null || !cachedStudent.exists()) {
+                        ensureStudentDocExists()
+                    }
+                }
+
+                suspend fun runRedeemTx(): JSONObject = localDb.runTransaction { tx ->
                     val snap = tx.get(codeRef)
                     val stSnap = if (canSyncStudent) tx.get(studentRef) else null
                     if (!snap.exists()) throw IllegalStateException("CODE_NOT_FOUND")
                     val status = snap.getString("status").orEmpty()
                     val isUsed = snap.getBoolean("isUsed") == true
                     if (status == "used" || isUsed) throw IllegalStateException("CODE_ALREADY_USED")
+                    if (canSyncStudent && (stSnap == null || !stSnap.exists())) {
+                        throw IllegalStateException("STUDENT_DOC_MISSING_RETRY")
+                    }
 
                     val rawSub = snap.getString("subjectId").orEmpty()
                     val batchName = snap.getString("batchName").orEmpty().lowercase()
@@ -765,6 +785,17 @@ class NativeFirebaseBridge(
                     }
                 }.awaitResult()
 
+                val resObj = try {
+                    runRedeemTx()
+                } catch (missingErr: IllegalStateException) {
+                    if (missingErr.message == "STUDENT_DOC_MISSING_RETRY" && canSyncStudent) {
+                        ensureStudentDocExists()
+                        runRedeemTx()
+                    } else {
+                        throw missingErr
+                    }
+                }
+
                 resolveCallSuccess(callId, resObj.toString())
             } catch (e: Exception) {
                 val msg = e.message.orEmpty()
@@ -784,30 +815,9 @@ class NativeFirebaseBridge(
 
     @JavascriptInterface
     fun startPublicListeners(paymentIdsJson: String) {
-        val localDb = db ?: return
+        if (db == null) return
         activity.runOnUiThread {
             stopPublicListeners()
-
-            val releaseReg = localDb.collection("app_config").document("release")
-                .addSnapshotListener { snap, error ->
-                    if (error != null) {
-                        emitToJs("window.__onNativeReleaseConfig", "null")
-                        return@addSnapshotListener
-                    }
-                    if (snap != null && snap.exists()) {
-                        val json = JSONObject().apply {
-                            put("id", snap.id)
-                            put("githubOwnerRepo", snap.getString("githubOwnerRepo").orEmpty())
-                            put("releaseNotes", snap.getString("releaseNotes").orEmpty())
-                            put("updatedAt", serializeTimestamp(snap.getTimestamp("updatedAt")))
-                        }.toString()
-                        emitToJs("window.__onNativeReleaseConfig", json)
-                    } else {
-                        emitToJs("window.__onNativeReleaseConfig", "null")
-                    }
-                }
-            publicListeners.add(releaseReg)
-
             refreshPaymentListenersInternal(paymentIdsJson)
         }
     }
@@ -944,6 +954,26 @@ class NativeFirebaseBridge(
                     emitToJs("window.__onNativeAllStudents", arr.toString())
                 }
             adminListeners.add(studentsReg)
+
+            val releaseReg = localDb.collection("app_config").document("release")
+                .addSnapshotListener { snap, error ->
+                    if (error != null) {
+                        emitToJs("window.__onNativeReleaseConfig", "null")
+                        return@addSnapshotListener
+                    }
+                    if (snap != null && snap.exists()) {
+                        val json = JSONObject().apply {
+                            put("id", snap.id)
+                            put("githubOwnerRepo", snap.getString("githubOwnerRepo").orEmpty())
+                            put("releaseNotes", snap.getString("releaseNotes").orEmpty())
+                            put("updatedAt", serializeTimestamp(snap.getTimestamp("updatedAt")))
+                        }.toString()
+                        emitToJs("window.__onNativeReleaseConfig", json)
+                    } else {
+                        emitToJs("window.__onNativeReleaseConfig", "null")
+                    }
+                }
+            adminListeners.add(releaseReg)
         }
     }
 
@@ -952,6 +982,7 @@ class NativeFirebaseBridge(
         activity.runOnUiThread {
             adminListeners.forEach { it.remove() }
             adminListeners.clear()
+            emitToJs("window.__onNativeReleaseConfig", "null")
         }
     }
 
@@ -1248,6 +1279,102 @@ class NativeFirebaseBridge(
             } catch (e: Exception) {
                 handleFirestoreError(e, OperationType.UPDATE, ref.path)
                 resolveCallError(callId, e.localizedMessage ?: "Failed to update subject access")
+            }
+        }
+    }
+
+    @JavascriptInterface
+    fun deletePaymentRequest(callId: String, payloadJson: String) {
+        val localDb = db ?: run {
+            resolveCallError(callId, "Native Firebase is not initialized.")
+            return
+        }
+        activity.lifecycleScope.launch(Dispatchers.IO) {
+            if (!isCurrentUserAdmin()) {
+                resolveCallError(callId, "Authentication session not ready.")
+                return@launch
+            }
+            val obj = JSONObject(payloadJson)
+            val requestId = obj.getString("requestId").trim()
+            var utrNormalized = obj.optString("utrNormalized", "").trim()
+            val reqRef = localDb.collection("payment_requests").document(requestId)
+            try {
+                if (utrNormalized.isBlank()) {
+                    val snap = runCatching { reqRef.get().awaitResult() }.getOrNull()
+                    utrNormalized = snap?.getString("utrNormalized").orEmpty().trim()
+                }
+                val batch = localDb.batch()
+                batch.delete(reqRef)
+                if (Regex("^[A-Z0-9_-]{4,64}$").matches(utrNormalized)) {
+                    batch.delete(localDb.collection("utr_locks").document(utrNormalized))
+                }
+                batch.commit().awaitResult()
+                resolveCallSuccess(callId, "true")
+            } catch (e: Exception) {
+                handleFirestoreError(e, OperationType.DELETE, reqRef.path)
+                resolveCallError(callId, e.localizedMessage ?: "Failed to delete payment request")
+            }
+        }
+    }
+
+    @JavascriptInterface
+    fun deleteAccessCode(callId: String, payloadJson: String) {
+        val localDb = db ?: run {
+            resolveCallError(callId, "Native Firebase is not initialized.")
+            return
+        }
+        activity.lifecycleScope.launch(Dispatchers.IO) {
+            if (!isCurrentUserAdmin()) {
+                resolveCallError(callId, "Authentication session not ready.")
+                return@launch
+            }
+            val obj = JSONObject(payloadJson)
+            val code = obj.getString("code").trim()
+            val codeRef = localDb.collection("access_codes").document(code)
+            try {
+                codeRef.delete().awaitResult()
+                resolveCallSuccess(callId, "true")
+            } catch (e: Exception) {
+                handleFirestoreError(e, OperationType.DELETE, codeRef.path)
+                resolveCallError(callId, e.localizedMessage ?: "Failed to delete access code")
+            }
+        }
+    }
+
+    @JavascriptInterface
+    fun deleteStudent(callId: String, payloadJson: String) {
+        val localDb = db ?: run {
+            resolveCallError(callId, "Native Firebase is not initialized.")
+            return
+        }
+        activity.lifecycleScope.launch(Dispatchers.IO) {
+            if (!isCurrentUserAdmin()) {
+                resolveCallError(callId, "Authentication session not ready.")
+                return@launch
+            }
+            val obj = JSONObject(payloadJson)
+            val studentId = obj.getString("studentId").trim()
+            val studentRef = localDb.collection("students").document(studentId)
+            try {
+                val attemptsSnap = studentRef.collection("quiz_attempts").get().awaitResult()
+                val attemptRefs = attemptsSnap.documents.map { it.reference }
+                if (attemptRefs.isEmpty()) {
+                    studentRef.delete().awaitResult()
+                } else {
+                    val chunks = attemptRefs.chunked(400)
+                    chunks.forEachIndexed { idx, chunk ->
+                        val batch = localDb.batch()
+                        chunk.forEach { batch.delete(it) }
+                        if (idx == chunks.lastIndex) {
+                            batch.delete(studentRef)
+                        }
+                        batch.commit().awaitResult()
+                    }
+                }
+                resolveCallSuccess(callId, "true")
+            } catch (e: Exception) {
+                handleFirestoreError(e, OperationType.DELETE, studentRef.path)
+                resolveCallError(callId, e.localizedMessage ?: "Failed to delete student")
             }
         }
     }

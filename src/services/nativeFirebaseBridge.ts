@@ -37,6 +37,9 @@ interface AndroidFirebaseBridgeApi {
   saveReleaseConfig?: (callId: string, payloadJson: string) => void;
   toggleStudentQuizAccess?: (callId: string, payloadJson: string) => void;
   updateStudentSubjectAccess?: (callId: string, payloadJson: string) => void;
+  deletePaymentRequest?: (callId: string, payloadJson: string) => void;
+  deleteAccessCode?: (callId: string, payloadJson: string) => void;
+  deleteStudent?: (callId: string, payloadJson: string) => void;
 }
 
 declare global {
@@ -220,10 +223,7 @@ export function subscribeNativeReleaseConfig(
 ): () => void {
   releaseListeners.add(cb);
   if (latestReleaseConfig !== undefined) cb(latestReleaseConfig);
-  if (!publicListenersStarted) {
-    publicListenersStarted = true;
-    window.AndroidFirebaseBridge?.startPublicListeners?.('[]');
-  }
+  window.AndroidFirebaseBridge?.startAdminListeners?.();
   return () => {
     releaseListeners.delete(cb);
   };
