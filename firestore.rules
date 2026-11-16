@@ -65,6 +65,12 @@ service cloud.firestore {
              ));
     }
 
+    function isDeviceLockAvailable(existingData, newDeviceId) {
+      return !('activeDeviceId' in existingData) ||
+             existingData.activeDeviceId == '' ||
+             (newDeviceId is string && newDeviceId.size() >= 1 && existingData.activeDeviceId == newDeviceId);
+    }
+
     function isValidStudent(data) {
       return data.keys().hasAll([
                'userId', 'fullName', 'mobileNumber', 'email', 'standard',
@@ -75,7 +81,8 @@ service cloud.firestore {
                'userId', 'fullName', 'mobileNumber', 'email', 'standard',
                'hasQuizAccess', 'redeemedCode', 'paymentStatus',
                'totalQuizzesTaken', 'bestScorePercent', 'unlockedSubjects',
-               'paymentRequestIds', 'createdAt', 'updatedAt'
+               'paymentRequestIds', 'activeDeviceId', 'activeDeviceName',
+               'createdAt', 'updatedAt'
              ]) &&
              data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
              data.fullName is string && data.fullName.size() >= 1 && data.fullName.size() <= 60 &&
@@ -89,6 +96,8 @@ service cloud.firestore {
              data.bestScorePercent is int && data.bestScorePercent >= 0 && data.bestScorePercent <= 100 &&
              (!('unlockedSubjects' in data) || (data.unlockedSubjects is list && data.unlockedSubjects.size() <= 10)) &&
              (!('paymentRequestIds' in data) || (data.paymentRequestIds is list && data.paymentRequestIds.size() <= 25)) &&
+             (!('activeDeviceId' in data) || (data.activeDeviceId is string && data.activeDeviceId.size() <= 128)) &&
+             (!('activeDeviceName' in data) || (data.activeDeviceName is string && data.activeDeviceName.size() <= 120)) &&
              data.createdAt is timestamp && data.createdAt <= request.time &&
              data.updatedAt is timestamp && data.updatedAt <= request.time;
     }
@@ -226,9 +235,23 @@ service cloud.firestore {
                            canUseReservedAdminMobile(incoming()) && (
                              incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'email', 'updatedAt']) ||
                              (
+                               'activeDeviceId' in incoming() &&
+                               incoming().activeDeviceId is string &&
+                               incoming().activeDeviceId.size() >= 1 &&
+                               isDeviceLockAvailable(existing(), incoming().activeDeviceId) &&
+                               incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'email', 'activeDeviceId', 'activeDeviceName', 'updatedAt'])
+                             ) ||
+                             (
+                               'activeDeviceId' in incoming() &&
+                               incoming().activeDeviceId == '' &&
+                               (!('activeDeviceName' in incoming()) || incoming().activeDeviceName == '') &&
+                               incoming().diff(existing()).affectedKeys().hasOnly(['activeDeviceId', 'activeDeviceName', 'updatedAt'])
+                             ) ||
+                             (
                                isSignedIn() &&
                                request.auth.uid == userId &&
-                               incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'mobileNumber', 'email', 'updatedAt'])
+                               (!('activeDeviceId' in incoming()) || isDeviceLockAvailable(existing(), incoming().activeDeviceId)) &&
+                               incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'mobileNumber', 'email', 'activeDeviceId', 'activeDeviceName', 'updatedAt'])
                              ) ||
                              (
                                incoming().paymentStatus == 'pending' &&

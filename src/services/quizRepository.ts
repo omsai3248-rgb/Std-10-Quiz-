@@ -4,7 +4,9 @@ import {
   doc,
   getDoc,
   getDocs,
+  limit,
   onSnapshot,
+  orderBy,
   query,
   runTransaction,
   serverTimestamp,
@@ -23,6 +25,7 @@ import {
 } from 'firebase/auth';
 import { auth, db, googleProvider, storage } from '../firebase';
 import {
+  forceRefreshNativeAdminListeners,
   getActiveFirebaseSummary,
   getNativeCurrentAuthUser,
   hasNativeFirebaseBridge,
@@ -52,7 +55,7 @@ import {
   type StudentProfile,
   type SubjectId,
 } from '../types/models';
-import { getDeviceBrowserInfo } from '../utils/imageUtils';
+import { getCurrentDeviceIdentity, getDeviceBrowserInfo } from '../utils/imageUtils';
 import { handleFirestoreError, OperationType } from './firestoreErrorHandler';
 
 export const COLLECTION_STUDENTS = 'students';
@@ -73,7 +76,13 @@ export const ADMIN_PASSCODE = 'Kiran@0602';
 
 const CODE_CHARSET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
-export { getActiveFirebaseSummary, hasNativeFirebaseBridge, type AppAuthUser };
+export {
+  forceRefreshNativeAdminListeners,
+  getActiveFirebaseSummary,
+  getCurrentDeviceIdentity,
+  hasNativeFirebaseBridge,
+  type AppAuthUser,
+};
 
 export function observeAppAuthState(cb: (user: AppAuthUser | null) => void): () => void {
   if (hasNativeFirebaseBridge()) {
@@ -314,6 +323,231 @@ function timestampSortValue(ts: Timestamp | null | undefined): number {
   return ts ? ts.seconds : Number.MAX_SAFE_INTEGER;
 }
 
+function mapStudentDoc(id: string, d: Record<string, unknown>): StudentProfile {
+  return {
+    id,
+    userId: String(d.userId ?? id),
+    fullName: String(d.fullName ?? ''),
+    mobileNumber: String(d.mobileNumber ?? ''),
+    email: String(d.email ?? ''),
+    standard: String(d.standard ?? 'ધોરણ 10'),
+    hasQuizAccess: Boolean(d.hasQuizAccess),
+    redeemedCode: String(d.redeemedCode ?? ''),
+    paymentStatus: (d.paymentStatus as StudentProfile['paymentStatus']) ?? 'none',
+    totalQuizzesTaken: Number(d.totalQuizzesTaken ?? 0),
+    bestScorePercent: Number(d.bestScorePercent ?? 0),
+    unlockedSubjects: Array.isArray(d.unlockedSubjects)
+      ? d.unlockedSubjects.map((x) => String(x))
+      : [],
+    paymentRequestIds: Array.isArray(d.paymentRequestIds)
+      ? d.paymentRequestIds.map((x) => String(x))
+      : [],
+    activeDeviceId: String(d.activeDeviceId ?? ''),
+    activeDeviceName: String(d.activeDeviceName ?? ''),
+    createdAt: (d.createdAt as StudentProfile['createdAt']) ?? null,
+    updatedAt: (d.updatedAt as StudentProfile['updatedAt']) ?? null,
+  };
+}
+
+export async function lookupStudentByMobile(mobileNumber: string): Promise<StudentProfile | null> {
+  const cleanMobile = mobileNumber.replace(/\D/g, '').slice(-10);
+  if (!/^[0-9]{10}$/.test(cleanMobile) || cleanMobile === ADMIN_PHONE_TEN_DIGITS) {
+    return null;
+  }
+  if (hasNativeFirebaseBridge()) {
+    try {
+      const res = await invokeNativeBridgeCall<StudentProfile | null>((callId) => {
+        window.AndroidFirebaseBridge?.lookupStudentProfile?.(callId, cleanMobile);
+      });
+      return res ?? null;
+    } catch {
+      return null;
+    }
+  }
+  const studentId = getStudentDocId(cleanMobile);
+  try {
+    const snap = await getDoc(doc(db, COLLECTION_STUDENTS, studentId));
+    if (!snap.exists()) return null;
+    return mapStudentDoc(snap.id, snap.data());
+  } catch {
+    return null;
+  }
+}
+
+export async function loginStudentWithDeviceLock(params: {
+  mobileNumber: string;
+  fullName?: string;
+}): Promise<StudentProfile> {
+  const cleanMobile = params.mobileNumber.replace(/\D/g, '').slice(-10);
+  const cleanName = (params.fullName ?? '').trim().slice(0, 60);
+  if (!/^[0-9]{10}$/.test(cleanMobile)) {
+    throw new Error('INVALID_MOBILE');
+  }
+  const currentUser = hasNativeFirebaseBridge() ? getNativeCurrentAuthUser() : auth.currentUser;
+  const canUseAdminMobile = isAdminAccount(
+    currentUser?.phoneNumber ?? '',
+    currentUser?.email ?? ''
+  );
+  if (cleanMobile === ADMIN_PHONE_TEN_DIGITS && !canUseAdminMobile) {
+    throw new Error('RESERVED_ADMIN_MOBILE');
+  }
+
+  const { deviceId, deviceName } = getCurrentDeviceIdentity();
+
+  if (hasNativeFirebaseBridge()) {
+    const profile = await invokeNativeBridgeCall<StudentProfile>((callId) => {
+      window.AndroidFirebaseBridge?.loginStudentWithDeviceLock?.(
+        callId,
+        JSON.stringify({
+          mobileNumber: cleanMobile,
+          fullName: cleanName,
+          deviceId,
+          deviceName,
+        })
+      );
+    });
+    knownSyncedStudentIds.add(profile.id || getStudentDocId(cleanMobile));
+    return profile;
+  }
+
+  const studentId = getStudentDocId(cleanMobile);
+  const ref = doc(db, COLLECTION_STUDENTS, studentId);
+
+  try {
+    const profile = await runTransaction(db, async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists()) {
+        if (!cleanName) {
+          throw new Error('NAME_REQUIRED_FOR_NEW_USER');
+        }
+        tx.set(ref, {
+          userId: studentId,
+          fullName: cleanName,
+          mobileNumber: cleanMobile,
+          email: '',
+          standard: 'ધોરણ 10',
+          hasQuizAccess: false,
+          redeemedCode: '',
+          paymentStatus: 'none',
+          totalQuizzesTaken: 0,
+          bestScorePercent: 0,
+          unlockedSubjects: [],
+          paymentRequestIds: [],
+          activeDeviceId: deviceId,
+          activeDeviceName: deviceName,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+        return {
+          id: studentId,
+          userId: studentId,
+          fullName: cleanName,
+          mobileNumber: cleanMobile,
+          email: '',
+          standard: 'ધોરણ 10',
+          hasQuizAccess: false,
+          redeemedCode: '',
+          paymentStatus: 'none',
+          totalQuizzesTaken: 0,
+          bestScorePercent: 0,
+          unlockedSubjects: [],
+          paymentRequestIds: [],
+          activeDeviceId: deviceId,
+          activeDeviceName: deviceName,
+          isReturningUser: false,
+          createdAt: null,
+          updatedAt: null,
+        } satisfies StudentProfile;
+      }
+
+      const d = snap.data();
+      const existingDeviceId = String(d.activeDeviceId ?? '').trim();
+      const existingDeviceName = String(d.activeDeviceName ?? '').trim();
+      if (existingDeviceId && existingDeviceId !== deviceId) {
+        throw new Error(`DEVICE_ALREADY_LOGGED_IN:${existingDeviceName}`);
+      }
+      const existingName = String(d.fullName ?? '').trim();
+      const effectiveName = cleanName || existingName || 'Student';
+      const needsUpdate =
+        existingDeviceId !== deviceId ||
+        existingDeviceName !== deviceName ||
+        (cleanName.length > 0 && cleanName !== existingName);
+
+      if (needsUpdate) {
+        tx.update(ref, {
+          fullName: effectiveName,
+          email: String(d.email ?? ''),
+          activeDeviceId: deviceId,
+          activeDeviceName: deviceName,
+          updatedAt: serverTimestamp(),
+        });
+      }
+
+      return {
+        ...mapStudentDoc(snap.id, d),
+        fullName: effectiveName,
+        activeDeviceId: deviceId,
+        activeDeviceName: deviceName,
+        isReturningUser: true,
+      };
+    });
+
+    knownSyncedStudentIds.add(studentId);
+    return profile;
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      (error.message === 'NAME_REQUIRED_FOR_NEW_USER' ||
+        error.message.startsWith('DEVICE_ALREADY_LOGGED_IN:'))
+    ) {
+      throw error;
+    }
+    const lower = error instanceof Error ? error.message.toLowerCase() : '';
+    if (lower.includes('permission')) {
+      const latest = await getDoc(ref).catch(() => null);
+      const lockDev = latest?.exists() ? String(latest.data().activeDeviceName ?? '').trim() : '';
+      throw new Error(`DEVICE_ALREADY_LOGGED_IN:${lockDev}`);
+    }
+    handleFirestoreError(error, OperationType.WRITE, ref.path);
+  }
+}
+
+export async function releaseStudentDeviceLock(mobileNumber: string): Promise<void> {
+  const cleanMobile = mobileNumber.replace(/\D/g, '').slice(-10);
+  if (!/^[0-9]{10}$/.test(cleanMobile) || cleanMobile === ADMIN_PHONE_TEN_DIGITS) {
+    return;
+  }
+  const { deviceId } = getCurrentDeviceIdentity();
+
+  if (hasNativeFirebaseBridge()) {
+    await invokeNativeBridgeCall((callId) => {
+      window.AndroidFirebaseBridge?.releaseStudentDeviceLock?.(
+        callId,
+        JSON.stringify({ mobileNumber: cleanMobile, deviceId })
+      );
+    }).catch(() => {});
+    return;
+  }
+
+  const ref = doc(db, COLLECTION_STUDENTS, getStudentDocId(cleanMobile));
+  try {
+    await runTransaction(db, async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists()) return;
+      const existingDeviceId = String(snap.data().activeDeviceId ?? '').trim();
+      if (!existingDeviceId || existingDeviceId === deviceId) {
+        tx.update(ref, {
+          activeDeviceId: '',
+          activeDeviceName: '',
+          updatedAt: serverTimestamp(),
+        });
+      }
+    });
+  } catch {
+    // Best effort on logout; do not block local sign-out
+  }
+}
+
 export function observeStudentProfile(
   userId: string,
   onData: (profile: StudentProfile | null) => void,
@@ -336,28 +570,7 @@ export function observeStudentProfile(
         return;
       }
       knownSyncedStudentIds.add(userId);
-      const d = snap.data();
-      onData({
-        id: snap.id,
-        userId: String(d.userId ?? snap.id),
-        fullName: String(d.fullName ?? ''),
-        mobileNumber: String(d.mobileNumber ?? ''),
-        email: String(d.email ?? ''),
-        standard: String(d.standard ?? 'ધોરણ 10'),
-        hasQuizAccess: Boolean(d.hasQuizAccess),
-        redeemedCode: String(d.redeemedCode ?? ''),
-        paymentStatus: (d.paymentStatus as StudentProfile['paymentStatus']) ?? 'none',
-        totalQuizzesTaken: Number(d.totalQuizzesTaken ?? 0),
-        bestScorePercent: Number(d.bestScorePercent ?? 0),
-        unlockedSubjects: Array.isArray(d.unlockedSubjects)
-          ? d.unlockedSubjects.map((x) => String(x))
-          : [],
-        paymentRequestIds: Array.isArray(d.paymentRequestIds)
-          ? d.paymentRequestIds.map((x) => String(x))
-          : [],
-        createdAt: d.createdAt ?? null,
-        updatedAt: d.updatedAt ?? null,
-      });
+      onData(mapStudentDoc(snap.id, snap.data()));
     },
     (error) => {
       try {
@@ -511,12 +724,7 @@ export async function submitPaymentRequest(params: {
     return requestId;
   }
 
-  // Fast pre-check for duplicate UTR
   const utrLockRef = doc(db, COLLECTION_UTR_LOCKS, utrNormalized);
-  const existingLock = await getDoc(utrLockRef);
-  if (existingLock.exists()) {
-    throw new Error('DUPLICATE_UTR');
-  }
 
   const requestId = generateId('pay');
   const screenshotPath = `payment_screenshots/${uid}/${requestId}.jpg`;
@@ -1176,8 +1384,9 @@ export function observeMyQuizAttempts(
     return subscribeNativeMyAttempts(userId, onData);
   }
   const colRef = collection(db, COLLECTION_STUDENTS, userId, SUBCOLLECTION_QUIZ_ATTEMPTS);
+  const attemptsQuery = query(colRef, orderBy('createdAt', 'desc'), limit(15));
   return onSnapshot(
-    colRef,
+    attemptsQuery,
     (snap) => {
       const items = snap.docs
         .map((docSnap) => {
@@ -1292,39 +1501,11 @@ export function observeAllStudents(
     return subscribeNativeAllStudents(onData, onError);
   }
   const colRef = collection(db, COLLECTION_STUDENTS);
+  const q = query(colRef, orderBy('updatedAt', 'desc'), limit(150));
   return onSnapshot(
-    colRef,
+    q,
     (snap) => {
-      const items = snap.docs
-        .map((docSnap) => {
-          const d = docSnap.data();
-          return {
-            id: docSnap.id,
-            userId: String(d.userId ?? docSnap.id),
-            fullName: String(d.fullName ?? ''),
-            mobileNumber: String(d.mobileNumber ?? ''),
-            email: String(d.email ?? ''),
-            standard: String(d.standard ?? 'ધોરણ 10'),
-            hasQuizAccess: Boolean(d.hasQuizAccess),
-            redeemedCode: String(d.redeemedCode ?? ''),
-            paymentStatus: (d.paymentStatus as StudentProfile['paymentStatus']) ?? 'none',
-            totalQuizzesTaken: Number(d.totalQuizzesTaken ?? 0),
-            bestScorePercent: Number(d.bestScorePercent ?? 0),
-            unlockedSubjects: Array.isArray(d.unlockedSubjects)
-              ? d.unlockedSubjects.map((x) => String(x))
-              : [],
-            paymentRequestIds: Array.isArray(d.paymentRequestIds)
-              ? d.paymentRequestIds.map((x) => String(x))
-              : [],
-            createdAt: d.createdAt ?? null,
-            updatedAt: d.updatedAt ?? null,
-          } satisfies StudentProfile;
-        })
-        .sort(
-          (a, b) =>
-            timestampSortValue(b.updatedAt ?? b.createdAt) -
-            timestampSortValue(a.updatedAt ?? a.createdAt)
-        );
+      const items = snap.docs.map((docSnap) => mapStudentDoc(docSnap.id, docSnap.data()));
       onData(items);
     },
     (error) => {
@@ -1345,12 +1526,11 @@ export function observeAllPaymentRequests(
     return subscribeNativeAllPayments(onData, onError);
   }
   const colRef = collection(db, COLLECTION_PAYMENT_REQUESTS);
+  const q = query(colRef, orderBy('createdAt', 'desc'), limit(80));
   return onSnapshot(
-    colRef,
+    q,
     (snap) => {
-      const items = snap.docs
-        .map((d) => mapPaymentDoc(d.id, d.data()))
-        .sort((a, b) => timestampSortValue(b.createdAt) - timestampSortValue(a.createdAt));
+      const items = snap.docs.map((d) => mapPaymentDoc(d.id, d.data()));
       onData(items);
     },
     (error) => {
@@ -1371,12 +1551,11 @@ export function observeAllAccessCodes(
     return subscribeNativeAllCodes(onData, onError);
   }
   const colRef = collection(db, COLLECTION_ACCESS_CODES);
+  const q = query(colRef, orderBy('createdAt', 'desc'), limit(150));
   return onSnapshot(
-    colRef,
+    q,
     (snap) => {
-      const items = snap.docs
-        .map((docSnap) => mapAccessCodeDoc(docSnap.id, docSnap.data()))
-        .sort((a, b) => timestampSortValue(b.createdAt) - timestampSortValue(a.createdAt));
+      const items = snap.docs.map((docSnap) => mapAccessCodeDoc(docSnap.id, docSnap.data()));
       onData(items);
     },
     (error) => {
@@ -1569,6 +1748,31 @@ export async function deleteAccessCodeAdmin(code: string): Promise<void> {
     await deleteDoc(codeRef);
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, codeRef.path);
+  }
+}
+
+export async function adminUnlockStudentDevice(student: StudentProfile): Promise<void> {
+  const studentId = (student.id || student.userId).trim();
+  if (!studentId) return;
+  if (hasNativeFirebaseBridge()) {
+    await invokeNativeBridgeCall((callId) => {
+      window.AndroidFirebaseBridge?.adminUnlockStudentDevice?.(
+        callId,
+        JSON.stringify({ studentId })
+      );
+    });
+    return;
+  }
+  requireUserId();
+  const studentRef = doc(db, COLLECTION_STUDENTS, studentId);
+  try {
+    await updateDoc(studentRef, {
+      activeDeviceId: '',
+      activeDeviceName: '',
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, studentRef.path);
   }
 }
 

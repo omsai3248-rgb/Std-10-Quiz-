@@ -31,6 +31,17 @@ export interface Translations {
   loginBtn: string;
   switchAccountBtn: string;
   adminNumberLoginHint: string;
+  returningAccountTitle: string;
+  returningAccountLoaded: string;
+  checkingAccountLabel: string;
+  singleDeviceNote: string;
+  deviceLockedOnLabel: string;
+  deviceKickedOutMsg: string;
+  returningWelcomeMsg: string;
+  deviceActiveBadge: string;
+  deviceFreeBadge: string;
+  unlockDeviceBtn: string;
+  unlockDeviceSuccess: string;
   unlockSingleSubjectLabel: string;
   unlockAllSubjectsLabel: string;
   fixedPriceBadge: string;
@@ -204,8 +215,19 @@ const GU: Translations = {
   loginTitle: 'મોબાઇલ નંબરથી લૉગિન કરો',
   loginSubtitle: 'તમારું નામ અને ૧૦ અંકનો મોબાઇલ નંબર દાખલ કરી ધોરણ ૧૦ ક્વિઝ પ્લેટફોર્મ ખોલો.',
   loginBtn: 'લૉગિન કરી ક્વિઝ શરૂ કરો',
-  switchAccountBtn: 'નંબર બદલો',
+  switchAccountBtn: 'લૉગ આઉટ',
   adminNumberLoginHint: 'આ એડમિન નંબર છે — કૃપા કરીને પાસવર્ડથી એડમિન પેનલમાં લૉગિન કરો.',
+  returningAccountTitle: 'તમારું જૂનું એકાઉન્ટ મળી ગયું!',
+  returningAccountLoaded: 'અનલૉક વિષયો અને ક્વિઝ વિગતો આપમેળે લોડ થઈ જશે.',
+  checkingAccountLabel: 'એકાઉન્ટ વિગત તપાસાઈ રહી છે...',
+  singleDeviceNote: 'સુરક્ષા માટે એક નંબરથી એક જ સમયે એક જ ડિવાઇસમાં લૉગિન થઈ શકે છે.',
+  deviceLockedOnLabel: 'હાલમાં આ ડિવાઇસ પર લૉગિન છે:',
+  deviceKickedOutMsg: 'આ નંબર અન્ય ડિવાઇસ પર ખુલ્યો હોવાથી અથવા એડમિન દ્વારા અનલૉક થવાથી અહીંથી લૉગ આઉટ થયું છે.',
+  returningWelcomeMsg: 'ફરી સ્વાગત છે! તમારી જૂની વિગતો અને અનલૉક વિષયો લોડ થઈ ગયા છે.',
+  deviceActiveBadge: 'લૉગિન ચાલુ',
+  deviceFreeBadge: 'લૉગ આઉટ / ફ્રી',
+  unlockDeviceBtn: 'ડિવાઇસ અનલૉક કરો',
+  unlockDeviceSuccess: 'ડિવાઇસ લૉક દૂર થયું! હવે નવા ડિવાઇસથી લૉગિન થઈ શકશે.',
   unlockSingleSubjectLabel: 'માત્ર આ વિષય',
   unlockAllSubjectsLabel: 'બધા વિષયો (ગણિત + વિજ્ઞાન + સા.વિ.)',
   fixedPriceBadge: 'ફિક્સ ફી',
@@ -377,8 +399,19 @@ const EN: Translations = {
   loginTitle: 'Login with Mobile Number',
   loginSubtitle: 'Enter your name and 10-digit mobile number to open the Std 10 Quiz platform.',
   loginBtn: 'Login & Open Quiz Platform',
-  switchAccountBtn: 'Switch',
+  switchAccountBtn: 'Log Out',
   adminNumberLoginHint: 'This is the Admin number — please sign in with your Admin password.',
+  returningAccountTitle: 'Existing Account Found!',
+  returningAccountLoaded: 'Your saved details and unlocked subjects will be restored automatically.',
+  checkingAccountLabel: 'Checking saved account...',
+  singleDeviceNote: 'For security, one mobile number can stay logged in on only one device at a time.',
+  deviceLockedOnLabel: 'Currently logged in on:',
+  deviceKickedOutMsg: 'You were signed out because this number is active on another device or unlocked by Admin.',
+  returningWelcomeMsg: 'Welcome back! Your saved profile and unlocked subjects have been restored.',
+  deviceActiveBadge: 'Active Device',
+  deviceFreeBadge: 'Logged Out / Free',
+  unlockDeviceBtn: 'Unlock Device',
+  unlockDeviceSuccess: 'Device lock cleared! The student can now log in on a new device.',
   unlockSingleSubjectLabel: 'Single Subject Only',
   unlockAllSubjectsLabel: 'All Subjects (Maths + Science + SS)',
   fixedPriceBadge: 'Fixed Price',

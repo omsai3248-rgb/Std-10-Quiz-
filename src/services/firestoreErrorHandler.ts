@@ -64,6 +64,33 @@ export function extractReadableErrorMessage(error: unknown, lang: 'gu' | 'en' = 
     }
   }
   const lower = inner.toLowerCase();
+  if (inner.startsWith('DEVICE_ALREADY_LOGGED_IN:')) {
+    const dev = inner.slice('DEVICE_ALREADY_LOGGED_IN:'.length).trim();
+    const devSuffix = dev ? ` (${dev})` : '';
+    return lang === 'en'
+      ? `This mobile number is already logged in on another device${devSuffix}. Log out from the old device first or ask Admin to unlock it.`
+      : `આ મોબાઇલ નંબર પહેલેથી બીજા ડિવાઇસ${devSuffix} પર લૉગિન છે! એક નંબરથી એક જ સમયે એક જ ડિવાઇસમાં લૉગિન થઈ શકે. પહેલાં જૂના ડિવાઇસમાંથી લૉગ આઉટ કરો અથવા એડમિન પાસેથી ડિવાઇસ અનલૉક કરાવો.`;
+  }
+  if (inner === 'NAME_REQUIRED_FOR_NEW_USER') {
+    return lang === 'en'
+      ? 'This mobile number is registering for the first time. Please enter your full name.'
+      : 'આ નંબર પહેલી વાર રજિસ્ટર થઈ રહ્યો છે — કૃપા કરીને તમારું પૂરું નામ દાખલ કરો.';
+  }
+  if (inner === 'RESERVED_ADMIN_MOBILE') {
+    return lang === 'en'
+      ? 'This number is reserved for Admin login.'
+      : 'આ નંબર માત્ર એડમિન લૉગિન માટે છે!';
+  }
+  if (
+    inner === 'QUOTA_EXCEEDED' ||
+    lower.includes('resource_exhausted') ||
+    lower.includes('quota limit exceeded') ||
+    lower.includes('quota exceeded')
+  ) {
+    return lang === 'en'
+      ? 'Server daily free-tier read limit has been reached. Offline cached data remains available, and live server sync resumes automatically after the daily quota resets.'
+      : 'આજની સર્વર ફ્રી ડેટા મર્યાદા પૂરી થઈ છે — તમારો સેવ ડેટા ચાલુ રહેશે અને દૈનિક લિમિટ રિસેટ થતાં લાઇવ સિંક આપમેળે શરૂ થશે.';
+  }
   if (lower.includes('permission') || lower.includes('insufficient permissions')) {
     return lang === 'en'
       ? 'Permission denied. Please sign in with an authorized account and try again.'

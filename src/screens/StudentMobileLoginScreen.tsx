@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ArrowRight,
   BookOpen,
+  CheckCircle2,
   Eye,
   EyeOff,
   Lock,
@@ -13,9 +14,12 @@ import { useTranslation } from '../i18n/translations';
 import { extractReadableErrorMessage } from '../services/firestoreErrorHandler';
 import {
   ADMIN_PHONE_TEN_DIGITS,
+  getCurrentDeviceIdentity,
+  lookupStudentByMobile,
   signInAsAdminWithPasscode,
   type AdminPasscodeAuthResult,
 } from '../services/quizRepository';
+import { ALL_SUBJECT_IDS, getSubjectDisplayName, type StudentProfile } from '../types/models';
 import { normalizeIndianMobileInput } from '../utils/imageUtils';
 
 interface StudentMobileLoginScreenProps {
@@ -37,10 +41,71 @@ export const StudentMobileLoginScreen: React.FC<StudentMobileLoginScreenProps> =
   const [passwordInput, setPasswordInput] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [isCheckingExisting, setIsCheckingExisting] = useState(false);
+  const [existingProfile, setExistingProfile] = useState<StudentProfile | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const lookupCacheRef = useRef<Map<string, StudentProfile | null>>(new Map());
+  const nameEditedManuallyRef = useRef(false);
 
   const cleanDigits = mobileInput.replace(/\D/g, '');
   const isAdminNumberTyped = cleanDigits === ADMIN_PHONE_TEN_DIGITS;
+  const currentDeviceId = getCurrentDeviceIdentity().deviceId;
+
+  useEffect(() => {
+    if (isAdminNumberTyped || !/^[0-9]{10}$/.test(cleanDigits)) {
+      setExistingProfile(null);
+      setIsCheckingExisting(false);
+      return;
+    }
+
+    if (lookupCacheRef.current.has(cleanDigits)) {
+      const cached = lookupCacheRef.current.get(cleanDigits) ?? null;
+      setExistingProfile(cached);
+      if (cached?.fullName && !nameEditedManuallyRef.current) {
+        setNameInput(cached.fullName);
+      }
+      setIsCheckingExisting(false);
+      return;
+    }
+
+    let cancelled = false;
+    setIsCheckingExisting(true);
+    const timer = window.setTimeout(() => {
+      void lookupStudentByMobile(cleanDigits)
+        .then((profile) => {
+          if (cancelled) return;
+          lookupCacheRef.current.set(cleanDigits, profile);
+          setExistingProfile(profile);
+          if (profile?.fullName && !nameEditedManuallyRef.current) {
+            setNameInput(profile.fullName);
+          }
+        })
+        .catch(() => {
+          if (!cancelled) setExistingProfile(null);
+        })
+        .finally(() => {
+          if (!cancelled) setIsCheckingExisting(false);
+        });
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [cleanDigits, isAdminNumberTyped]);
+
+  const isLockedOnOtherDevice = Boolean(
+    existingProfile?.activeDeviceId &&
+      existingProfile.activeDeviceId.trim().length > 0 &&
+      existingProfile.activeDeviceId !== currentDeviceId
+  );
+
+  const restoredSubjects = existingProfile
+    ? existingProfile.hasQuizAccess
+      ? ALL_SUBJECT_IDS
+      : existingProfile.unlockedSubjects.filter((s) => s !== 'all')
+    : [];
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -90,17 +155,18 @@ export const StudentMobileLoginScreen: React.FC<StudentMobileLoginScreenProps> =
       return;
     }
 
-    const cleanName = nameInput.trim().slice(0, 60);
-    if (!cleanName) {
-      setErrorMsg(t.errInvalidName);
-      return;
-    }
+    const cleanName = (nameInput.trim() || existingProfile?.fullName?.trim() || '').slice(0, 60);
 
     setIsLoading(true);
     try {
       await onLoginSuccess(cleanName, cleanDigits);
     } catch (err: unknown) {
-      setErrorMsg(extractReadableErrorMessage(err, lang));
+      const msg = err instanceof Error ? err.message : '';
+      if (msg === 'INVALID_NAME' || msg === 'NAME_REQUIRED_FOR_NEW_USER') {
+        setErrorMsg(t.errInvalidName);
+      } else {
+        setErrorMsg(extractReadableErrorMessage(err, lang));
+      }
     } finally {
       setIsLoading(false);
     }
@@ -141,6 +207,9 @@ export const StudentMobileLoginScreen: React.FC<StudentMobileLoginScreenProps> =
                 value={mobileInput}
                 onChange={(e) => {
                   const next = normalizeIndianMobileInput(e.target.value);
+                  if (next !== mobileInput) {
+                    nameEditedManuallyRef.current = false;
+                  }
                   setMobileInput(next);
                   if (next !== ADMIN_PHONE_TEN_DIGITS) {
                     setPasswordInput('');
@@ -152,6 +221,49 @@ export const StudentMobileLoginScreen: React.FC<StudentMobileLoginScreenProps> =
               />
             </div>
           </div>
+
+          {!isAdminNumberTyped && isCheckingExisting && (
+            <div className="rounded-xl bg-[#EFF4FA] dark:bg-[#0F172A] border border-[#CBD5E1] dark:border-[#334155] px-3 py-2 text-xs font-semibold text-[#475569] dark:text-[#94A3B8]">
+              {t.checkingAccountLabel}
+            </div>
+          )}
+
+          {!isAdminNumberTyped && existingProfile && !isCheckingExisting && (
+            <div
+              className={`rounded-2xl p-3.5 text-xs space-y-1.5 border ${
+                isLockedOnOtherDevice
+                  ? 'bg-amber-50 dark:bg-amber-950/40 border-amber-300 dark:border-amber-800 text-amber-900 dark:text-amber-200'
+                  : 'bg-[#D1FAE5]/60 dark:bg-[#064E3B]/50 border-[#10B981]/40 text-[#064E3B] dark:text-[#D1FAE5]'
+              }`}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-extrabold flex items-center gap-1.5">
+                  <CheckCircle2 className="h-4 w-4 shrink-0" />
+                  <span>{t.returningAccountTitle}</span>
+                </span>
+                <span className="font-extrabold">{existingProfile.fullName}</span>
+              </div>
+              <p className="text-[11px] opacity-90">{t.returningAccountLoaded}</p>
+              <div className="flex flex-wrap gap-1.5 pt-0.5">
+                <span className="rounded-md bg-white/70 dark:bg-black/25 px-2 py-0.5 font-bold">
+                  {t.quizzesTakenLabel} {existingProfile.totalQuizzesTaken}
+                </span>
+                {restoredSubjects.length > 0 && (
+                  <span className="rounded-md bg-white/70 dark:bg-black/25 px-2 py-0.5 font-bold">
+                    ✓{' '}
+                    {restoredSubjects.length === ALL_SUBJECT_IDS.length
+                      ? t.unlockedBadge
+                      : restoredSubjects.map((s) => getSubjectDisplayName(s, lang)).join(', ')}
+                  </span>
+                )}
+              </div>
+              {isLockedOnOtherDevice && (
+                <p className="text-[11px] font-bold pt-1 text-red-700 dark:text-red-300">
+                  {t.deviceLockedOnLabel} {existingProfile.activeDeviceName || 'Other Device'}
+                </p>
+              )}
+            </div>
+          )}
 
           {isAdminNumberTyped ? (
             <div>
@@ -203,6 +315,7 @@ export const StudentMobileLoginScreen: React.FC<StudentMobileLoginScreenProps> =
                   disabled={isLoading}
                   value={nameInput}
                   onChange={(e) => {
+                    nameEditedManuallyRef.current = true;
                     setNameInput(e.target.value);
                     setErrorMsg(null);
                   }}
@@ -242,6 +355,12 @@ export const StudentMobileLoginScreen: React.FC<StudentMobileLoginScreenProps> =
             </button>
           )}
         </form>
+
+        {!isAdminNumberTyped && (
+          <p className="text-[11px] text-center text-[#475569] dark:text-[#94A3B8] leading-relaxed">
+            🔒 {t.singleDeviceNote}
+          </p>
+        )}
       </div>
     </div>
   );

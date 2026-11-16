@@ -46,7 +46,60 @@ export function getDeviceBrowserInfo(): string {
       ? `${window.screen.width}x${window.screen.height}`
       : '';
 
-  return [browser, os, screenSize].filter(Boolean).join(' • ').slice(0, 180);
+  return [browser, os, screenSize].filter(Boolean).join(' • ').slice(0, 120);
+}
+
+const WEB_DEVICE_ID_KEY = 'std10_device_session_id_v1';
+let memoryWebDeviceId = '';
+
+export function getCurrentDeviceIdentity(): { deviceId: string; deviceName: string } {
+  if (typeof window !== 'undefined') {
+    const bridge = window.AndroidFirebaseBridge as
+      | { getDeviceSessionIdentity?: () => string }
+      | undefined;
+    if (typeof bridge?.getDeviceSessionIdentity === 'function') {
+      try {
+        const raw = bridge.getDeviceSessionIdentity();
+        if (raw) {
+          const parsed = JSON.parse(raw) as { deviceId?: string; deviceName?: string };
+          if (parsed.deviceId && parsed.deviceId.trim().length > 0) {
+            return {
+              deviceId: parsed.deviceId.trim().slice(0, 128),
+              deviceName: (parsed.deviceName || getDeviceBrowserInfo() || 'Android Device')
+                .trim()
+                .slice(0, 120),
+            };
+          }
+        }
+      } catch {
+        // Fallback below
+      }
+    }
+  }
+
+  let webId = memoryWebDeviceId;
+  try {
+    const stored = localStorage.getItem(WEB_DEVICE_ID_KEY) ?? '';
+    if (stored.length >= 10) {
+      webId = stored;
+    } else {
+      const bytes = new Uint8Array(12);
+      crypto.getRandomValues(bytes);
+      webId = `web_${Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')}`;
+      localStorage.setItem(WEB_DEVICE_ID_KEY, webId);
+    }
+    memoryWebDeviceId = webId;
+  } catch {
+    if (!webId) {
+      webId = `web_${Math.random().toString(36).slice(2, 14)}${Date.now().toString(36)}`;
+      memoryWebDeviceId = webId;
+    }
+  }
+
+  return {
+    deviceId: webId.slice(0, 128),
+    deviceName: (getDeviceBrowserInfo() || 'Web Browser').slice(0, 120),
+  };
 }
 
 interface AndroidBridgeApi {
@@ -211,8 +264,8 @@ export async function compressImageFileToBlobAndBase64(file: File): Promise<{
     image.src = objectUrl;
   });
 
-  const maxBase64Chars = 140_000;
-  let maxDim = 900;
+  const maxBase64Chars = 70_000;
+  let maxDim = 720;
   let bestEncoded = '';
   let bestBlob: Blob | null = null;
 
@@ -220,7 +273,7 @@ export async function compressImageFileToBlobAndBase64(file: File): Promise<{
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('Canvas unavailable');
 
-  while (maxDim >= 320) {
+  while (maxDim >= 280) {
     const largest = Math.max(img.width, img.height);
     const scale = largest > maxDim ? maxDim / largest : 1;
     const w = Math.max(1, Math.round(img.width * scale));
@@ -230,7 +283,7 @@ export async function compressImageFileToBlobAndBase64(file: File): Promise<{
     ctx.clearRect(0, 0, w, h);
     ctx.drawImage(img, 0, 0, w, h);
 
-    for (const quality of [0.78, 0.65, 0.5, 0.38]) {
+    for (const quality of [0.72, 0.58, 0.45, 0.35]) {
       const dataUrl = canvas.toDataURL('image/jpeg', quality);
       const base64 = dataUrl.split('base64,')[1] ?? '';
       bestEncoded = base64;
@@ -243,13 +296,13 @@ export async function compressImageFileToBlobAndBase64(file: File): Promise<{
         }
       }
     }
-    maxDim -= 160;
+    maxDim -= 140;
   }
 
-  const fallbackUrl = canvas.toDataURL('image/jpeg', 0.38);
+  const fallbackUrl = canvas.toDataURL('image/jpeg', 0.35);
   const fallbackBase64 = fallbackUrl.split('base64,')[1] ?? bestEncoded;
   bestBlob = await new Promise<Blob | null>((resolve) =>
-    canvas.toBlob((b) => resolve(b), 'image/jpeg', 0.38)
+    canvas.toBlob((b) => resolve(b), 'image/jpeg', 0.35)
   );
   if (!fallbackBase64 || !bestBlob || fallbackBase64.length > 440_000) {
     throw new Error('સ્ક્રીનશોટ વાંચવામાં ભૂલ આવી.');

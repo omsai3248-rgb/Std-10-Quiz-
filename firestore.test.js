@@ -538,3 +538,92 @@ test("Mobile student (mob_9876543210) persists profile, links paymentRequestIds,
     })
   );
 });
+
+test("Single-device session lock blocks second device until first logs out or admin unlocks", async () => {
+  const unauthDb = testEnv.unauthenticatedContext().firestore();
+  const adminDb = testEnv.authenticatedContext(ADMIN_UID, {
+    phone_number: ADMIN_PHONE,
+  }).firestore();
+  const studentId = "mob_9998668886";
+  const now = new Date();
+
+  // Device 1 creates & claims session
+  await assertSucceeds(
+    unauthDb.collection("students").doc(studentId).set({
+      userId: studentId,
+      fullName: "Gguu",
+      mobileNumber: "9998668886",
+      email: "",
+      standard: "ધોરણ 10",
+      hasQuizAccess: false,
+      redeemedCode: "",
+      paymentStatus: "none",
+      totalQuizzesTaken: 0,
+      bestScorePercent: 0,
+      unlockedSubjects: [],
+      paymentRequestIds: [],
+      activeDeviceId: "and_device_one",
+      activeDeviceName: "Samsung Galaxy A54",
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  // Device 1 can re-login on the same device
+  await assertSucceeds(
+    unauthDb.collection("students").doc(studentId).update({
+      fullName: "Gguu",
+      activeDeviceId: "and_device_one",
+      activeDeviceName: "Samsung Galaxy A54",
+      updatedAt: now,
+    })
+  );
+
+  // Device 2 CANNOT hijack or log in while Device 1 is active
+  await assertFails(
+    unauthDb.collection("students").doc(studentId).update({
+      fullName: "Gguu",
+      activeDeviceId: "and_device_two",
+      activeDeviceName: "Pixel 8",
+      updatedAt: now,
+    })
+  );
+
+  // Device 1 logs out (clears activeDeviceId)
+  await assertSucceeds(
+    unauthDb.collection("students").doc(studentId).update({
+      activeDeviceId: "",
+      activeDeviceName: "",
+      updatedAt: now,
+    })
+  );
+
+  // Now Device 2 CAN log in
+  await assertSucceeds(
+    unauthDb.collection("students").doc(studentId).update({
+      fullName: "Gguu",
+      activeDeviceId: "and_device_two",
+      activeDeviceName: "Pixel 8",
+      updatedAt: now,
+    })
+  );
+
+  // Admin can force-unlock Device 2
+  await assertSucceeds(
+    adminDb.collection("students").doc(studentId).update({
+      activeDeviceId: "",
+      activeDeviceName: "",
+      updatedAt: now,
+    })
+  );
+
+  // Device 1 can log in again after Admin unlock
+  await assertSucceeds(
+    unauthDb.collection("students").doc(studentId).update({
+      fullName: "Gguu",
+      activeDeviceId: "and_device_one",
+      activeDeviceName: "Samsung Galaxy A54",
+      updatedAt: now,
+    })
+  );
+});

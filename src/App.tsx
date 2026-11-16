@@ -14,14 +14,19 @@ import type { AdminLiveAlert } from './screens/AdminPanelScreen';
 import { quizAudioPlayer } from './services/audioPlayer';
 import { extractReadableErrorMessage } from './services/firestoreErrorHandler';
 import {
+  adminUnlockStudentDevice,
   approvePaymentAndAssignCode,
   deleteAccessCodeAdmin,
   deletePaymentRequestAdmin,
   deleteStudentAdmin,
+  forceRefreshNativeAdminListeners,
   generateBulkAccessCodes,
+  getCurrentDeviceIdentity,
   getStudentDocId,
+  hasNativeFirebaseBridge,
   isAdminAccount,
   loadMyPaymentRequestIds,
+  loginStudentWithDeviceLock,
   observeAllAccessCodes,
   observeAllPaymentRequests,
   observeAllStudents,
@@ -33,8 +38,8 @@ import {
   observeStudentProfile,
   recordQuizAttempt,
   redeemAccessCodePublic,
-  registerOrUpdateStudentProfile,
   rejectPaymentRequest,
+  releaseStudentDeviceLock,
   saveMyPaymentRequestId,
   saveReleaseConfig,
   signOutAdminSession,
@@ -150,7 +155,7 @@ export const App: React.FC = () => {
   const [availableUpdate, setAvailableUpdate] = useState<GitHubReleaseInfo | null>(null);
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
   const lastCheckedConfigKeyRef = useRef<string>('');
-  const lastSyncedProfileKeyRef = useRef<string>('');
+  const deviceClaimedForStudentRef = useRef<string>('');
   const knownPendingIdsRef = useRef<Set<string> | null>(null);
   const knownUsedCodesRef = useRef<Set<string> | null>(null);
   const isSoundEnabledRef = useRef(isSoundEnabled);
@@ -264,14 +269,24 @@ export const App: React.FC = () => {
     return '';
   }, [authUser, isFirebaseAdmin, isStudentLoggedIn, savedUserMeta.mobile]);
 
-  // Backfill Firestore student doc once per mobile/name combination
-  useEffect(() => {
-    if (!isStudentLoggedIn) return;
-    const syncKey = `${savedUserMeta.mobile}|${savedUserMeta.name}`;
-    if (lastSyncedProfileKeyRef.current === syncKey) return;
-    lastSyncedProfileKeyRef.current = syncKey;
-    void registerOrUpdateStudentProfile(savedUserMeta.name, savedUserMeta.mobile).catch(() => {});
-  }, [isStudentLoggedIn, savedUserMeta.mobile, savedUserMeta.name]);
+  const clearLocalStudentSession = useCallback((noticeMessage?: string, isErrorNotice = true) => {
+    deviceClaimedForStudentRef.current = '';
+    setSavedUserMeta({ name: '', mobile: '' });
+    setStudent(null);
+    setMyAttempts([]);
+    setLocalUnlockedSubjects([]);
+    setMyPaymentIds([]);
+    setMyPayments([]);
+    try {
+      localStorage.removeItem(LOCAL_USER_META_KEY);
+    } catch {
+      // Ignore
+    }
+    setRoute({ name: 'public', tab: 'quiz' });
+    if (noticeMessage) {
+      setBanner({ isError: isErrorNotice, message: noticeMessage });
+    }
+  }, []);
 
   // Dynamically load heavy chapter question banks only when a subject or quiz route is active
   const activeSubjectId: SubjectId | null =
@@ -324,7 +339,45 @@ export const App: React.FC = () => {
     return localUnlockedSubjects;
   }, [localUnlockedSubjects, student]);
 
-  // Realtime Firestore listeners
+  const mergedPaymentIdsKey = mergedPaymentIds.join(',');
+  const authUserUid = authUser?.uid ?? '';
+
+  // 1. Student profile & recent attempts listener (only re-runs if studentDocId changes)
+  useEffect(() => {
+    if (!studentDocId) {
+      setStudent(null);
+      setMyAttempts([]);
+      deviceClaimedForStudentRef.current = '';
+      return;
+    }
+
+    const unsubProfile = observeStudentProfile(
+      studentDocId,
+      (profile) => setStudent(profile),
+      () => {}
+    );
+    const unsubAttempts = observeMyQuizAttempts(studentDocId, setMyAttempts);
+
+    return () => {
+      unsubProfile();
+      unsubAttempts();
+    };
+  }, [studentDocId]);
+
+  // 2. Payment request status listeners (decoupled from admin and profile updates)
+  useEffect(() => {
+    const ids = mergedPaymentIdsKey ? mergedPaymentIdsKey.split(',').filter(Boolean) : [];
+    if (ids.length > 0) {
+      return observePaymentRequestsByIds(ids, setMyPayments);
+    }
+    if (authUserUid && !isFirebaseAdmin) {
+      return observeMyPaymentRequests(authUserUid, setMyPayments);
+    }
+    setMyPayments([]);
+    return undefined;
+  }, [authUserUid, isFirebaseAdmin, mergedPaymentIdsKey]);
+
+  // 3. Admin live collection listeners (attached once per Admin session or explicit sync)
   useEffect(() => {
     if (!isFirebaseAdmin) {
       knownPendingIdsRef.current = null;
@@ -334,140 +387,191 @@ export const App: React.FC = () => {
       setAllStudents([]);
       setReleaseConfig(null);
       setAvailableUpdate(null);
+      return;
     }
 
-    const unsubs: Array<() => void> = [];
+    const onAdminListenerError = (err: unknown) => {
+      setBanner({
+        isError: true,
+        message: extractReadableErrorMessage(err, langRef.current),
+      });
+    };
 
-    if (studentDocId) {
-      unsubs.push(
-        observeStudentProfile(
-          studentDocId,
-          (profile) => setStudent(profile),
-          () => {}
-        ),
-        observeMyQuizAttempts(studentDocId, setMyAttempts)
-      );
-    } else {
-      setStudent(null);
-      setMyAttempts([]);
-    }
+    const unsubs = [
+      observeReleaseConfig(setReleaseConfig),
+      observeAllStudents(setAllStudents, onAdminListenerError),
 
-    if (mergedPaymentIds.length > 0) {
-      unsubs.push(observePaymentRequestsByIds(mergedPaymentIds, setMyPayments));
-    } else if (authUser && !isFirebaseAdmin) {
-      unsubs.push(
-        observeMyPaymentRequests(authUser.uid, (items) => {
-          setMyPayments(items);
-        })
-      );
-    } else {
-      setMyPayments([]);
-    }
+      observeAllPaymentRequests((items) => {
+        setAllPayments(items);
+        const pendingItems = items.filter((p) => p.status === 'pending');
+        const pendingIds = new Set(pendingItems.map((p) => p.id));
 
-    if (isFirebaseAdmin) {
-      const onAdminListenerError = (err: unknown) => {
-        setBanner({
-          isError: true,
-          message: extractReadableErrorMessage(err, langRef.current),
-        });
-      };
+        if (knownPendingIdsRef.current === null) {
+          knownPendingIdsRef.current = pendingIds;
+        } else {
+          const newlyArrived = pendingItems.filter((p) => !knownPendingIdsRef.current?.has(p.id));
+          knownPendingIdsRef.current = pendingIds;
 
-      unsubs.push(
-        observeReleaseConfig(setReleaseConfig),
-        observeAllStudents(setAllStudents, onAdminListenerError),
-
-        observeAllPaymentRequests((items) => {
-          setAllPayments(items);
-          const pendingItems = items.filter((p) => p.status === 'pending');
-          const pendingIds = new Set(pendingItems.map((p) => p.id));
-
-          if (knownPendingIdsRef.current === null) {
-            knownPendingIdsRef.current = pendingIds;
-          } else {
-            const newlyArrived = pendingItems.filter((p) => !knownPendingIdsRef.current?.has(p.id));
-            knownPendingIdsRef.current = pendingIds;
-
-            if (newlyArrived.length > 0) {
-              if (isSoundEnabledRef.current) quizAudioPlayer.playAdminAlertChime();
-              const latest = newlyArrived[0];
-              const currentLang = langRef.current;
-              setBanner({
-                isError: false,
-                message:
+          if (newlyArrived.length > 0) {
+            if (isSoundEnabledRef.current) quizAudioPlayer.playAdminAlertChime();
+            const latest = newlyArrived[0];
+            const currentLang = langRef.current;
+            setBanner({
+              isError: false,
+              message:
+                currentLang === 'en'
+                  ? `New Payment Request: ${latest.studentName} (₹${latest.amountRupees})`
+                  : `નવી પેમેન્ટ વિનંતી: ${latest.studentName} (₹${latest.amountRupees})`,
+            });
+            setLiveAlerts((prev) => [
+              ...newlyArrived.map((req) => ({
+                id: `pay_${req.id}_${Date.now()}`,
+                kind: 'new_payment' as const,
+                title:
                   currentLang === 'en'
-                    ? `New Payment Request: ${latest.studentName} (₹${latest.amountRupees})`
-                    : `નવી પેમેન્ટ વિનંતી: ${latest.studentName} (₹${latest.amountRupees})`,
-              });
-              setLiveAlerts((prev) => [
-                ...newlyArrived.map((req) => ({
-                  id: `pay_${req.id}_${Date.now()}`,
-                  kind: 'new_payment' as const,
-                  title:
-                    currentLang === 'en'
-                      ? `New Payment: ${req.studentName} (₹${req.amountRupees})`
-                      : `નવું પેમેન્ટ: ${req.studentName} (₹${req.amountRupees})`,
-                  detail: `+91 ${req.mobileNumber} • UTR: ${req.upiTransactionRef}`,
-                  timestampLabel: new Date().toLocaleTimeString('en-IN', {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  }),
-                })),
-                ...prev.slice(0, 29),
-              ]);
-            }
+                    ? `New Payment: ${req.studentName} (₹${req.amountRupees})`
+                    : `નવું પેમેન્ટ: ${req.studentName} (₹${req.amountRupees})`,
+                detail: `+91 ${req.mobileNumber} • UTR: ${req.upiTransactionRef}`,
+                timestampLabel: new Date().toLocaleTimeString('en-IN', {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                }),
+              })),
+              ...prev.slice(0, 29),
+            ]);
           }
-        }, onAdminListenerError),
+        }
+      }, onAdminListenerError),
 
-        observeAllAccessCodes((codes) => {
-          setAllCodes(codes);
-          const usedItems = codes.filter((c) => c.status === 'used' || c.isUsed);
-          const usedCodeSet = new Set(usedItems.map((c) => c.code));
+      observeAllAccessCodes((codes) => {
+        setAllCodes(codes);
+        const usedItems = codes.filter((c) => c.status === 'used' || c.isUsed);
+        const usedCodeSet = new Set(usedItems.map((c) => c.code));
 
-          if (knownUsedCodesRef.current === null) {
-            knownUsedCodesRef.current = usedCodeSet;
-          } else {
-            const newlyUsed = usedItems.filter((c) => !knownUsedCodesRef.current?.has(c.code));
-            knownUsedCodesRef.current = usedCodeSet;
+        if (knownUsedCodesRef.current === null) {
+          knownUsedCodesRef.current = usedCodeSet;
+        } else {
+          const newlyUsed = usedItems.filter((c) => !knownUsedCodesRef.current?.has(c.code));
+          knownUsedCodesRef.current = usedCodeSet;
 
-            if (newlyUsed.length > 0) {
-              if (isSoundEnabledRef.current) quizAudioPlayer.playAdminAlertChime();
-              const latest = newlyUsed[0];
-              const usedName = latest.usedBy?.name || latest.usedByName || 'User';
-              const usedMob = latest.usedBy?.mobile || latest.usedByMobile || '';
-              const currentLang = langRef.current;
-              setBanner({
-                isError: false,
-                message:
+          if (newlyUsed.length > 0) {
+            if (isSoundEnabledRef.current) quizAudioPlayer.playAdminAlertChime();
+            const latest = newlyUsed[0];
+            const usedName = latest.usedBy?.name || latest.usedByName || 'User';
+            const usedMob = latest.usedBy?.mobile || latest.usedByMobile || '';
+            const currentLang = langRef.current;
+            setBanner({
+              isError: false,
+              message:
+                currentLang === 'en'
+                  ? `Code Used Live: ${latest.code} by ${usedName} (+91 ${usedMob})`
+                  : `કોડ હમણાં વપરાયો: ${latest.code} • ${usedName} (+91 ${usedMob})`,
+            });
+            setLiveAlerts((prev) => [
+              ...newlyUsed.map((c) => ({
+                id: `use_${c.code}_${Date.now()}`,
+                kind: 'code_used' as const,
+                title:
                   currentLang === 'en'
-                    ? `Code Used Live: ${latest.code} by ${usedName} (+91 ${usedMob})`
-                    : `કોડ હમણાં વપરાયો: ${latest.code} • ${usedName} (+91 ${usedMob})`,
-              });
-              setLiveAlerts((prev) => [
-                ...newlyUsed.map((c) => ({
-                  id: `use_${c.code}_${Date.now()}`,
-                  kind: 'code_used' as const,
-                  title:
-                    currentLang === 'en'
-                      ? `Code Used: ${c.code}`
-                      : `કોડ વપરાયો: ${c.code}`,
-                  detail: `${c.usedBy?.name || c.usedByName} (+91 ${c.usedBy?.mobile || c.usedByMobile})`,
-                  timestampLabel: new Date().toLocaleTimeString('en-IN', {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  }),
-                })),
-                ...prev.slice(0, 29),
-              ]);
-            }
+                    ? `Code Used: ${c.code}`
+                    : `કોડ વપરાયો: ${c.code}`,
+                detail: `${c.usedBy?.name || c.usedByName} (+91 ${c.usedBy?.mobile || c.usedByMobile})`,
+                timestampLabel: new Date().toLocaleTimeString('en-IN', {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                }),
+              })),
+              ...prev.slice(0, 29),
+            ]);
           }
-        }, onAdminListenerError)
-      );
-    }
+        }
+      }, onAdminListenerError),
+    ];
 
     return () => {
       unsubs.forEach((u) => u());
     };
-  }, [authUser, isFirebaseAdmin, mergedPaymentIds, studentDocId, syncVersion]);
+  }, [isFirebaseAdmin, syncVersion]);
+
+  // 4. Sync restored Firestore student details & enforce strict 1-device session watchdog
+  useEffect(() => {
+    if (!isStudentLoggedIn || !student || !studentDocId) return;
+    if ((student.id || student.userId) !== studentDocId) return;
+
+    // Keep local unlocked subjects & name & payment IDs synced with remote profile
+    if (student.fullName.trim() && student.fullName.trim() !== savedUserMeta.name) {
+      const syncedMeta = { name: student.fullName.trim().slice(0, 60), mobile: savedUserMeta.mobile };
+      setSavedUserMeta(syncedMeta);
+      try {
+        localStorage.setItem(LOCAL_USER_META_KEY, JSON.stringify(syncedMeta));
+      } catch {
+        // Ignore
+      }
+    }
+
+    const remoteSubjects = new Set<string>(student.unlockedSubjects ?? []);
+    if (student.hasQuizAccess) {
+      remoteSubjects.add('all');
+      ALL_SUBJECT_IDS.forEach((s) => remoteSubjects.add(s));
+    }
+    if (remoteSubjects.size > 0) {
+      const arr = Array.from(remoteSubjects);
+      setLocalUnlockedSubjects(arr);
+      try {
+        localStorage.setItem(`${LOCAL_UNLOCKS_KEY}_${savedUserMeta.mobile}`, JSON.stringify(arr));
+      } catch {
+        // Ignore
+      }
+    }
+
+    if (student.paymentRequestIds && student.paymentRequestIds.length > 0) {
+      student.paymentRequestIds.forEach((pid) => {
+        if (/^pay_[a-f0-9]{32}$/.test(pid)) {
+          const next = saveMyPaymentRequestId(pid, savedUserMeta.mobile);
+          setMyPaymentIds(next);
+        }
+      });
+    }
+
+    // Single-device lock enforcement
+    const myDeviceId = getCurrentDeviceIdentity().deviceId;
+    const remoteDeviceId = (student.activeDeviceId ?? '').trim();
+
+    if (remoteDeviceId && remoteDeviceId !== myDeviceId) {
+      clearLocalStudentSession(t.deviceKickedOutMsg, true);
+      return;
+    }
+
+    if (remoteDeviceId === myDeviceId) {
+      deviceClaimedForStudentRef.current = studentDocId;
+      return;
+    }
+
+    // remoteDeviceId is empty: either Admin force-unlocked this device OR legacy session needs to claim lock once
+    if (deviceClaimedForStudentRef.current === studentDocId) {
+      clearLocalStudentSession(t.deviceKickedOutMsg, true);
+      return;
+    }
+
+    deviceClaimedForStudentRef.current = studentDocId;
+    void loginStudentWithDeviceLock({
+      mobileNumber: savedUserMeta.mobile,
+      fullName: student.fullName || savedUserMeta.name,
+    }).catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : '';
+      if (msg.startsWith('DEVICE_ALREADY_LOGGED_IN:')) {
+        clearLocalStudentSession(extractReadableErrorMessage(err, langRef.current), true);
+      }
+    });
+  }, [
+    clearLocalStudentSession,
+    isStudentLoggedIn,
+    savedUserMeta.mobile,
+    savedUserMeta.name,
+    student,
+    studentDocId,
+    t.deviceKickedOutMsg,
+  ]);
 
   useEffect(() => {
     if (!banner) return;
@@ -538,30 +642,60 @@ export const App: React.FC = () => {
   const handleStudentLogin = async (name: string, mobile: string) => {
     const cleanName = name.trim().slice(0, 60);
     const cleanMobile = mobile.replace(/\D/g, '').slice(-10);
-    if (!cleanName) throw new Error('INVALID_NAME');
     if (!/^[0-9]{10}$/.test(cleanMobile)) throw new Error('INVALID_MOBILE');
 
-    persistUserMeta(cleanName, cleanMobile);
-    setRoute({ name: 'public', tab: 'quiz' });
-    void registerOrUpdateStudentProfile(cleanName, cleanMobile).catch((err) => {
-      console.warn('Student profile background sync deferred:', err);
+    const profile = await loginStudentWithDeviceLock({
+      mobileNumber: cleanMobile,
+      fullName: cleanName,
     });
+
+    const effectiveName = (profile.fullName || cleanName).trim().slice(0, 60);
+    if (!effectiveName) throw new Error('INVALID_NAME');
+
+    deviceClaimedForStudentRef.current = profile.id || getStudentDocId(cleanMobile);
+    setStudent(profile);
+    persistUserMeta(effectiveName, cleanMobile);
+
+    const restoredSubjects = new Set<string>(profile.unlockedSubjects ?? []);
+    if (profile.hasQuizAccess) {
+      restoredSubjects.add('all');
+      ALL_SUBJECT_IDS.forEach((s) => restoredSubjects.add(s));
+    }
+    if (restoredSubjects.size > 0) {
+      const arr = Array.from(restoredSubjects);
+      setLocalUnlockedSubjects(arr);
+      try {
+        localStorage.setItem(`${LOCAL_UNLOCKS_KEY}_${cleanMobile}`, JSON.stringify(arr));
+      } catch {
+        // Ignore
+      }
+    }
+
+    if (profile.paymentRequestIds && profile.paymentRequestIds.length > 0) {
+      let latestIds = loadMyPaymentRequestIds(cleanMobile);
+      profile.paymentRequestIds.forEach((pid) => {
+        if (/^pay_[a-f0-9]{32}$/.test(pid)) {
+          latestIds = saveMyPaymentRequestId(pid, cleanMobile);
+        }
+      });
+      setMyPaymentIds(latestIds);
+    }
+
+    setRoute({ name: 'public', tab: 'quiz' });
+    if (profile.isReturningUser) {
+      setBanner({
+        isError: false,
+        message: `${effectiveName} — ${t.returningWelcomeMsg}`,
+      });
+    }
   };
 
   const handleStudentLogout = () => {
-    const empty = { name: '', mobile: '' };
-    setSavedUserMeta(empty);
-    setStudent(null);
-    setMyAttempts([]);
-    setLocalUnlockedSubjects([]);
-    setMyPaymentIds([]);
-    setMyPayments([]);
-    try {
-      localStorage.removeItem(LOCAL_USER_META_KEY);
-    } catch {
-      // Ignore
+    const mob = savedUserMeta.mobile;
+    clearLocalStudentSession();
+    if (/^[0-9]{10}$/.test(mob)) {
+      void releaseStudentDeviceLock(mob).catch(() => {});
     }
-    setRoute({ name: 'public', tab: 'quiz' });
   };
 
   const persistUnlockedSubject = (subjectId: string, mobile = savedUserMeta.mobile) => {
@@ -798,6 +932,21 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleUnlockStudentDevice = async (st: StudentProfile) => {
+    setIsBusy(true);
+    try {
+      await adminUnlockStudentDevice(st);
+      setBanner({
+        isError: false,
+        message: `${st.fullName || st.mobileNumber} — ${t.unlockDeviceSuccess}`,
+      });
+    } catch (err) {
+      setBanner({ isError: true, message: formatAppError(err, 'Unlock failed') });
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
   const handleDeleteStudent = async (st: StudentProfile) => {
     setIsBusy(true);
     try {
@@ -872,7 +1021,13 @@ export const App: React.FC = () => {
           approvedConfirmation={approvedConfirmation}
           onDismissApprovedConfirmation={() => setApprovedConfirmation(null)}
           onBackToPublic={() => setRoute({ name: 'public', tab: 'quiz' })}
-          onForceSync={() => setSyncVersion((v) => v + 1)}
+          onForceSync={() => {
+            if (hasNativeFirebaseBridge()) {
+              forceRefreshNativeAdminListeners();
+            } else {
+              setSyncVersion((v) => v + 1);
+            }
+          }}
           onToggleSound={() => setIsSoundEnabled((prev) => !prev)}
           onClearAlerts={() => setLiveAlerts([])}
           onSignOut={() => void handleAdminSignOut()}
@@ -887,6 +1042,7 @@ export const App: React.FC = () => {
           onTestUpdateCheck={() => void checkForUpdates(true)}
           onDeletePayment={handleDeletePayment}
           onDeleteCode={handleDeleteCode}
+          onUnlockStudentDevice={handleUnlockStudentDevice}
           onDeleteStudent={handleDeleteStudent}
           onNotify={(msg) => setBanner({ isError: false, message: msg })}
         />

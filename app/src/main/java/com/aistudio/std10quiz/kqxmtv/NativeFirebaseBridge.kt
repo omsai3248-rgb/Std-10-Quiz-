@@ -1,5 +1,6 @@
 package com.aistudio.std10quiz.kqxmtv
 
+import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
@@ -30,7 +31,10 @@ import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.ListenerRegistration
+import com.google.firebase.firestore.Query
 import com.google.firebase.firestore.Source
+import com.google.firebase.firestore.firestoreSettings
+import com.google.firebase.firestore.persistentCacheSettings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
@@ -41,6 +45,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.security.MessageDigest
 import java.security.SecureRandom
+import java.util.UUID
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
@@ -113,9 +118,54 @@ class NativeFirebaseBridge(
             Log.e("NativeFirebase", "firestore_database_id missing in resources")
             return@lazy null
         }
-        runCatching { FirebaseFirestore.getInstance(FirebaseApp.getInstance(), dbId) }
+        runCatching {
+            val instance = FirebaseFirestore.getInstance(FirebaseApp.getInstance(), dbId)
+            runCatching {
+                instance.firestoreSettings = firestoreSettings {
+                    setLocalCacheSettings(
+                        persistentCacheSettings {
+                            setSizeBytes(100L * 1024 * 1024)
+                        }
+                    )
+                }
+            }
+            instance
+        }
             .onFailure { Log.e("NativeFirebase", "Firestore init failed", it) }
             .getOrNull()
+    }
+
+    private fun getOrCreateDeviceId(): String {
+        val prefs = appContext.getSharedPreferences("std10_device_session_prefs", Context.MODE_PRIVATE)
+        val existing = prefs.getString("device_id", null).orEmpty().trim()
+        if (existing.length in 10..120) return existing
+        val created = "and_${UUID.randomUUID().toString().replace("-", "")}".take(40)
+        prefs.edit().putString("device_id", created).apply()
+        return created
+    }
+
+    private fun getDeviceModelName(): String {
+        val mfg = Build.MANUFACTURER.orEmpty().trim()
+        val model = Build.MODEL.orEmpty().trim()
+        val combined = if (model.startsWith(mfg, ignoreCase = true)) {
+            model
+        } else {
+            "$mfg $model".trim()
+        }
+        return "${combined.ifBlank { "Android Device" }} (Android ${Build.VERSION.RELEASE})".take(120)
+    }
+
+    private fun isQuotaOrOfflineException(err: Throwable?): Boolean {
+        if (err is FirebaseFirestoreException) {
+            return err.code == FirebaseFirestoreException.Code.RESOURCE_EXHAUSTED ||
+                err.code == FirebaseFirestoreException.Code.UNAVAILABLE ||
+                err.code == FirebaseFirestoreException.Code.DEADLINE_EXCEEDED
+        }
+        val msg = err?.message.orEmpty().lowercase()
+        return msg.contains("resource_exhausted") ||
+            msg.contains("quota") ||
+            msg.contains("unavailable") ||
+            msg.contains("offline")
     }
 
     private val auth: FirebaseAuth? by lazy {
@@ -143,6 +193,10 @@ class NativeFirebaseBridge(
     private val myPaymentListeners = mutableListOf<ListenerRegistration>()
     private val studentListeners = mutableListOf<ListenerRegistration>()
     private val adminListeners = mutableListOf<ListenerRegistration>()
+    @Volatile
+    private var adminListenersActive = false
+    @Volatile
+    private var currentStudentListenerId: String = ""
     @Volatile
     private var lastPaymentIdsJson: String = "[]"
 
@@ -218,6 +272,12 @@ class NativeFirebaseBridge(
             put("databaseId", dbId)
         }.toString()
     }
+
+    @JavascriptInterface
+    fun getDeviceSessionIdentity(): String = JSONObject().apply {
+        put("deviceId", getOrCreateDeviceId())
+        put("deviceName", getDeviceModelName())
+    }.toString()
 
     @JavascriptInterface
     fun getCurrentAuthUser(): String = serializeUser(auth?.currentUser)?.toString() ?: "null"
@@ -419,22 +479,283 @@ class NativeFirebaseBridge(
     }
 
     @JavascriptInterface
+    fun lookupStudentProfile(callId: String, mobileNumber: String) {
+        val localDb = db ?: run {
+            resolveCallSuccess(callId, "null")
+            return
+        }
+        val cleanMobile = mobileNumber.replace(Regex("\\D"), "").takeLast(10)
+        if (!Regex("^[0-9]{10}$").matches(cleanMobile) || cleanMobile == "9099592283") {
+            resolveCallSuccess(callId, "null")
+            return
+        }
+        val studentId = "mob_$cleanMobile"
+        activity.lifecycleScope.launch(Dispatchers.IO) {
+            val ref = localDb.collection("students").document(studentId)
+            val snap = try {
+                withTimeoutOrNull(4_000L) { ref.get().awaitResult() }
+                    ?: runCatching { ref.get(Source.CACHE).awaitResult() }.getOrNull()
+            } catch (_: Throwable) {
+                runCatching { ref.get(Source.CACHE).awaitResult() }.getOrNull()
+            }
+            if (snap != null && snap.exists()) {
+                resolveCallSuccess(callId, serializeStudent(snap).toString())
+            } else {
+                resolveCallSuccess(callId, "null")
+            }
+        }
+    }
+
+    @JavascriptInterface
+    fun loginStudentWithDeviceLock(callId: String, payloadJson: String) {
+        val localDb = db ?: run {
+            resolveCallError(callId, "Native Firebase is not initialized.")
+            return
+        }
+        activity.lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val obj = JSONObject(payloadJson)
+                val cleanMobile = obj.getString("mobileNumber").replace(Regex("\\D"), "").takeLast(10)
+                val fullNameInput = obj.optString("fullName", "").trim().take(60)
+                val deviceId = obj.optString("deviceId", "").trim().ifBlank { getOrCreateDeviceId() }.take(128)
+                val deviceName = obj.optString("deviceName", "").trim().ifBlank { getDeviceModelName() }.take(120)
+
+                if (!Regex("^[0-9]{10}$").matches(cleanMobile)) {
+                    resolveCallError(callId, "INVALID_MOBILE")
+                    return@launch
+                }
+                if (cleanMobile == "9099592283" && !isCurrentUserAdmin()) {
+                    resolveCallError(callId, "RESERVED_ADMIN_MOBILE")
+                    return@launch
+                }
+
+                val studentId = "mob_$cleanMobile"
+                val ref = localDb.collection("students").document(studentId)
+
+                try {
+                    val resultJson = withTimeoutOrNull(7_000L) {
+                        localDb.runTransaction { tx ->
+                            val snap = tx.get(ref)
+                            if (!snap.exists()) {
+                                if (fullNameInput.isBlank()) {
+                                    throw IllegalStateException("NAME_REQUIRED_FOR_NEW_USER")
+                                }
+                                tx.set(
+                                    ref,
+                                    mapOf(
+                                        "userId" to studentId,
+                                        "fullName" to fullNameInput,
+                                        "mobileNumber" to cleanMobile,
+                                        "email" to "",
+                                        "standard" to "ધોરણ 10",
+                                        "hasQuizAccess" to false,
+                                        "redeemedCode" to "",
+                                        "paymentStatus" to "none",
+                                        "totalQuizzesTaken" to 0,
+                                        "bestScorePercent" to 0,
+                                        "unlockedSubjects" to emptyList<String>(),
+                                        "paymentRequestIds" to emptyList<String>(),
+                                        "activeDeviceId" to deviceId,
+                                        "activeDeviceName" to deviceName,
+                                        "createdAt" to FieldValue.serverTimestamp(),
+                                        "updatedAt" to FieldValue.serverTimestamp(),
+                                    )
+                                )
+                                JSONObject().apply {
+                                    put("id", studentId)
+                                    put("userId", studentId)
+                                    put("fullName", fullNameInput)
+                                    put("mobileNumber", cleanMobile)
+                                    put("email", "")
+                                    put("standard", "ધોરણ 10")
+                                    put("hasQuizAccess", false)
+                                    put("redeemedCode", "")
+                                    put("paymentStatus", "none")
+                                    put("totalQuizzesTaken", 0)
+                                    put("bestScorePercent", 0)
+                                    put("unlockedSubjects", JSONArray())
+                                    put("paymentRequestIds", JSONArray())
+                                    put("activeDeviceId", deviceId)
+                                    put("activeDeviceName", deviceName)
+                                    put("isReturningUser", false)
+                                }
+                            } else {
+                                val existingDeviceId = snap.getString("activeDeviceId").orEmpty().trim()
+                                val existingDeviceName = snap.getString("activeDeviceName").orEmpty().trim()
+                                if (existingDeviceId.isNotEmpty() && existingDeviceId != deviceId) {
+                                    throw IllegalStateException("DEVICE_ALREADY_LOGGED_IN:$existingDeviceName")
+                                }
+                                val existingName = snap.getString("fullName").orEmpty().trim()
+                                val effectiveName = fullNameInput.ifBlank { existingName }.ifBlank { "Student" }
+                                val needsUpdate = existingDeviceId != deviceId ||
+                                    existingDeviceName != deviceName ||
+                                    (fullNameInput.isNotBlank() && fullNameInput != existingName)
+                                if (needsUpdate) {
+                                    tx.update(
+                                        ref,
+                                        mapOf(
+                                            "fullName" to effectiveName,
+                                            "email" to snap.getString("email").orEmpty(),
+                                            "activeDeviceId" to deviceId,
+                                            "activeDeviceName" to deviceName,
+                                            "updatedAt" to FieldValue.serverTimestamp(),
+                                        )
+                                    )
+                                }
+                                serializeStudent(snap).apply {
+                                    put("fullName", effectiveName)
+                                    put("activeDeviceId", deviceId)
+                                    put("activeDeviceName", deviceName)
+                                    put("isReturningUser", true)
+                                }
+                            }
+                        }.awaitResult()
+                    }
+
+                    if (resultJson != null) {
+                        resolveCallSuccess(callId, resultJson.toString())
+                        return@launch
+                    }
+                    // Transaction timed out (offline): try local cache fallback
+                    val cachedSnap = runCatching { ref.get(Source.CACHE).awaitResult() }.getOrNull()
+                    if (cachedSnap != null && cachedSnap.exists()) {
+                        val existingDeviceId = cachedSnap.getString("activeDeviceId").orEmpty().trim()
+                        val existingDeviceName = cachedSnap.getString("activeDeviceName").orEmpty().trim()
+                        if (existingDeviceId.isNotEmpty() && existingDeviceId != deviceId) {
+                            resolveCallError(callId, "DEVICE_ALREADY_LOGGED_IN:$existingDeviceName")
+                            return@launch
+                        }
+                        val effectiveName = fullNameInput.ifBlank { cachedSnap.getString("fullName").orEmpty().trim() }.ifBlank { "Student" }
+                        resolveCallSuccess(
+                            callId,
+                            serializeStudent(cachedSnap).apply {
+                                put("fullName", effectiveName)
+                                put("activeDeviceId", existingDeviceId.ifBlank { deviceId })
+                                put("activeDeviceName", existingDeviceName.ifBlank { deviceName })
+                                put("isReturningUser", true)
+                            }.toString()
+                        )
+                        return@launch
+                    }
+                    resolveCallError(callId, "Network unavailable")
+                } catch (e: IllegalStateException) {
+                    val msg = e.message.orEmpty()
+                    if (msg == "NAME_REQUIRED_FOR_NEW_USER" || msg.startsWith("DEVICE_ALREADY_LOGGED_IN:")) {
+                        resolveCallError(callId, msg)
+                    } else {
+                        throw e
+                    }
+                } catch (e: FirebaseFirestoreException) {
+                    if (e.code == FirebaseFirestoreException.Code.PERMISSION_DENIED) {
+                        val latestSnap = runCatching {
+                            withTimeoutOrNull(2_500L) { ref.get().awaitResult() }
+                                ?: ref.get(Source.CACHE).awaitResult()
+                        }.getOrNull()
+                        val lockName = latestSnap?.getString("activeDeviceName").orEmpty().trim()
+                        resolveCallError(callId, "DEVICE_ALREADY_LOGGED_IN:$lockName")
+                        return@launch
+                    }
+                    if (isQuotaOrOfflineException(e)) {
+                        val cachedSnap = runCatching { ref.get(Source.CACHE).awaitResult() }.getOrNull()
+                        if (cachedSnap != null && cachedSnap.exists()) {
+                            val existingDeviceId = cachedSnap.getString("activeDeviceId").orEmpty().trim()
+                            val existingDeviceName = cachedSnap.getString("activeDeviceName").orEmpty().trim()
+                            if (existingDeviceId.isNotEmpty() && existingDeviceId != deviceId) {
+                                resolveCallError(callId, "DEVICE_ALREADY_LOGGED_IN:$existingDeviceName")
+                            } else {
+                                val effectiveName = fullNameInput.ifBlank { cachedSnap.getString("fullName").orEmpty().trim() }.ifBlank { "Student" }
+                                resolveCallSuccess(
+                                    callId,
+                                    serializeStudent(cachedSnap).apply {
+                                        put("fullName", effectiveName)
+                                        put("activeDeviceId", existingDeviceId.ifBlank { deviceId })
+                                        put("activeDeviceName", existingDeviceName.ifBlank { deviceName })
+                                        put("isReturningUser", true)
+                                    }.toString()
+                                )
+                            }
+                            return@launch
+                        }
+                    }
+                    handleFirestoreError(e, OperationType.WRITE, ref.path)
+                    resolveCallError(callId, e.localizedMessage ?: "Login failed")
+                }
+            } catch (e: Exception) {
+                resolveCallError(callId, e.localizedMessage ?: "Login failed")
+            }
+        }
+    }
+
+    @JavascriptInterface
+    fun releaseStudentDeviceLock(callId: String, payloadJson: String) {
+        val localDb = db ?: run {
+            resolveCallSuccess(callId, "true")
+            return
+        }
+        activity.lifecycleScope.launch(Dispatchers.IO) {
+            runCatching {
+                val obj = JSONObject(payloadJson)
+                val cleanMobile = obj.getString("mobileNumber").replace(Regex("\\D"), "").takeLast(10)
+                val deviceId = obj.optString("deviceId", "").trim().ifBlank { getOrCreateDeviceId() }
+                if (!Regex("^[0-9]{10}$").matches(cleanMobile) || cleanMobile == "9099592283") {
+                    resolveCallSuccess(callId, "true")
+                    return@launch
+                }
+                val ref = localDb.collection("students").document("mob_$cleanMobile")
+                withTimeoutOrNull(3_500L) {
+                    localDb.runTransaction { tx ->
+                        val snap = tx.get(ref)
+                        if (snap.exists()) {
+                            val existingDeviceId = snap.getString("activeDeviceId").orEmpty().trim()
+                            if (existingDeviceId.isEmpty() || existingDeviceId == deviceId) {
+                                tx.update(
+                                    ref,
+                                    mapOf(
+                                        "activeDeviceId" to "",
+                                        "activeDeviceName" to "",
+                                        "updatedAt" to FieldValue.serverTimestamp(),
+                                    )
+                                )
+                            }
+                        }
+                        null
+                    }.awaitResult()
+                }
+            }
+            resolveCallSuccess(callId, "true")
+        }
+    }
+
+    @JavascriptInterface
     fun startStudentListeners(studentId: String) {
         val cleanId = studentId.trim()
         val localDb = db ?: return
         activity.runOnUiThread {
-            stopStudentListeners()
             if (cleanId.isBlank()) {
+                stopStudentListeners()
                 emitToJs("window.__onNativeStudentProfile", "null")
                 emitToJs("window.__onNativeMyAttempts", "[]")
                 return@runOnUiThread
             }
+            if (currentStudentListenerId == cleanId && studentListeners.isNotEmpty()) {
+                return@runOnUiThread
+            }
+            stopStudentListeners()
+            currentStudentListenerId = cleanId
 
-            val profileReg = localDb.collection("students").document(cleanId)
+            val studentDocRef = localDb.collection("students").document(cleanId)
+            val profileReg = studentDocRef
                 .addSnapshotListener { snap, error ->
                     if (error != null) {
                         handleFirestoreError(error, OperationType.GET, "students/$cleanId")
-                        emitToJs("window.__onNativeStudentProfile", "null")
+                        if (isQuotaOrOfflineException(error)) {
+                            activity.lifecycleScope.launch(Dispatchers.IO) {
+                                val cached = runCatching { studentDocRef.get(Source.CACHE).awaitResult() }.getOrNull()
+                                if (cached != null && cached.exists()) {
+                                    emitToJs("window.__onNativeStudentProfile", serializeStudent(cached).toString())
+                                }
+                            }
+                        }
                         return@addSnapshotListener
                     }
                     if (snap != null && snap.exists()) {
@@ -445,18 +766,17 @@ class NativeFirebaseBridge(
                 }
             studentListeners.add(profileReg)
 
-            val attemptsReg = localDb.collection("students").document(cleanId)
+            val attemptsReg = studentDocRef
                 .collection("quiz_attempts")
+                .orderBy("createdAt", Query.Direction.DESCENDING)
+                .limit(15)
                 .addSnapshotListener { snap, error ->
                     if (error != null) {
                         handleFirestoreError(error, OperationType.LIST, "students/$cleanId/quiz_attempts")
-                        emitToJs("window.__onNativeMyAttempts", "[]")
                         return@addSnapshotListener
                     }
                     val arr = JSONArray()
-                    snap?.documents
-                        ?.sortedByDescending { it.getTimestamp("createdAt")?.seconds ?: Long.MAX_VALUE }
-                        ?.forEach { arr.put(serializeAttempt(it, cleanId)) }
+                    snap?.documents?.forEach { arr.put(serializeAttempt(it, cleanId)) }
                     emitToJs("window.__onNativeMyAttempts", arr.toString())
                 }
             studentListeners.add(attemptsReg)
@@ -466,6 +786,7 @@ class NativeFirebaseBridge(
     @JavascriptInterface
     fun stopStudentListeners() {
         activity.runOnUiThread {
+            currentStudentListenerId = ""
             studentListeners.forEach { it.remove() }
             studentListeners.clear()
         }
@@ -492,7 +813,12 @@ class NativeFirebaseBridge(
                 val timeTakenSeconds = obj.getInt("timeTakenSeconds").coerceIn(0, 7200)
 
                 val studentRef = localDb.collection("students").document(studentId)
-                val stSnap = studentRef.get().awaitResult()
+                val cachedSnap = runCatching { studentRef.get(Source.CACHE).awaitResult() }.getOrNull()
+                val stSnap = if (cachedSnap != null && cachedSnap.exists()) {
+                    cachedSnap
+                } else {
+                    studentRef.get().awaitResult()
+                }
                 if (!stSnap.exists()) {
                     resolveCallSuccess(callId, "false")
                     return@launch
@@ -558,12 +884,6 @@ class NativeFirebaseBridge(
                 val utrRef = localDb.collection("utr_locks").document(utrNormalized)
                 val reqRef = localDb.collection("payment_requests").document(requestId)
 
-                val preCheck = utrRef.get().awaitResult()
-                if (preCheck.exists()) {
-                    resolveCallError(callId, "DUPLICATE_UTR")
-                    return@launch
-                }
-
                 localDb.runTransaction { tx ->
                     val lockSnap = tx.get(utrRef)
                     if (lockSnap.exists()) {
@@ -605,7 +925,9 @@ class NativeFirebaseBridge(
                 if (effectiveStudentId.startsWith("mob_") && effectiveStudentId != "mob_9099592283") {
                     runCatching {
                         val stRef = localDb.collection("students").document(effectiveStudentId)
-                        val stSnap = stRef.get().awaitResult()
+                        val stSnap = runCatching { stRef.get(Source.CACHE).awaitResult() }.getOrNull()
+                            ?.takeIf { it.exists() }
+                            ?: stRef.get().awaitResult()
                         if (!stSnap.exists()) {
                             stRef.set(
                                 mapOf(
@@ -902,55 +1224,96 @@ class NativeFirebaseBridge(
     }
 
     @JavascriptInterface
+    fun forceRefreshAdminListeners() {
+        activity.runOnUiThread {
+            adminListenersActive = false
+            startAdminListeners()
+        }
+    }
+
+    @JavascriptInterface
     fun startAdminListeners() {
         val localDb = db ?: return
         activity.runOnUiThread {
-            stopAdminListeners()
-            if (!isCurrentUserAdmin()) return@runOnUiThread
+            if (!isCurrentUserAdmin()) {
+                stopAdminListeners()
+                return@runOnUiThread
+            }
+            if (adminListenersActive && adminListeners.isNotEmpty()) {
+                return@runOnUiThread
+            }
+            adminListeners.forEach { it.remove() }
+            adminListeners.clear()
+            adminListenersActive = true
 
-            val payReg = localDb.collection("payment_requests")
+            val payQuery = localDb.collection("payment_requests")
+                .orderBy("createdAt", Query.Direction.DESCENDING)
+                .limit(80)
+            val payReg = payQuery
                 .addSnapshotListener { snap, error ->
                     if (error != null) {
                         handleFirestoreError(error, OperationType.LIST, "payment_requests")
+                        if (isQuotaOrOfflineException(error)) {
+                            activity.lifecycleScope.launch(Dispatchers.IO) {
+                                val cached = runCatching { payQuery.get(Source.CACHE).awaitResult() }.getOrNull()
+                                val arr = JSONArray()
+                                cached?.documents?.forEach { arr.put(serializePayment(it)) }
+                                emitToJs("window.__onNativeAllPayments", arr.toString())
+                            }
+                        }
                         emitToJs("window.__onNativeAdminError", JSONObject.quote(error.localizedMessage ?: "Permission denied"))
                         return@addSnapshotListener
                     }
                     val arr = JSONArray()
-                    snap?.documents
-                        ?.sortedByDescending { it.getTimestamp("createdAt")?.seconds ?: Long.MAX_VALUE }
-                        ?.forEach { arr.put(serializePayment(it)) }
+                    snap?.documents?.forEach { arr.put(serializePayment(it)) }
                     emitToJs("window.__onNativeAllPayments", arr.toString())
                 }
             adminListeners.add(payReg)
 
-            val codeReg = localDb.collection("access_codes")
+            val codeQuery = localDb.collection("access_codes")
+                .orderBy("createdAt", Query.Direction.DESCENDING)
+                .limit(150)
+            val codeReg = codeQuery
                 .addSnapshotListener { snap, error ->
                     if (error != null) {
                         handleFirestoreError(error, OperationType.LIST, "access_codes")
+                        if (isQuotaOrOfflineException(error)) {
+                            activity.lifecycleScope.launch(Dispatchers.IO) {
+                                val cached = runCatching { codeQuery.get(Source.CACHE).awaitResult() }.getOrNull()
+                                val arr = JSONArray()
+                                cached?.documents?.forEach { arr.put(serializeAccessCode(it)) }
+                                emitToJs("window.__onNativeAllCodes", arr.toString())
+                            }
+                        }
                         emitToJs("window.__onNativeAdminError", JSONObject.quote(error.localizedMessage ?: "Permission denied"))
                         return@addSnapshotListener
                     }
                     val arr = JSONArray()
-                    snap?.documents
-                        ?.sortedByDescending { it.getTimestamp("createdAt")?.seconds ?: Long.MAX_VALUE }
-                        ?.forEach { arr.put(serializeAccessCode(it)) }
+                    snap?.documents?.forEach { arr.put(serializeAccessCode(it)) }
                     emitToJs("window.__onNativeAllCodes", arr.toString())
                 }
             adminListeners.add(codeReg)
 
-            val studentsReg = localDb.collection("students")
+            val studentsQuery = localDb.collection("students")
+                .orderBy("updatedAt", Query.Direction.DESCENDING)
+                .limit(150)
+            val studentsReg = studentsQuery
                 .addSnapshotListener { snap, error ->
                     if (error != null) {
                         handleFirestoreError(error, OperationType.LIST, "students")
+                        if (isQuotaOrOfflineException(error)) {
+                            activity.lifecycleScope.launch(Dispatchers.IO) {
+                                val cached = runCatching { studentsQuery.get(Source.CACHE).awaitResult() }.getOrNull()
+                                val arr = JSONArray()
+                                cached?.documents?.forEach { arr.put(serializeStudent(it)) }
+                                emitToJs("window.__onNativeAllStudents", arr.toString())
+                            }
+                        }
                         emitToJs("window.__onNativeAdminError", JSONObject.quote(error.localizedMessage ?: "Permission denied"))
                         return@addSnapshotListener
                     }
                     val arr = JSONArray()
-                    snap?.documents
-                        ?.sortedByDescending {
-                            (it.getTimestamp("updatedAt") ?: it.getTimestamp("createdAt"))?.seconds ?: Long.MAX_VALUE
-                        }
-                        ?.forEach { arr.put(serializeStudent(it)) }
+                    snap?.documents?.forEach { arr.put(serializeStudent(it)) }
                     emitToJs("window.__onNativeAllStudents", arr.toString())
                 }
             adminListeners.add(studentsReg)
@@ -980,6 +1343,7 @@ class NativeFirebaseBridge(
     @JavascriptInterface
     fun stopAdminListeners() {
         activity.runOnUiThread {
+            adminListenersActive = false
             adminListeners.forEach { it.remove() }
             adminListeners.clear()
             emitToJs("window.__onNativeReleaseConfig", "null")
@@ -1342,6 +1706,36 @@ class NativeFirebaseBridge(
     }
 
     @JavascriptInterface
+    fun adminUnlockStudentDevice(callId: String, payloadJson: String) {
+        val localDb = db ?: run {
+            resolveCallError(callId, "Native Firebase is not initialized.")
+            return
+        }
+        activity.lifecycleScope.launch(Dispatchers.IO) {
+            if (!isCurrentUserAdmin()) {
+                resolveCallError(callId, "Authentication session not ready.")
+                return@launch
+            }
+            val obj = JSONObject(payloadJson)
+            val studentId = obj.getString("studentId").trim()
+            val ref = localDb.collection("students").document(studentId)
+            try {
+                ref.update(
+                    mapOf(
+                        "activeDeviceId" to "",
+                        "activeDeviceName" to "",
+                        "updatedAt" to FieldValue.serverTimestamp(),
+                    )
+                ).awaitResult()
+                resolveCallSuccess(callId, "true")
+            } catch (e: Exception) {
+                handleFirestoreError(e, OperationType.UPDATE, ref.path)
+                resolveCallError(callId, e.localizedMessage ?: "Failed to unlock student device")
+            }
+        }
+    }
+
+    @JavascriptInterface
     fun deleteStudent(callId: String, payloadJson: String) {
         val localDb = db ?: run {
             resolveCallError(callId, "Native Firebase is not initialized.")
@@ -1495,6 +1889,8 @@ class NativeFirebaseBridge(
             put("bestScorePercent", (doc.getLong("bestScorePercent") ?: 0L).toInt())
             put("unlockedSubjects", unlockedArr)
             put("paymentRequestIds", payIdsArr)
+            put("activeDeviceId", doc.getString("activeDeviceId").orEmpty())
+            put("activeDeviceName", doc.getString("activeDeviceName").orEmpty())
             put("createdAt", serializeTimestamp(doc.getTimestamp("createdAt")))
             put("updatedAt", serializeTimestamp(doc.getTimestamp("updatedAt")))
         }

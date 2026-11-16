@@ -17,6 +17,9 @@ export interface StudentProfile {
   bestScorePercent: number;
   unlockedSubjects: string[];
   paymentRequestIds?: string[];
+  activeDeviceId?: string;
+  activeDeviceName?: string;
+  isReturningUser?: boolean;
   createdAt: Timestamp | null;
   updatedAt: Timestamp | null;
 }

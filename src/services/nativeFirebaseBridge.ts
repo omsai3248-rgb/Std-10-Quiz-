@@ -17,9 +17,13 @@ export interface AppAuthUser {
 interface AndroidFirebaseBridgeApi {
   hasNativeFirebase?: () => boolean;
   getFirebaseConfigSummary?: () => string;
+  getDeviceSessionIdentity?: () => string;
   getCurrentAuthUser?: () => string;
   requestGoogleSignIn?: (callId: string) => void;
   signOutGoogle?: (callId: string) => void;
+  lookupStudentProfile?: (callId: string, mobileNumber: string) => void;
+  loginStudentWithDeviceLock?: (callId: string, payloadJson: string) => void;
+  releaseStudentDeviceLock?: (callId: string, payloadJson: string) => void;
   registerOrUpdateStudentProfile?: (callId: string, payloadJson: string) => void;
   startStudentListeners?: (studentId: string) => void;
   stopStudentListeners?: () => void;
@@ -29,6 +33,7 @@ interface AndroidFirebaseBridgeApi {
   startPublicListeners?: (paymentIdsJson: string) => void;
   updateMyPaymentIds?: (paymentIdsJson: string) => void;
   stopPublicListeners?: () => void;
+  forceRefreshAdminListeners?: () => void;
   startAdminListeners?: () => void;
   stopAdminListeners?: () => void;
   approvePayment?: (callId: string, payloadJson: string) => void;
@@ -37,6 +42,7 @@ interface AndroidFirebaseBridgeApi {
   saveReleaseConfig?: (callId: string, payloadJson: string) => void;
   toggleStudentQuizAccess?: (callId: string, payloadJson: string) => void;
   updateStudentSubjectAccess?: (callId: string, payloadJson: string) => void;
+  adminUnlockStudentDevice?: (callId: string, payloadJson: string) => void;
   deletePaymentRequest?: (callId: string, payloadJson: string) => void;
   deleteAccessCode?: (callId: string, payloadJson: string) => void;
   deleteStudent?: (callId: string, payloadJson: string) => void;
@@ -216,16 +222,41 @@ export function subscribeNativeAuthState(cb: (user: AppAuthUser | null) => void)
 }
 
 let publicListenersStarted = false;
+let adminListenersStarted = false;
 let activeStudentId = '';
+
+function ensureNativeAdminListenersStarted(): void {
+  if (adminListenersStarted) return;
+  adminListenersStarted = true;
+  window.AndroidFirebaseBridge?.startAdminListeners?.();
+}
+
+function maybeStopNativeAdminListeners(): void {
+  if (
+    allPaymentListeners.size === 0 &&
+    allCodeListeners.size === 0 &&
+    allStudentListeners.size === 0 &&
+    releaseListeners.size === 0
+  ) {
+    adminListenersStarted = false;
+    window.AndroidFirebaseBridge?.stopAdminListeners?.();
+  }
+}
+
+export function forceRefreshNativeAdminListeners(): void {
+  adminListenersStarted = true;
+  window.AndroidFirebaseBridge?.forceRefreshAdminListeners?.();
+}
 
 export function subscribeNativeReleaseConfig(
   cb: (cfg: AppReleaseConfig | null) => void
 ): () => void {
   releaseListeners.add(cb);
   if (latestReleaseConfig !== undefined) cb(latestReleaseConfig);
-  window.AndroidFirebaseBridge?.startAdminListeners?.();
+  ensureNativeAdminListenersStarted();
   return () => {
     releaseListeners.delete(cb);
+    maybeStopNativeAdminListeners();
   };
 }
 
@@ -296,17 +327,11 @@ export function subscribeNativeAllPayments(
   allPaymentListeners.add(cb);
   if (onError) adminErrorListeners.add(onError);
   if (latestAllPayments !== undefined) cb(latestAllPayments);
-  window.AndroidFirebaseBridge?.startAdminListeners?.();
+  ensureNativeAdminListenersStarted();
   return () => {
     allPaymentListeners.delete(cb);
     if (onError) adminErrorListeners.delete(onError);
-    if (
-      allPaymentListeners.size === 0 &&
-      allCodeListeners.size === 0 &&
-      allStudentListeners.size === 0
-    ) {
-      window.AndroidFirebaseBridge?.stopAdminListeners?.();
-    }
+    maybeStopNativeAdminListeners();
   };
 }
 
@@ -317,17 +342,11 @@ export function subscribeNativeAllCodes(
   allCodeListeners.add(cb);
   if (onError) adminErrorListeners.add(onError);
   if (latestAllCodes !== undefined) cb(latestAllCodes);
-  window.AndroidFirebaseBridge?.startAdminListeners?.();
+  ensureNativeAdminListenersStarted();
   return () => {
     allCodeListeners.delete(cb);
     if (onError) adminErrorListeners.delete(onError);
-    if (
-      allPaymentListeners.size === 0 &&
-      allCodeListeners.size === 0 &&
-      allStudentListeners.size === 0
-    ) {
-      window.AndroidFirebaseBridge?.stopAdminListeners?.();
-    }
+    maybeStopNativeAdminListeners();
   };
 }
 
@@ -338,16 +357,10 @@ export function subscribeNativeAllStudents(
   allStudentListeners.add(cb);
   if (onError) adminErrorListeners.add(onError);
   if (latestAllStudents !== undefined) cb(latestAllStudents);
-  window.AndroidFirebaseBridge?.startAdminListeners?.();
+  ensureNativeAdminListenersStarted();
   return () => {
     allStudentListeners.delete(cb);
     if (onError) adminErrorListeners.delete(onError);
-    if (
-      allPaymentListeners.size === 0 &&
-      allCodeListeners.size === 0 &&
-      allStudentListeners.size === 0
-    ) {
-      window.AndroidFirebaseBridge?.stopAdminListeners?.();
-    }
+    maybeStopNativeAdminListeners();
   };
 }
