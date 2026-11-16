@@ -66,8 +66,8 @@ export function extractReadableErrorMessage(error: unknown, lang: 'gu' | 'en' = 
   const lower = inner.toLowerCase();
   if (lower.includes('permission') || lower.includes('insufficient permissions')) {
     return lang === 'en'
-      ? 'Permission denied. Please check your sign-in session or Firebase rules.'
-      : 'પરવાનગી મળી નથી. કૃપા કરીને લૉગિન અથવા Firebase નિયમો તપાસો.';
+      ? 'Permission denied. Please sign in with an authorized account and try again.'
+      : 'પરવાનગી મળી નથી. કૃપા કરીને માન્ય એકાઉન્ટથી લૉગિન કરી ફરી પ્રયાસ કરો.';
   }
   if (lower.includes('offline') || lower.includes('unavailable') || lower.includes('network')) {
     return lang === 'en'

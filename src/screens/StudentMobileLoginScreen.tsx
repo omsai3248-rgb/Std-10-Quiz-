@@ -70,6 +70,10 @@ export const StudentMobileLoginScreen: React.FC<StudentMobileLoginScreenProps> =
           setErrorMsg(t.onlyAdminAllowedError);
         } else if (msg === 'ONLY_ADMIN_GOOGLE_EMAIL') {
           setErrorMsg(t.errWrongAdminGoogleAccount);
+        } else if (msg === 'SIGN_IN_CANCELLED') {
+          setErrorMsg(t.errAdminGoogleCancelled);
+        } else if (msg === 'NO_GOOGLE_CREDENTIAL') {
+          setErrorMsg(t.errAdminNoGoogleAccount);
         } else {
           setErrorMsg(extractReadableErrorMessage(err, lang));
         }
@@ -224,9 +228,9 @@ export const StudentMobileLoginScreen: React.FC<StudentMobileLoginScreenProps> =
             <button
               type="submit"
               disabled={isLoading}
-              className="w-full h-12 rounded-xl bg-[#1E3A8A] hover:bg-[#172554] dark:bg-[#2563EB] text-white text-sm font-extrabold flex items-center justify-center gap-2 transition-colors cursor-pointer"
+              className="w-full h-12 rounded-xl bg-[#1E3A8A] hover:bg-[#172554] dark:bg-[#2563EB] text-white text-sm font-extrabold flex items-center justify-center gap-2 transition-colors disabled:opacity-60 cursor-pointer"
             >
-              <span>{t.loginBtn}</span>
+              <span>{isLoading ? t.loggingInBtn : t.loginBtn}</span>
               <ArrowRight className="h-4 w-4" />
             </button>
           )}

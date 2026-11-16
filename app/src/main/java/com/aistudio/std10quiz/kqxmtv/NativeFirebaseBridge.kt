@@ -28,12 +28,15 @@ import com.google.firebase.auth.auth
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.ListenerRegistration
+import com.google.firebase.firestore.Source
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 import java.security.SecureRandom
@@ -64,8 +67,12 @@ class NativeFirebaseBridge(
 
     private val db: FirebaseFirestore? by lazy {
         if (!ensureFirebaseInitialized()) return@lazy null
-        val dbId = getOptionalStringResource("firestore_database_id").ifBlank { "(default)" }
-        runCatching { FirebaseFirestore.getInstance(dbId) }
+        val dbId = runCatching { appContext.getString(R.string.firestore_database_id) }.getOrDefault("")
+        if (dbId.isBlank()) {
+            Log.e("NativeFirebase", "firestore_database_id missing in resources")
+            return@lazy null
+        }
+        runCatching { FirebaseFirestore.getInstance(FirebaseApp.getInstance(), dbId) }
             .onFailure { Log.e("NativeFirebase", "Firestore init failed", it) }
             .getOrNull()
     }
@@ -126,7 +133,7 @@ class NativeFirebaseBridge(
         val localAuth = auth ?: return
         val localCreds = credentialManager ?: return
         if (localAuth.currentUser != null) return
-        val clientId = getOptionalStringResource("default_web_client_id")
+        val clientId = runCatching { appContext.getString(R.string.default_web_client_id) }.getOrDefault("")
         if (clientId.isBlank()) return
 
         activity.lifecycleScope.launch {
@@ -145,7 +152,13 @@ class NativeFirebaseBridge(
                     if (credential is CustomCredential && credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
                         val idToken = GoogleIdTokenCredential.createFrom(credential.data).idToken
                         val firebaseCred = GoogleAuthProvider.getCredential(idToken, null)
-                        localAuth.signInWithCredential(firebaseCred).awaitResult()
+                        val signed = localAuth.signInWithCredential(firebaseCred).awaitResult()
+                        val email = signed.user?.email?.trim()?.lowercase().orEmpty()
+                        if (email != ADMIN_OWNER_EMAIL) {
+                            runCatching { localAuth.signOut() }
+                        } else {
+                            emitAuthState(signed.user)
+                        }
                     }
                 }
             } catch (_: Throwable) {
@@ -160,7 +173,7 @@ class NativeFirebaseBridge(
     @JavascriptInterface
     fun getFirebaseConfigSummary(): String {
         val projectId = getOptionalStringResource("project_id")
-        val dbId = getOptionalStringResource("firestore_database_id")
+        val dbId = runCatching { appContext.getString(R.string.firestore_database_id) }.getOrDefault("")
         return JSONObject().apply {
             put("projectId", projectId)
             put("databaseId", dbId)
@@ -178,7 +191,7 @@ class NativeFirebaseBridge(
             resolveCallError(callId, "Native Firebase configuration is not initialized.")
             return
         }
-        val clientId = getOptionalStringResource("default_web_client_id")
+        val clientId = runCatching { appContext.getString(R.string.default_web_client_id) }.getOrDefault("")
         if (clientId.isBlank()) {
             resolveCallError(callId, "Google Sign-In configuration missing: default_web_client_id not found")
             return
@@ -212,9 +225,11 @@ class NativeFirebaseBridge(
                             runCatching { localCreds.clearCredentialState(ClearCredentialStateRequest()) }
                             localAuth.signOut()
                         }
+                        emitAuthState(null)
                         resolveCallError(callId, "ONLY_ADMIN_GOOGLE_EMAIL")
                         return@launch
                     }
+                    emitAuthState(authResult.user)
                     resolveCallSuccess(callId, serializeUser(authResult.user)?.toString() ?: "{}")
                 } else {
                     resolveCallError(callId, "Unexpected credential type")
@@ -272,8 +287,15 @@ class NativeFirebaseBridge(
                 }
 
                 val ref = localDb.collection("students").document(studentId)
-                val snap = ref.get().awaitResult()
-                if (!snap.exists()) {
+                val snap = try {
+                    withTimeoutOrNull(6_000L) { ref.get().awaitResult() }
+                        ?: runCatching { ref.get(Source.CACHE).awaitResult() }.getOrNull()
+                } catch (e: FirebaseFirestoreException) {
+                    if (e.code == FirebaseFirestoreException.Code.PERMISSION_DENIED) throw e
+                    runCatching { ref.get(Source.CACHE).awaitResult() }.getOrNull()
+                }
+
+                val writeTask = if (snap == null || !snap.exists()) {
                     ref.set(
                         mapOf(
                             "userId" to studentId,
@@ -291,7 +313,7 @@ class NativeFirebaseBridge(
                             "createdAt" to FieldValue.serverTimestamp(),
                             "updatedAt" to FieldValue.serverTimestamp(),
                         )
-                    ).awaitResult()
+                    )
                 } else {
                     ref.update(
                         mapOf(
@@ -299,7 +321,14 @@ class NativeFirebaseBridge(
                             "email" to email,
                             "updatedAt" to FieldValue.serverTimestamp(),
                         )
-                    ).awaitResult()
+                    )
+                }
+
+                try {
+                    withTimeoutOrNull(4_500L) { writeTask.awaitResult() }
+                } catch (e: FirebaseFirestoreException) {
+                    if (e.code == FirebaseFirestoreException.Code.PERMISSION_DENIED) throw e
+                    // Transient UNAVAILABLE / offline errors stay queued in Firestore persistent cache
                 }
                 resolveCallSuccess(callId, JSONObject.quote(studentId))
             } catch (e: Exception) {

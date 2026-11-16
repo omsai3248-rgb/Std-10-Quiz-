@@ -15,9 +15,7 @@ import {
 } from 'firebase/firestore';
 import { getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage';
 import {
-  createUserWithEmailAndPassword,
   onAuthStateChanged,
-  signInWithEmailAndPassword,
   signInWithPopup,
   signOut,
 } from 'firebase/auth';
@@ -27,6 +25,7 @@ import {
   getNativeCurrentAuthUser,
   hasNativeFirebaseBridge,
   invokeNativeBridgeCall,
+  notifyNativeAuthUser,
   subscribeNativeAllCodes,
   subscribeNativeAllPayments,
   subscribeNativeAllStudents,
@@ -111,12 +110,15 @@ export function isAdminAccount(authPhone = '', authEmail = ''): boolean {
   return digits === ADMIN_PHONE_TEN_DIGITS && clean.startsWith('+91');
 }
 
-export async function signInAdminWithGoogle(): Promise<void> {
+export async function signInAdminWithGoogle(): Promise<AppAuthUser> {
   if (hasNativeFirebaseBridge()) {
-    await invokeNativeBridgeCall((callId) => {
+    const user = await invokeNativeBridgeCall<AppAuthUser>((callId) => {
       window.AndroidFirebaseBridge?.requestGoogleSignIn?.(callId);
     });
-    return;
+    if (user && user.uid) {
+      notifyNativeAuthUser(user);
+    }
+    return user;
   }
   const cred = await signInWithPopup(auth, googleProvider);
   const email = (cred.user.email ?? '').trim().toLowerCase();
@@ -124,11 +126,17 @@ export async function signInAdminWithGoogle(): Promise<void> {
     await signOut(auth);
     throw new Error('ONLY_ADMIN_GOOGLE_EMAIL');
   }
+  return {
+    uid: cred.user.uid,
+    email: cred.user.email ?? '',
+    phoneNumber: cred.user.phoneNumber ?? '',
+    emailVerified: Boolean(cred.user.emailVerified),
+  };
 }
 
 export interface AdminPasscodeAuthResult {
-  mode: 'firebase' | 'passcode';
-  reason?: string;
+  mode: 'firebase';
+  user: AppAuthUser;
 }
 
 export async function signInAsAdminWithPasscode(
@@ -146,47 +154,29 @@ export async function signInAsAdminWithPasscode(
   if (hasNativeFirebaseBridge()) {
     const current = getNativeCurrentAuthUser();
     if (current && isAdminAccount(current.phoneNumber, current.email)) {
-      return { mode: 'firebase' };
+      return { mode: 'firebase', user: current };
     }
-    try {
-      await signInAdminWithGoogle();
-      return { mode: 'firebase' };
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err ?? '');
-      if (msg === 'ONLY_ADMIN_GOOGLE_EMAIL') {
-        throw err;
-      }
-      return { mode: 'passcode', reason: msg || 'GOOGLE_SIGNIN_PENDING' };
-    }
+    const signedUser = await signInAdminWithGoogle();
+    return { mode: 'firebase', user: signedUser };
   }
 
   if (
     auth.currentUser &&
     isAdminAccount(auth.currentUser.phoneNumber ?? '', auth.currentUser.email ?? '')
   ) {
-    return { mode: 'firebase' };
+    return {
+      mode: 'firebase',
+      user: {
+        uid: auth.currentUser.uid,
+        email: auth.currentUser.email ?? '',
+        phoneNumber: auth.currentUser.phoneNumber ?? '',
+        emailVerified: Boolean(auth.currentUser.emailVerified),
+      },
+    };
   }
 
-  try {
-    await signInWithEmailAndPassword(auth, ADMIN_AUTH_EMAIL, ADMIN_PASSCODE);
-    return { mode: 'firebase' };
-  } catch (err: unknown) {
-    const code = (err as { code?: string })?.code ?? '';
-    if (
-      code === 'auth/user-not-found' ||
-      code === 'auth/invalid-credential' ||
-      code === 'auth/invalid-login-credentials'
-    ) {
-      try {
-        await createUserWithEmailAndPassword(auth, ADMIN_AUTH_EMAIL, ADMIN_PASSCODE);
-        return { mode: 'firebase' };
-      } catch (createErr: unknown) {
-        const createCode = (createErr as { code?: string })?.code ?? '';
-        return { mode: 'passcode', reason: createCode || code || 'FIREBASE_CONNECT_REQUIRED' };
-      }
-    }
-    return { mode: 'passcode', reason: code || 'FIREBASE_CONNECT_REQUIRED' };
-  }
+  const signedUser = await signInAdminWithGoogle();
+  return { mode: 'firebase', user: signedUser };
 }
 
 const PUBLIC_VISITOR_UID_KEY = 'std10_public_visitor_uid_v1';

@@ -32,7 +32,6 @@ import {
   rejectPaymentRequest,
   saveMyPaymentRequestId,
   saveReleaseConfig,
-  signInAdminWithGoogle,
   signOutAdminSession,
   submitPaymentRequest,
   toggleStudentQuizAccess,
@@ -67,7 +66,6 @@ type AppRoute =
 
 const LOCAL_UNLOCKS_KEY = 'std10_unlocked_subjects_v2';
 const LOCAL_USER_META_KEY = 'std10_public_user_meta_v2';
-const ADMIN_PASSCODE_SESSION_KEY = 'std10_admin_passcode_session_v1';
 
 function loadSavedUnlockedSubjects(mobileNumber = ''): string[] {
   const cleanMob = mobileNumber.replace(/\D/g, '').slice(-10);
@@ -134,14 +132,6 @@ export const App: React.FC = () => {
 
   const [availableUpdate, setAvailableUpdate] = useState<GitHubReleaseInfo | null>(null);
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
-  const [isConnectingFirebaseAdmin, setIsConnectingFirebaseAdmin] = useState(false);
-  const [isPasscodeAdmin, setIsPasscodeAdmin] = useState<boolean>(() => {
-    try {
-      return sessionStorage.getItem(ADMIN_PASSCODE_SESSION_KEY) === '1';
-    } catch {
-      return false;
-    }
-  });
   const lastCheckedConfigKeyRef = useRef<string>('');
   const knownPendingIdsRef = useRef<Set<string> | null>(null);
   const knownUsedCodesRef = useRef<Set<string> | null>(null);
@@ -244,7 +234,7 @@ export const App: React.FC = () => {
     return isAdminAccount(authUser.phoneNumber ?? '', authUser.email ?? '');
   }, [authUser]);
 
-  const isAdmin = isFirebaseAdmin || isPasscodeAdmin;
+  const isAdmin = isFirebaseAdmin;
 
   const studentDocId = useMemo(() => {
     if (isStudentLoggedIn) {
@@ -716,63 +706,20 @@ export const App: React.FC = () => {
   };
 
   const handleAdminLoginSuccess = (result: AdminPasscodeAuthResult) => {
-    setIsPasscodeAdmin(true);
-    try {
-      sessionStorage.setItem(ADMIN_PASSCODE_SESSION_KEY, '1');
-    } catch {
-      // Ignore
-    }
+    setAuthUser(result.user);
+    setSyncVersion((v) => v + 1);
     setRoute({ name: 'public', tab: 'admin' });
     setBanner({
       isError: false,
       message:
-        result.mode === 'firebase'
-          ? lang === 'en'
-            ? 'Firebase Admin connected live!'
-            : 'Firebase એડમિન લાઇવ ચાલુ થઈ ગયું છે!'
-          : lang === 'en'
-            ? 'Admin Panel opened! Tap "Connect Live Firebase via Google" to sync live requests.'
-            : 'એડમિન પેનલ ખુલી ગઈ છે! લાઇવ ડેટા માટે ઉપર "Google થી Live Firebase જોડો" પર ટચ કરો.',
+        lang === 'en'
+          ? 'Admin Panel connected live!'
+          : 'એડમિન પેનલ લાઇવ ખુલી ગઈ છે!',
     });
-  };
-
-  const handleConnectFirebaseAdmin = async () => {
-    if (isConnectingFirebaseAdmin) return;
-    setIsConnectingFirebaseAdmin(true);
-    setBanner(null);
-    try {
-      await signInAdminWithGoogle();
-      setSyncVersion((v) => v + 1);
-      setBanner({
-        isError: false,
-        message:
-          lang === 'en'
-            ? 'Firebase Admin connected live!'
-            : 'Firebase એડમિન લાઇવ ચાલુ થઈ ગયું છે!',
-      });
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : '';
-      if (msg === 'ONLY_ADMIN_GOOGLE_EMAIL') {
-        setBanner({ isError: true, message: t.errWrongAdminGoogleAccount });
-      } else if (msg !== 'SIGN_IN_CANCELLED') {
-        setBanner({
-          isError: true,
-          message: formatAppError(err, 'Google Sign-In failed'),
-        });
-      }
-    } finally {
-      setIsConnectingFirebaseAdmin(false);
-    }
   };
 
   const handleAdminSignOut = async () => {
     try {
-      setIsPasscodeAdmin(false);
-      try {
-        sessionStorage.removeItem(ADMIN_PASSCODE_SESSION_KEY);
-      } catch {
-        // Ignore
-      }
       await signOutAdminSession().catch(() => {});
       setApprovedConfirmation(null);
       setRoute({ name: 'public', tab: 'quiz' });
@@ -809,13 +756,10 @@ export const App: React.FC = () => {
         currentVersionName={APP_VERSION_NAME}
         isBusy={isBusy}
         isCheckingUpdate={isCheckingUpdate}
-        isFirebaseSynced={isFirebaseAdmin}
-        isConnectingFirebase={isConnectingFirebaseAdmin}
         approvedConfirmation={approvedConfirmation}
         onDismissApprovedConfirmation={() => setApprovedConfirmation(null)}
         onBackToPublic={() => setRoute({ name: 'public', tab: 'quiz' })}
         onForceSync={() => setSyncVersion((v) => v + 1)}
-        onConnectFirebaseGoogle={() => void handleConnectFirebaseAdmin()}
         onToggleSound={() => setIsSoundEnabled((prev) => !prev)}
         onClearAlerts={() => setLiveAlerts([])}
         onSignOut={() => void handleAdminSignOut()}

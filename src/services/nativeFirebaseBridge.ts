@@ -199,6 +199,11 @@ export function getNativeCurrentAuthUser(): AppAuthUser | null {
   }
 }
 
+export function notifyNativeAuthUser(user: AppAuthUser | null): void {
+  latestAuthUser = user;
+  authListeners.forEach((cb) => cb(user));
+}
+
 export function subscribeNativeAuthState(cb: (user: AppAuthUser | null) => void): () => void {
   authListeners.add(cb);
   cb(getNativeCurrentAuthUser());

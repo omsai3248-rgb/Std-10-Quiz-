@@ -61,13 +61,10 @@ interface AdminPanelScreenProps {
   currentVersionName: string;
   isBusy: boolean;
   isCheckingUpdate: boolean;
-  isFirebaseSynced?: boolean;
-  isConnectingFirebase?: boolean;
   approvedConfirmation?: PaymentRequest | null;
   onDismissApprovedConfirmation?: () => void;
   onBackToPublic: () => void;
   onForceSync: () => void;
-  onConnectFirebaseGoogle?: () => void;
   onToggleSound: () => void;
   onClearAlerts: () => void;
   onSignOut: () => void;
@@ -97,13 +94,10 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
   currentVersionName,
   isBusy,
   isCheckingUpdate,
-  isFirebaseSynced = true,
-  isConnectingFirebase = false,
   approvedConfirmation = null,
   onDismissApprovedConfirmation,
   onBackToPublic,
   onForceSync,
-  onConnectFirebaseGoogle,
   onToggleSound,
   onClearAlerts,
   onSignOut,
@@ -154,15 +148,9 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
                 <h1 className="text-sm sm:text-base font-extrabold truncate">
                   {t.adminPanelTitle}
                 </h1>
-                <span
-                  className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-extrabold shrink-0 ${
-                    isFirebaseSynced
-                      ? 'bg-[#D1FAE5] dark:bg-[#064E3B] text-[#064E3B] dark:text-[#D1FAE5]'
-                      : 'bg-[#FEF3C7] dark:bg-[#451A03] text-[#92400E] dark:text-[#FDE68A]'
-                  }`}
-                >
-                  <Radio className={`h-3 w-3 ${isFirebaseSynced ? 'animate-pulse' : ''}`} />
-                  <span>{isFirebaseSynced ? t.liveBadge : t.offlineSyncBadge}</span>
+                <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-extrabold shrink-0 bg-[#D1FAE5] dark:bg-[#064E3B] text-[#064E3B] dark:text-[#D1FAE5]">
+                  <Radio className="h-3 w-3 animate-pulse" />
+                  <span>{t.liveBadge}</span>
                 </span>
               </div>
               <p className="text-[11px] text-[#475569] dark:text-[#94A3B8] truncate tabular-nums">
@@ -335,30 +323,6 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
       </header>
 
       <main className="flex-1 max-w-6xl w-full mx-auto">
-        {!isFirebaseSynced && onConnectFirebaseGoogle && (
-          <div className="mx-3 mt-3 rounded-2xl border border-[#047857]/30 bg-[#ECFDF5] dark:bg-[#064E3B]/40 p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div className="space-y-0.5 min-w-0">
-              <p className="text-xs sm:text-sm font-extrabold text-[#065F46] dark:text-[#6EE7B7]">
-                {t.adminConnectFirebaseTitle}
-              </p>
-              <p className="text-[11px] text-[#047857] dark:text-[#A7F3D0] leading-relaxed">
-                {t.adminConnectFirebaseDesc}
-              </p>
-            </div>
-            <button
-              type="button"
-              disabled={isConnectingFirebase}
-              onClick={onConnectFirebaseGoogle}
-              className="h-10 px-4 rounded-xl bg-[#047857] hover:bg-[#065F46] text-white text-xs font-extrabold whitespace-nowrap shrink-0 flex items-center justify-center gap-1.5 disabled:opacity-60 cursor-pointer"
-            >
-              <Radio className="h-3.5 w-3.5" />
-              <span>
-                {isConnectingFirebase ? t.adminConnectingBtn : t.adminConnectFirebaseBtn}
-              </span>
-            </button>
-          </div>
-        )}
-
         {selectedTab === 'requests' && (
           <AdminRequestsTab
             payments={payments}
