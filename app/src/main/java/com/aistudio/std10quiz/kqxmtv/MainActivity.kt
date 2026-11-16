@@ -2,10 +2,13 @@ package com.aistudio.std10quiz.kqxmtv
 
 import android.annotation.SuppressLint
 import android.content.ActivityNotFoundException
+import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.util.Base64
+import android.util.Log
 import android.webkit.JavascriptInterface
 import android.webkit.MimeTypeMap
 import android.webkit.URLUtil
@@ -201,11 +204,18 @@ private fun launchUpiUriWithFallback(
     Toast.makeText(context, context.getString(R.string.error_no_upi_app), Toast.LENGTH_LONG).show()
 }
 
+private tailrec fun Context.findComponentActivity(): ComponentActivity? = when (this) {
+    is ComponentActivity -> this
+    is ContextWrapper -> baseContext.findComponentActivity()
+    else -> null
+}
+
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 private fun PortalWebContainer() {
     val context = LocalContext.current
-    val activity = context as ComponentActivity
+    val activity = remember(context) { context.findComponentActivity() }
+    if (activity == null) return
 
     var loadProgress by remember { mutableIntStateOf(0) }
     var canGoBack by remember { mutableStateOf(false) }
@@ -253,7 +263,6 @@ private fun PortalWebContainer() {
                         settings.apply {
                             javaScriptEnabled = true
                             domStorageEnabled = true
-                            databaseEnabled = true
                             allowContentAccess = true
                             allowFileAccess = false
                             mediaPlaybackRequiresUserGesture = false
@@ -263,10 +272,14 @@ private fun PortalWebContainer() {
                         }
 
                         addJavascriptInterface(AndroidExportBridge(activity), "AndroidBridge")
-                        val firebaseBridge = NativeFirebaseBridge(activity, this)
-                        firebaseBridgeRef = firebaseBridge
-                        addJavascriptInterface(firebaseBridge, "AndroidFirebaseBridge")
-                        firebaseBridge.attach()
+                        runCatching {
+                            val firebaseBridge = NativeFirebaseBridge(activity, this)
+                            firebaseBridgeRef = firebaseBridge
+                            addJavascriptInterface(firebaseBridge, "AndroidFirebaseBridge")
+                            firebaseBridge.attach()
+                        }.onFailure { err ->
+                            Log.e("MainActivity", "NativeFirebaseBridge init failed", err)
+                        }
 
                         webViewClient = object : WebViewClient() {
                             override fun shouldInterceptRequest(

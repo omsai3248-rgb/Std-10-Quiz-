@@ -9,13 +9,16 @@ import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialCancellationException
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import com.google.android.gms.tasks.Task
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.Companion.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
 import com.google.firebase.Firebase
+import com.google.firebase.FirebaseApp
 import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
@@ -45,17 +48,47 @@ class NativeFirebaseBridge(
     private val webView: WebView
 ) {
     private val appContext = activity.applicationContext
-    private val db: FirebaseFirestore = FirebaseFirestore.getInstance(
-        getOptionalStringResource("firestore_database_id").ifBlank { "(default)" }
-    )
-    private val auth: FirebaseAuth = Firebase.auth
-    private val credentialManager: CredentialManager = CredentialManager.create(activity)
     private val secureRandom = SecureRandom()
 
     private fun getOptionalStringResource(name: String): String {
         val resId = appContext.resources.getIdentifier(name, "string", appContext.packageName)
         return if (resId != 0) runCatching { appContext.getString(resId) }.getOrDefault("") else ""
     }
+
+    private fun ensureFirebaseInitialized(): Boolean {
+        val existing = runCatching { FirebaseApp.getApps(appContext) }.getOrNull()
+        if (!existing.isNullOrEmpty()) return true
+        return runCatching { FirebaseApp.initializeApp(appContext) != null }.getOrDefault(false)
+    }
+
+    private val db: FirebaseFirestore? by lazy {
+        if (!ensureFirebaseInitialized()) return@lazy null
+        val dbId = getOptionalStringResource("firestore_database_id").ifBlank { "(default)" }
+        runCatching { FirebaseFirestore.getInstance(dbId) }
+            .onFailure { Log.e("NativeFirebase", "Firestore init failed", it) }
+            .getOrNull()
+    }
+
+    private val auth: FirebaseAuth? by lazy {
+        if (!ensureFirebaseInitialized()) return@lazy null
+        runCatching { Firebase.auth }
+            .onFailure { Log.e("NativeFirebase", "Auth init failed", it) }
+            .getOrNull()
+    }
+
+    private val credentialManager: CredentialManager? by lazy {
+        runCatching { CredentialManager.create(activity) }
+            .onFailure { Log.e("NativeFirebase", "CredentialManager init failed", it) }
+            .getOrNull()
+    }
+
+    private val isNativeReady: Boolean
+        get() = db != null && auth != null
+
+    @Volatile
+    private var isAttached = false
+    @Volatile
+    private var autoSignInAttempted = false
 
     private val publicListeners = mutableListOf<ListenerRegistration>()
     private val myPaymentListeners = mutableListOf<ListenerRegistration>()
@@ -64,50 +97,62 @@ class NativeFirebaseBridge(
     private var lastPaymentIdsJson: String = "[]"
 
     private val authStateListener = FirebaseAuth.AuthStateListener { firebaseAuth ->
+        if (!isAttached) return@AuthStateListener
         emitAuthState(firebaseAuth.currentUser)
         refreshPaymentListenersInternal()
     }
 
     fun attach() {
-        auth.addAuthStateListener(authStateListener)
-        emitAuthState(auth.currentUser)
-        attemptAutoSignIn()
+        isAttached = true
+        val localAuth = auth ?: return
+        if (db == null) return
+        runCatching { localAuth.addAuthStateListener(authStateListener) }
+        emitAuthState(localAuth.currentUser)
+        attemptAutoSignInWhenResumed()
     }
 
     fun detach() {
-        auth.removeAuthStateListener(authStateListener)
+        isAttached = false
+        runCatching { auth?.removeAuthStateListener(authStateListener) }
         stopPublicListeners()
         stopAdminListeners()
     }
 
-    private fun attemptAutoSignIn() {
-        if (auth.currentUser != null) return
+    private fun attemptAutoSignInWhenResumed() {
+        if (autoSignInAttempted) return
+        val localAuth = auth ?: return
+        val localCreds = credentialManager ?: return
+        if (localAuth.currentUser != null) return
         val clientId = getOptionalStringResource("default_web_client_id")
         if (clientId.isBlank()) return
-        val googleIdOption = GetGoogleIdOption.Builder()
-            .setFilterByAuthorizedAccounts(true)
-            .setServerClientId(clientId)
-            .setAutoSelectEnabled(true)
-            .build()
-        val request = GetCredentialRequest.Builder().addCredentialOption(googleIdOption).build()
 
         activity.lifecycleScope.launch {
             try {
-                val result = credentialManager.getCredential(activity, request)
-                val credential = result.credential
-                if (credential is CustomCredential && credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
-                    val idToken = GoogleIdTokenCredential.createFrom(credential.data).idToken
-                    val firebaseCred = GoogleAuthProvider.getCredential(idToken, null)
-                    auth.signInWithCredential(firebaseCred).awaitResult()
+                activity.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                    if (autoSignInAttempted || localAuth.currentUser != null || !isAttached) return@repeatOnLifecycle
+                    autoSignInAttempted = true
+                    val googleIdOption = GetGoogleIdOption.Builder()
+                        .setFilterByAuthorizedAccounts(true)
+                        .setServerClientId(clientId)
+                        .setAutoSelectEnabled(true)
+                        .build()
+                    val request = GetCredentialRequest.Builder().addCredentialOption(googleIdOption).build()
+                    val result = localCreds.getCredential(activity, request)
+                    val credential = result.credential
+                    if (credential is CustomCredential && credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
+                        val idToken = GoogleIdTokenCredential.createFrom(credential.data).idToken
+                        val firebaseCred = GoogleAuthProvider.getCredential(idToken, null)
+                        localAuth.signInWithCredential(firebaseCred).awaitResult()
+                    }
                 }
-            } catch (_: Exception) {
+            } catch (_: Throwable) {
                 // Silent auto-sign-in is optional; interactive sign-in remains available
             }
         }
     }
 
     @JavascriptInterface
-    fun hasNativeFirebase(): Boolean = true
+    fun hasNativeFirebase(): Boolean = isNativeReady
 
     @JavascriptInterface
     fun getFirebaseConfigSummary(): String {
@@ -120,10 +165,16 @@ class NativeFirebaseBridge(
     }
 
     @JavascriptInterface
-    fun getCurrentAuthUser(): String = serializeUser(auth.currentUser)?.toString() ?: "null"
+    fun getCurrentAuthUser(): String = serializeUser(auth?.currentUser)?.toString() ?: "null"
 
     @JavascriptInterface
     fun requestGoogleSignIn(callId: String) {
+        val localAuth = auth
+        val localCreds = credentialManager
+        if (localAuth == null || localCreds == null) {
+            resolveCallError(callId, "Native Firebase configuration is not initialized.")
+            return
+        }
         val clientId = getOptionalStringResource("default_web_client_id")
         if (clientId.isBlank()) {
             resolveCallError(callId, "Google Sign-In configuration missing: default_web_client_id not found")
@@ -135,17 +186,17 @@ class NativeFirebaseBridge(
 
         activity.lifecycleScope.launch {
             try {
-                val result = credentialManager.getCredential(activity, request)
+                val result = localCreds.getCredential(activity, request)
                 val credential = result.credential
                 if (credential is CustomCredential && credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
                     val googleCred = GoogleIdTokenCredential.createFrom(credential.data)
                     val authCred = GoogleAuthProvider.getCredential(googleCred.idToken, null)
-                    val authResult = auth.signInWithCredential(authCred).awaitResult()
+                    val authResult = localAuth.signInWithCredential(authCred).awaitResult()
                     val signedEmail = authResult.user?.email?.trim()?.lowercase().orEmpty()
                     if (signedEmail != ADMIN_OWNER_EMAIL) {
                         withContext(NonCancellable) {
-                            runCatching { credentialManager.clearCredentialState(ClearCredentialStateRequest()) }
-                            auth.signOut()
+                            runCatching { localCreds.clearCredentialState(ClearCredentialStateRequest()) }
+                            localAuth.signOut()
                         }
                         resolveCallError(callId, "ONLY_ADMIN_GOOGLE_EMAIL")
                         return@launch
@@ -157,7 +208,7 @@ class NativeFirebaseBridge(
             } catch (e: GetCredentialCancellationException) {
                 Log.w("Auth", "Google Sign-In flow cancelled or dismissed: ${e.message}", e)
                 resolveCallError(callId, "SIGN_IN_CANCELLED")
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 Log.e("Auth", "Google Sign-In failed", e)
                 resolveCallError(callId, e.localizedMessage ?: "Sign in failed")
             }
@@ -169,11 +220,11 @@ class NativeFirebaseBridge(
         activity.lifecycleScope.launch {
             withContext(NonCancellable) {
                 try {
-                    credentialManager.clearCredentialState(ClearCredentialStateRequest())
-                } catch (e: Exception) {
+                    credentialManager?.clearCredentialState(ClearCredentialStateRequest())
+                } catch (e: Throwable) {
                     Log.w("Auth", "Failed to clear credential state: ${e.message}")
                 } finally {
-                    auth.signOut()
+                    runCatching { auth?.signOut() }
                 }
             }
             resolveCallSuccess(callId, "true")
@@ -182,6 +233,10 @@ class NativeFirebaseBridge(
 
     @JavascriptInterface
     fun submitPaymentRequest(callId: String, payloadJson: String) {
+        val localDb = db ?: run {
+            resolveCallError(callId, "Native Firebase is not initialized.")
+            return
+        }
         activity.lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val obj = JSONObject(payloadJson)
@@ -196,8 +251,8 @@ class NativeFirebaseBridge(
                 val screenshotBase64 = obj.getString("screenshotBase64")
                 val subjectId = obj.optString("subjectId", "all")
 
-                val utrRef = db.collection("utr_locks").document(utrNormalized)
-                val reqRef = db.collection("payment_requests").document(requestId)
+                val utrRef = localDb.collection("utr_locks").document(utrNormalized)
+                val reqRef = localDb.collection("payment_requests").document(requestId)
 
                 val preCheck = utrRef.get().awaitResult()
                 if (preCheck.exists()) {
@@ -205,7 +260,7 @@ class NativeFirebaseBridge(
                     return@launch
                 }
 
-                db.runTransaction { tx ->
+                localDb.runTransaction { tx ->
                     val lockSnap = tx.get(utrRef)
                     if (lockSnap.exists()) {
                         throw IllegalStateException("DUPLICATE_UTR")
@@ -256,6 +311,10 @@ class NativeFirebaseBridge(
 
     @JavascriptInterface
     fun redeemAccessCode(callId: String, payloadJson: String) {
+        val localDb = db ?: run {
+            resolveCallError(callId, "Native Firebase is not initialized.")
+            return
+        }
         activity.lifecycleScope.launch(Dispatchers.IO) {
             val obj = JSONObject(payloadJson)
             val cleanCode = obj.getString("cleanCode")
@@ -264,10 +323,10 @@ class NativeFirebaseBridge(
             val cleanMobile = obj.getString("cleanMobile")
             val deviceInfo = obj.optString("deviceInfo", "Android App")
             val expectedSubjectId = obj.optString("expectedSubjectId", "")
-            val codeRef = db.collection("access_codes").document(cleanCode)
+            val codeRef = localDb.collection("access_codes").document(cleanCode)
 
             try {
-                val resObj = db.runTransaction { tx ->
+                val resObj = localDb.runTransaction { tx ->
                     val snap = tx.get(codeRef)
                     if (!snap.exists()) throw IllegalStateException("CODE_NOT_FOUND")
                     val status = snap.getString("status").orEmpty()
@@ -338,10 +397,11 @@ class NativeFirebaseBridge(
 
     @JavascriptInterface
     fun startPublicListeners(paymentIdsJson: String) {
+        val localDb = db ?: return
         activity.runOnUiThread {
             stopPublicListeners()
 
-            val releaseReg = db.collection("app_config").document("release")
+            val releaseReg = localDb.collection("app_config").document("release")
                 .addSnapshotListener { snap, error ->
                     if (error != null) {
                         emitToJs("window.__onNativeReleaseConfig", "null")
@@ -374,14 +434,15 @@ class NativeFirebaseBridge(
         if (paymentIdsJson != null) {
             lastPaymentIdsJson = paymentIdsJson
         }
+        val localDb = db ?: return
         val idsSnapshot = lastPaymentIdsJson
         activity.runOnUiThread {
             myPaymentListeners.forEach { it.remove() }
             myPaymentListeners.clear()
 
-            val uid = auth.currentUser?.uid
+            val uid = auth?.currentUser?.uid
             if (uid != null) {
-                val myPayReg = db.collection("payment_requests")
+                val myPayReg = localDb.collection("payment_requests")
                     .whereEqualTo("userId", uid)
                     .addSnapshotListener { snap, error ->
                         if (error != null) {
@@ -413,7 +474,7 @@ class NativeFirebaseBridge(
 
             val byId = linkedMapOf<String, JSONObject>()
             ids.distinct().take(25).forEach { payId ->
-                val reg = db.collection("payment_requests").document(payId)
+                val reg = localDb.collection("payment_requests").document(payId)
                     .addSnapshotListener { snap, error ->
                         if (error != null) return@addSnapshotListener
                         if (snap != null && snap.exists()) {
@@ -445,11 +506,12 @@ class NativeFirebaseBridge(
 
     @JavascriptInterface
     fun startAdminListeners() {
+        val localDb = db ?: return
         activity.runOnUiThread {
             stopAdminListeners()
             if (!isCurrentUserAdmin()) return@runOnUiThread
 
-            val payReg = db.collection("payment_requests")
+            val payReg = localDb.collection("payment_requests")
                 .addSnapshotListener { snap, error ->
                     if (error != null) {
                         handleFirestoreError(error, OperationType.LIST, "payment_requests")
@@ -464,7 +526,7 @@ class NativeFirebaseBridge(
                 }
             adminListeners.add(payReg)
 
-            val codeReg = db.collection("access_codes")
+            val codeReg = localDb.collection("access_codes")
                 .addSnapshotListener { snap, error ->
                     if (error != null) {
                         handleFirestoreError(error, OperationType.LIST, "access_codes")
@@ -491,6 +553,10 @@ class NativeFirebaseBridge(
 
     @JavascriptInterface
     fun approvePayment(callId: String, payloadJson: String) {
+        val localDb = db ?: run {
+            resolveCallError(callId, "Native Firebase is not initialized.")
+            return
+        }
         activity.lifecycleScope.launch(Dispatchers.IO) {
             if (!isCurrentUserAdmin()) {
                 resolveCallError(callId, "Authentication session not ready.")
@@ -501,10 +567,10 @@ class NativeFirebaseBridge(
             val subjectId = obj.getString("subjectId")
             val batchLabel = obj.getString("batchName")
             val adminNote = obj.getString("adminNote")
-            val reqRef = db.collection("payment_requests").document(requestId)
+            val reqRef = localDb.collection("payment_requests").document(requestId)
 
             try {
-                val chosenCode = db.runTransaction { tx ->
+                val chosenCode = localDb.runTransaction { tx ->
                     val reqSnap = tx.get(reqRef)
                     if (!reqSnap.exists()) throw IllegalStateException("Payment request not found")
                     if (reqSnap.getString("status") != "pending") throw IllegalStateException("ALREADY_PROCESSED")
@@ -512,7 +578,7 @@ class NativeFirebaseBridge(
                     var uniqueCode = ""
                     for (attempt in 0 until 10) {
                         val candidate = generate8CharCode()
-                        val candSnap = tx.get(db.collection("access_codes").document(candidate))
+                        val candSnap = tx.get(localDb.collection("access_codes").document(candidate))
                         if (!candSnap.exists()) {
                             uniqueCode = candidate
                             break
@@ -521,7 +587,7 @@ class NativeFirebaseBridge(
                     if (uniqueCode.isEmpty()) throw IllegalStateException("Failed to generate unique code")
 
                     val amount = (reqSnap.getLong("amountRupees") ?: 24L).toInt()
-                    val codeRef = db.collection("access_codes").document(uniqueCode)
+                    val codeRef = localDb.collection("access_codes").document(uniqueCode)
                     tx.set(
                         codeRef,
                         mapOf(
@@ -571,6 +637,10 @@ class NativeFirebaseBridge(
 
     @JavascriptInterface
     fun rejectPayment(callId: String, payloadJson: String) {
+        val localDb = db ?: run {
+            resolveCallError(callId, "Native Firebase is not initialized.")
+            return
+        }
         activity.lifecycleScope.launch(Dispatchers.IO) {
             if (!isCurrentUserAdmin()) {
                 resolveCallError(callId, "Authentication session not ready.")
@@ -579,7 +649,7 @@ class NativeFirebaseBridge(
             val obj = JSONObject(payloadJson)
             val requestId = obj.getString("requestId")
             val adminNote = obj.getString("adminNote")
-            val reqRef = db.collection("payment_requests").document(requestId)
+            val reqRef = localDb.collection("payment_requests").document(requestId)
             try {
                 reqRef.update(
                     mapOf(
@@ -598,6 +668,10 @@ class NativeFirebaseBridge(
 
     @JavascriptInterface
     fun generateBulkCodes(callId: String, payloadJson: String) {
+        val localDb = db ?: run {
+            resolveCallError(callId, "Native Firebase is not initialized.")
+            return
+        }
         activity.lifecycleScope.launch(Dispatchers.IO) {
             if (!isCurrentUserAdmin()) {
                 resolveCallError(callId, "Authentication session not ready.")
@@ -616,9 +690,9 @@ class NativeFirebaseBridge(
 
             try {
                 codeList.chunked(400).forEach { chunk ->
-                    val batch = db.batch()
+                    val batch = localDb.batch()
                     chunk.forEach { code ->
-                        val ref = db.collection("access_codes").document(code)
+                        val ref = localDb.collection("access_codes").document(code)
                         batch.set(
                             ref,
                             mapOf(
@@ -654,6 +728,10 @@ class NativeFirebaseBridge(
 
     @JavascriptInterface
     fun saveReleaseConfig(callId: String, payloadJson: String) {
+        val localDb = db ?: run {
+            resolveCallError(callId, "Native Firebase is not initialized.")
+            return
+        }
         activity.lifecycleScope.launch(Dispatchers.IO) {
             if (!isCurrentUserAdmin()) {
                 resolveCallError(callId, "Authentication session not ready.")
@@ -662,7 +740,7 @@ class NativeFirebaseBridge(
             val obj = JSONObject(payloadJson)
             val repo = obj.getString("githubOwnerRepo").take(120)
             val notes = obj.getString("releaseNotes").take(300)
-            val ref = db.collection("app_config").document("release")
+            val ref = localDb.collection("app_config").document("release")
             try {
                 ref.set(
                     mapOf(
@@ -680,7 +758,7 @@ class NativeFirebaseBridge(
     }
 
     private fun isCurrentUserAdmin(): Boolean {
-        val user = auth.currentUser ?: return false
+        val user = auth?.currentUser ?: return false
         val email = user.email?.trim()?.lowercase().orEmpty()
         if (email == ADMIN_OWNER_EMAIL && user.isEmailVerified) return true
         return user.phoneNumber == ADMIN_PHONE_E164
@@ -782,8 +860,12 @@ class NativeFirebaseBridge(
     }
 
     private fun emitToJs(fnPath: String, argsExpr: String) {
+        if (!isAttached) return
         activity.runOnUiThread {
-            webView.evaluateJavascript("if (typeof $fnPath === 'function') { $fnPath($argsExpr); }", null)
+            if (!isAttached) return@runOnUiThread
+            runCatching {
+                webView.evaluateJavascript("if (typeof $fnPath === 'function') { $fnPath($argsExpr); }", null)
+            }
         }
     }
 }
