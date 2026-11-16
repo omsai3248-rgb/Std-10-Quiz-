@@ -99,6 +99,8 @@ export interface Translations {
   errWrongAdminGoogleAccount: string;
   errAdminGoogleCancelled: string;
   errAdminNoGoogleAccount: string;
+  errAdminGoogleConfig: string;
+  errAdminNativeMissing: string;
   onlyAdminAllowedError: string;
   signOutBtn: string;
 
@@ -260,6 +262,8 @@ const GU: Translations = {
   errWrongAdminGoogleAccount: 'માત્ર અધિકૃત એડમિન Google એકાઉન્ટ (omsai3248@gmail.com) જ માન્ય છે!',
   errAdminGoogleCancelled: 'Google વેરિફિકેશન રદ થયું. કૃપા કરીને omsai3248@gmail.com પસંદ કરી ફરી પ્રયાસ કરો.',
   errAdminNoGoogleAccount: 'ફોનમાં omsai3248@gmail.com Google એકાઉન્ટ ઉમેરેલું હોવું જરૂરી છે.',
+  errAdminGoogleConfig: 'Google Sign-In ચકાસણી પૂર્ણ થઈ શકી નથી. કૃપા કરીને GitHub માં GOOGLE_SERVICES_JSON અને DEBUG_KEYSTORE_BASE64 Secrets ઉમેરો અથવા AI Studio APK વાપરો.',
+  errAdminNativeMissing: 'આ APK માં Firebase google-services.json જોડાયેલ નથી. GitHub માં GOOGLE_SERVICES_JSON Secret ઉમેરી નવું APK બનાવો.',
   onlyAdminAllowedError: 'માત્ર 9099592283 નંબર જ એડમિન લૉગિન માટે માન્ય છે!',
   signOutBtn: 'એડમિન લૉગ આઉટ',
 
@@ -420,6 +424,8 @@ const EN: Translations = {
   errWrongAdminGoogleAccount: 'Only authorized owner Google account (omsai3248@gmail.com) is allowed!',
   errAdminGoogleCancelled: 'Google verification was cancelled. Please select omsai3248@gmail.com and retry.',
   errAdminNoGoogleAccount: 'No Google account found on device. Please add omsai3248@gmail.com in Settings.',
+  errAdminGoogleConfig: 'Google Sign-In verification could not complete for this APK signature. Add GOOGLE_SERVICES_JSON and DEBUG_KEYSTORE_BASE64 secrets in GitHub or use the AI Studio APK.',
+  errAdminNativeMissing: 'Firebase google-services.json is missing from this APK build. Add GOOGLE_SERVICES_JSON secret in GitHub and rebuild the APK.',
   onlyAdminAllowedError: 'Only 9099592283 is allowed for Admin Login!',
   signOutBtn: 'Admin Sign Out',
 

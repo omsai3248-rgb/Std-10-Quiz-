@@ -120,18 +120,40 @@ export async function signInAdminWithGoogle(): Promise<AppAuthUser> {
     }
     return user;
   }
-  const cred = await signInWithPopup(auth, googleProvider);
-  const email = (cred.user.email ?? '').trim().toLowerCase();
-  if (email !== ADMIN_OWNER_EMAIL) {
-    await signOut(auth);
-    throw new Error('ONLY_ADMIN_GOOGLE_EMAIL');
+  if (typeof window !== 'undefined' && Boolean(window.AndroidBridge)) {
+    throw new Error('NATIVE_FIREBASE_MISSING');
   }
-  return {
-    uid: cred.user.uid,
-    email: cred.user.email ?? '',
-    phoneNumber: cred.user.phoneNumber ?? '',
-    emailVerified: Boolean(cred.user.emailVerified),
-  };
+  try {
+    const cred = await signInWithPopup(auth, googleProvider);
+    const email = (cred.user.email ?? '').trim().toLowerCase();
+    if (email !== ADMIN_OWNER_EMAIL) {
+      await signOut(auth);
+      throw new Error('ONLY_ADMIN_GOOGLE_EMAIL');
+    }
+    return {
+      uid: cred.user.uid,
+      email: cred.user.email ?? '',
+      phoneNumber: cred.user.phoneNumber ?? '',
+      emailVerified: Boolean(cred.user.emailVerified),
+    };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err ?? '');
+    const lower = msg.toLowerCase();
+    if (msg === 'ONLY_ADMIN_GOOGLE_EMAIL') throw err;
+    if (lower.includes('popup-closed') || lower.includes('cancelled')) {
+      throw new Error('SIGN_IN_CANCELLED');
+    }
+    if (
+      lower.includes('action is invalid') ||
+      lower.includes('unauthorized-domain') ||
+      lower.includes('operation-not-allowed') ||
+      lower.includes('operation-not-supported') ||
+      lower.includes('popup-blocked')
+    ) {
+      throw new Error('GOOGLE_SIGNIN_CONFIG_ERROR');
+    }
+    throw err;
+  }
 }
 
 export interface AdminPasscodeAuthResult {
@@ -379,6 +401,10 @@ export async function registerOrUpdateStudentProfile(
         })
       );
     });
+    return studentId;
+  }
+
+  if (typeof window !== 'undefined' && Boolean(window.AndroidBridge)) {
     return studentId;
   }
 

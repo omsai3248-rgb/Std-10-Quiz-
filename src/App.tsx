@@ -474,9 +474,16 @@ export const App: React.FC = () => {
   };
 
   const handleStudentLogin = async (name: string, mobile: string) => {
-    await registerOrUpdateStudentProfile(name, mobile);
-    persistUserMeta(name, mobile);
+    const cleanName = name.trim().slice(0, 60);
+    const cleanMobile = mobile.replace(/\D/g, '').slice(-10);
+    if (!cleanName) throw new Error('INVALID_NAME');
+    if (!/^[0-9]{10}$/.test(cleanMobile)) throw new Error('INVALID_MOBILE');
+
+    persistUserMeta(cleanName, cleanMobile);
     setRoute({ name: 'public', tab: 'quiz' });
+    void registerOrUpdateStudentProfile(cleanName, cleanMobile).catch((err) => {
+      console.warn('Student profile background sync deferred:', err);
+    });
   };
 
   const handleStudentLogout = () => {

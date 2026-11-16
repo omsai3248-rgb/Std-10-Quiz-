@@ -74,6 +74,10 @@ export const StudentMobileLoginScreen: React.FC<StudentMobileLoginScreenProps> =
           setErrorMsg(t.errAdminGoogleCancelled);
         } else if (msg === 'NO_GOOGLE_CREDENTIAL') {
           setErrorMsg(t.errAdminNoGoogleAccount);
+        } else if (msg === 'GOOGLE_SIGNIN_CONFIG_ERROR') {
+          setErrorMsg(t.errAdminGoogleConfig);
+        } else if (msg === 'NATIVE_FIREBASE_MISSING') {
+          setErrorMsg(t.errAdminNativeMissing);
         } else {
           setErrorMsg(extractReadableErrorMessage(err, lang));
         }
@@ -128,8 +132,8 @@ export const StudentMobileLoginScreen: React.FC<StudentMobileLoginScreenProps> =
               <input
                 id="student-login-mobile"
                 type="tel"
-                inputMode="numeric"
-                maxLength={10}
+                inputMode="tel"
+                maxLength={16}
                 disabled={isLoading}
                 value={mobileInput}
                 onChange={(e) => {

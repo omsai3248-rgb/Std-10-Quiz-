@@ -131,34 +131,32 @@ class NativeFirebaseBridge(
     private fun attemptAutoSignInWhenResumed() {
         if (autoSignInAttempted) return
         val localAuth = auth ?: return
-        val localCreds = credentialManager ?: return
         if (localAuth.currentUser != null) return
         val clientId = getOptionalStringResource("default_web_client_id")
         if (clientId.isBlank()) return
+        autoSignInAttempted = true
 
         activity.lifecycleScope.launch {
             try {
-                activity.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-                    if (autoSignInAttempted || localAuth.currentUser != null || !isAttached) return@repeatOnLifecycle
-                    autoSignInAttempted = true
-                    val googleIdOption = GetGoogleIdOption.Builder()
-                        .setFilterByAuthorizedAccounts(true)
-                        .setServerClientId(clientId)
-                        .setAutoSelectEnabled(true)
-                        .build()
-                    val request = GetCredentialRequest.Builder().addCredentialOption(googleIdOption).build()
-                    val result = localCreds.getCredential(activity, request)
-                    val credential = result.credential
-                    if (credential is CustomCredential && credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
-                        val idToken = GoogleIdTokenCredential.createFrom(credential.data).idToken
-                        val firebaseCred = GoogleAuthProvider.getCredential(idToken, null)
-                        val signed = localAuth.signInWithCredential(firebaseCred).awaitResult()
-                        val email = signed.user?.email?.trim()?.lowercase().orEmpty()
-                        if (email != ADMIN_OWNER_EMAIL) {
-                            runCatching { localAuth.signOut() }
-                        } else {
-                            emitAuthState(signed.user)
-                        }
+                if (localAuth.currentUser != null || !isAttached) return@launch
+                val creds = CredentialManager.create(activity)
+                val googleIdOption = GetGoogleIdOption.Builder()
+                    .setFilterByAuthorizedAccounts(true)
+                    .setServerClientId(clientId)
+                    .setAutoSelectEnabled(true)
+                    .build()
+                val request = GetCredentialRequest.Builder().addCredentialOption(googleIdOption).build()
+                val result = creds.getCredential(activity, request)
+                val credential = result.credential
+                if (credential is CustomCredential && credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
+                    val idToken = GoogleIdTokenCredential.createFrom(credential.data).idToken
+                    val firebaseCred = GoogleAuthProvider.getCredential(idToken, null)
+                    val signed = localAuth.signInWithCredential(firebaseCred).awaitResult()
+                    val email = signed.user?.email?.trim()?.lowercase().orEmpty()
+                    if (email != ADMIN_OWNER_EMAIL) {
+                        runCatching { localAuth.signOut() }
+                    } else {
+                        emitAuthState(signed.user)
                     }
                 }
             } catch (_: Throwable) {
@@ -186,25 +184,27 @@ class NativeFirebaseBridge(
     @JavascriptInterface
     fun requestGoogleSignIn(callId: String) {
         val localAuth = auth
-        val localCreds = credentialManager
-        if (localAuth == null || localCreds == null) {
-            resolveCallError(callId, "Native Firebase configuration is not initialized.")
+        if (localAuth == null || credentialManager == null) {
+            resolveCallError(callId, "NATIVE_FIREBASE_MISSING")
             return
         }
         val clientId = getOptionalStringResource("default_web_client_id")
         if (clientId.isBlank()) {
-            resolveCallError(callId, "Google Sign-In configuration missing: default_web_client_id not found")
+            resolveCallError(callId, "GOOGLE_SIGNIN_CONFIG_ERROR")
             return
         }
 
-        val signInOption = GetSignInWithGoogleOption.Builder(serverClientId = clientId).build()
-        val request = GetCredentialRequest.Builder().addCredentialOption(signInOption).build()
-
         activity.lifecycleScope.launch {
             try {
+                val creds = CredentialManager.create(activity)
+                val signInOption = GetSignInWithGoogleOption.Builder(serverClientId = clientId).build()
+                val request = GetCredentialRequest.Builder().addCredentialOption(signInOption).build()
                 val result = try {
-                    localCreds.getCredential(activity, request)
-                } catch (_: NoCredentialException) {
+                    creds.getCredential(activity, request)
+                } catch (cancelErr: GetCredentialCancellationException) {
+                    throw cancelErr
+                } catch (primaryErr: Throwable) {
+                    Log.w("Auth", "Primary GetSignInWithGoogleOption failed (${primaryErr.javaClass.simpleName}): ${primaryErr.message}")
                     val fallbackOption = GetGoogleIdOption.Builder()
                         .setFilterByAuthorizedAccounts(false)
                         .setServerClientId(clientId)
@@ -212,7 +212,7 @@ class NativeFirebaseBridge(
                     val fallbackRequest = GetCredentialRequest.Builder()
                         .addCredentialOption(fallbackOption)
                         .build()
-                    localCreds.getCredential(activity, fallbackRequest)
+                    creds.getCredential(activity, fallbackRequest)
                 }
                 val credential = result.credential
                 if (credential is CustomCredential && credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
@@ -222,7 +222,7 @@ class NativeFirebaseBridge(
                     val signedEmail = authResult.user?.email?.trim()?.lowercase().orEmpty()
                     if (signedEmail != ADMIN_OWNER_EMAIL) {
                         withContext(NonCancellable) {
-                            runCatching { localCreds.clearCredentialState(ClearCredentialStateRequest()) }
+                            runCatching { creds.clearCredentialState(ClearCredentialStateRequest()) }
                             localAuth.signOut()
                         }
                         emitAuthState(null)
@@ -241,8 +241,19 @@ class NativeFirebaseBridge(
                 Log.w("Auth", "No Google credentials found on device: ${e.message}", e)
                 resolveCallError(callId, "NO_GOOGLE_CREDENTIAL")
             } catch (e: Throwable) {
-                Log.e("Auth", "Google Sign-In failed", e)
-                resolveCallError(callId, e.localizedMessage ?: "Sign in failed")
+                Log.e("Auth", "Google Sign-In failed (${e.javaClass.simpleName}): ${e.message}", e)
+                val msg = e.localizedMessage.orEmpty()
+                if (msg.contains("action is invalid", ignoreCase = true) ||
+                    msg.contains("developer", ignoreCase = true) ||
+                    msg.contains("configured", ignoreCase = true) ||
+                    msg.contains("provider", ignoreCase = true) ||
+                    msg.contains("10:") ||
+                    msg.contains("28436")
+                ) {
+                    resolveCallError(callId, "GOOGLE_SIGNIN_CONFIG_ERROR")
+                } else {
+                    resolveCallError(callId, msg.ifBlank { "Sign in failed" })
+                }
             }
         }
     }
