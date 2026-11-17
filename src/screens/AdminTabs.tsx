@@ -14,7 +14,6 @@ import {
   ShieldCheck,
   Smartphone,
   Trash2,
-  Unlock,
   UserCheck,
   Wallet,
   X,
@@ -53,7 +52,7 @@ const DirectMobileCodeCard: React.FC<{
     userName?: string;
     subjectId: string;
   }) => Promise<DirectMobileCodeResult>;
-  onNotify?: (message: string) => void;
+  onNotify?: (message: string, isError?: boolean) => void;
 }> = ({ students, isBusy, onGenerateDirectCode, onNotify }) => {
   const { lang, t } = useTranslation();
   const [mobileInput, setMobileInput] = useState('');
@@ -73,7 +72,7 @@ const DirectMobileCodeCard: React.FC<{
   const handleGenerate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (cleanMobile.length !== 10) {
-      onNotify?.(t.errInvalidMobile);
+      onNotify?.(t.errInvalidMobile, true);
       return;
     }
     setIsGenerating(true);
@@ -283,7 +282,7 @@ export const AdminRequestsTab: React.FC<{
     subjectId: string;
   }) => Promise<DirectMobileCodeResult>;
   onDeleteRequest: (req: PaymentRequest) => void;
-  onNotify?: (message: string) => void;
+  onNotify?: (message: string, isError?: boolean) => void;
 }> = ({
   payments,
   students,
@@ -396,7 +395,7 @@ const PaymentRequestCard: React.FC<{
   onApprove: (req: PaymentRequest, adminNote: string, subjectId: string) => void;
   onReject: (req: PaymentRequest, reason: string) => void;
   onDeleteRequest: (req: PaymentRequest) => void;
-  onNotify?: (message: string) => void;
+  onNotify?: (message: string, isError?: boolean) => void;
 }> = ({ req, lang, isBusy, onZoomScreenshot, onApprove, onReject, onDeleteRequest, onNotify }) => {
   const { t } = useTranslation();
   const requestedSubject = resolvePaymentSubjectId(req);
@@ -615,7 +614,7 @@ export const AdminAllCodesTab: React.FC<{
     subjectId: string;
   }) => Promise<DirectMobileCodeResult>;
   onDeleteCode: (item: AccessCode) => void;
-  onNotify?: (message: string) => void;
+  onNotify?: (message: string, isError?: boolean) => void;
 }> = ({
   accessCodes,
   students,
@@ -794,7 +793,7 @@ export const AdminAllCodesTab: React.FC<{
                 exportAccessCodesA4Pdf(filteredCodes, statusFilter);
                 onNotify?.(`${t.exportPdfBtn} (${filteredCodes.length})`);
               } catch (err) {
-                onNotify?.(err instanceof Error ? err.message : 'PDF error');
+                onNotify?.(err instanceof Error ? err.message : 'PDF error', true);
               }
             }}
             className="h-11 px-3.5 rounded-xl border border-[#CBD5E1] dark:border-[#334155] bg-white dark:bg-[#1E293B] text-xs font-bold flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
@@ -1078,7 +1077,6 @@ export const AdminStudentsTab: React.FC<{
     subjectId: SubjectId,
     grantAccess: boolean
   ) => void;
-  onUnlockStudentDevice: (student: StudentProfile) => void;
   onDeleteStudent: (student: StudentProfile) => void;
 }> = ({
   students,
@@ -1088,7 +1086,6 @@ export const AdminStudentsTab: React.FC<{
   onLoadMore,
   onToggleStudentAccess,
   onUpdateStudentSubjectAccess,
-  onUnlockStudentDevice,
   onDeleteStudent,
 }) => {
   const { lang, t } = useTranslation();
@@ -1178,29 +1175,6 @@ export const AdminStudentsTab: React.FC<{
                     <span className="font-mono font-bold text-[#047857] dark:text-[#6EE7B7]">
                       {st.redeemedCode}
                     </span>
-                  )}
-                </div>
-
-                {/* Single-Device Lock Info + Force Unlock */}
-                <div className="rounded-xl border border-[#E2E8F0] dark:border-[#334155] px-2.5 py-2 text-[11px] flex items-center justify-between gap-2">
-                  <div className="min-w-0 flex items-center gap-1.5">
-                    <Smartphone className="h-3.5 w-3.5 shrink-0 text-slate-500" />
-                    <span className="truncate font-semibold text-[#475569] dark:text-[#94A3B8]">
-                      {st.activeDeviceId
-                        ? st.activeDeviceName || t.deviceActiveBadge
-                        : t.deviceFreeBadge}
-                    </span>
-                  </div>
-                  {st.activeDeviceId && (
-                    <button
-                      type="button"
-                      disabled={isBusy}
-                      onClick={() => onUnlockStudentDevice(st)}
-                      className="shrink-0 inline-flex items-center gap-1 rounded-lg bg-amber-100 dark:bg-amber-950/60 text-amber-900 dark:text-amber-200 px-2.5 py-1 text-[11px] font-bold hover:bg-amber-200 dark:hover:bg-amber-900/60 disabled:opacity-60 cursor-pointer"
-                    >
-                      <Unlock className="h-3 w-3" />
-                      <span>{t.unlockDeviceBtn}</span>
-                    </button>
                   )}
                 </div>
 

@@ -49,59 +49,6 @@ export function getDeviceBrowserInfo(): string {
   return [browser, os, screenSize].filter(Boolean).join(' • ').slice(0, 120);
 }
 
-const WEB_DEVICE_ID_KEY = 'std10_device_session_id_v1';
-let memoryWebDeviceId = '';
-
-export function getCurrentDeviceIdentity(): { deviceId: string; deviceName: string } {
-  if (typeof window !== 'undefined') {
-    const bridge = window.AndroidFirebaseBridge as
-      | { getDeviceSessionIdentity?: () => string }
-      | undefined;
-    if (typeof bridge?.getDeviceSessionIdentity === 'function') {
-      try {
-        const raw = bridge.getDeviceSessionIdentity();
-        if (raw) {
-          const parsed = JSON.parse(raw) as { deviceId?: string; deviceName?: string };
-          if (parsed.deviceId && parsed.deviceId.trim().length > 0) {
-            return {
-              deviceId: parsed.deviceId.trim().slice(0, 128),
-              deviceName: (parsed.deviceName || getDeviceBrowserInfo() || 'Android Device')
-                .trim()
-                .slice(0, 120),
-            };
-          }
-        }
-      } catch {
-        // Fallback below
-      }
-    }
-  }
-
-  let webId = memoryWebDeviceId;
-  try {
-    const stored = localStorage.getItem(WEB_DEVICE_ID_KEY) ?? '';
-    if (stored.length >= 10) {
-      webId = stored;
-    } else {
-      const bytes = new Uint8Array(12);
-      crypto.getRandomValues(bytes);
-      webId = `web_${Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')}`;
-      localStorage.setItem(WEB_DEVICE_ID_KEY, webId);
-    }
-    memoryWebDeviceId = webId;
-  } catch {
-    if (!webId) {
-      webId = `web_${Math.random().toString(36).slice(2, 14)}${Date.now().toString(36)}`;
-      memoryWebDeviceId = webId;
-    }
-  }
-
-  return {
-    deviceId: webId.slice(0, 128),
-    deviceName: (getDeviceBrowserInfo() || 'Web Browser').slice(0, 120),
-  };
-}
-
 interface AndroidBridgeApi {
   saveExportedFile?: (suggestedName: string, dataUrl: string) => void;
   downloadQrToGallery?: (suggestedName: string, dataUrl: string) => void;

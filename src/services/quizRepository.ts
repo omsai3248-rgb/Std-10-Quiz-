@@ -21,33 +21,11 @@ import {
 } from 'firebase/firestore';
 import { getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage';
 import {
-  GoogleAuthProvider,
   onAuthStateChanged,
   signInWithPopup,
   signOut,
 } from 'firebase/auth';
-import firebaseConfig from '../../firebase-applet-config.json';
-import { auth, db, googleProvider, storage, studentGoogleProvider } from '../firebase';
-import {
-  DEFAULT_WEB_OAUTH_CLIENT_ID,
-  clearDriveAccessToken,
-  deserializeBackupAttempt,
-  fetchGoogleUserInfo,
-  getStoredDriveAccessToken,
-  loadGmailSessionMeta,
-  loadLocalGmailBackup,
-  loadStudentDataFromDrive,
-  mergeStudentDriveBackups,
-  normalizeGmail,
-  requestGoogleDriveAccessTokenViaGis,
-  saveGmailSessionMeta,
-  saveLocalGmailBackup,
-  saveStudentDataToDrive,
-  storeDriveAccessToken,
-  verifyDriveTokenHasAccess,
-  type GmailStudentSessionMeta,
-  type StudentDriveBackupData,
-} from './googleDriveSync';
+import { auth, db, googleProvider, storage } from '../firebase';
 import {
   forceRefreshNativeAdminListeners,
   getActiveFirebaseSummary,
@@ -58,10 +36,8 @@ import {
   loadMoreNativeAdminCollection,
   notifyNativeAuthUser,
   pauseNativeAdminListeners,
-  resetNativeAdminSessionDeviceCache,
   resumeNativeAdminListeners,
   setNativeActiveStudentMobile,
-  subscribeNativeAdminSessionDevice,
   subscribeNativeAllCodes,
   subscribeNativeAllPayments,
   subscribeNativeAllStudents,
@@ -107,7 +83,7 @@ import {
   type StudentProfile,
   type SubjectId,
 } from '../types/models';
-import { getCurrentDeviceIdentity, getDeviceBrowserInfo } from '../utils/imageUtils';
+import { getDeviceBrowserInfo } from '../utils/imageUtils';
 import { handleFirestoreError, OperationType } from './firestoreErrorHandler';
 
 export const COLLECTION_STUDENTS = 'students';
@@ -116,9 +92,7 @@ export const COLLECTION_ACCESS_CODES = 'access_codes';
 export const COLLECTION_PAYMENT_REQUESTS = 'payment_requests';
 export const COLLECTION_UTR_LOCKS = 'utr_locks';
 export const COLLECTION_APP_CONFIG = 'app_config';
-export const COLLECTION_ADMIN_SESSIONS = 'admin_sessions';
 export const DOC_RELEASE_CONFIG = 'release';
-export const DOC_ADMIN_SESSION_PRIMARY = 'primary';
 
 export const ADMIN_UPI_ID = '9099592283@upi';
 export const ADMIN_UPI_NAME = 'KATRIYA KIRANKUMAR RAMESHBHAI';
@@ -126,7 +100,7 @@ export const ADMIN_PHONE_TEN_DIGITS = '9099592283';
 export const ADMIN_PHONE_E164 = '+919099592283';
 export const ADMIN_AUTH_EMAIL = 'admin9099592283@std10quiz.app';
 export const ADMIN_OWNER_EMAIL = 'omsai3248@gmail.com';
-export const ADMIN_PASSCODE = 'Kiran@0602';
+export const ADMIN_PASSCODE = 'kkkk';
 
 export const ADMIN_PAGE_SIZE = 25;
 const RESUME_SESSION_THROTTLE_MS = 60_000;
@@ -135,7 +109,6 @@ const CODE_CHARSET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 export {
   forceRefreshNativeAdminListeners,
   getActiveFirebaseSummary,
-  getCurrentDeviceIdentity,
   getNativeActiveStudentSnapshot,
   hasNativeFirebaseBridge,
   pauseNativeAdminListeners,
@@ -171,7 +144,6 @@ export function observeAppAuthState(cb: (user: AppAuthUser | null) => void): () 
 }
 
 export async function signOutAdminSession(): Promise<void> {
-  resetNativeAdminSessionDeviceCache();
   if (hasNativeFirebaseBridge()) {
     await invokeNativeBridgeCall((callId) => {
       window.AndroidFirebaseBridge?.signOutGoogle?.(callId);
@@ -181,69 +153,13 @@ export async function signOutAdminSession(): Promise<void> {
   await signOut(auth);
 }
 
-let lastWebAdminClaimAtMs = 0;
-
-export async function claimAdminSessionDevice(): Promise<void> {
-  const { deviceId, deviceName } = getCurrentDeviceIdentity();
-  lastWebAdminClaimAtMs = Date.now();
-  if (hasNativeFirebaseBridge()) {
-    await invokeNativeBridgeCall((callId) => {
-      window.AndroidFirebaseBridge?.claimAdminSessionDevice?.(
-        callId,
-        JSON.stringify({ deviceId, deviceName })
-      );
-    });
-    return;
-  }
-  if (!canHitServer()) return;
-  requireUserId();
-  const ref = doc(db, COLLECTION_ADMIN_SESSIONS, DOC_ADMIN_SESSION_PRIMARY);
-  try {
-    await setDoc(ref, {
-      activeDeviceId: deviceId,
-      activeDeviceName: deviceName,
-      updatedAt: serverTimestamp(),
-    });
-  } catch (err) {
-    console.warn('claimAdminSessionDevice deferred:', err);
-  }
-}
-
-export function observeAdminSessionDevice(onDeviceId: (deviceId: string) => void): Unsubscribe {
-  if (hasNativeFirebaseBridge()) {
-    return subscribeNativeAdminSessionDevice(onDeviceId);
-  }
-  if (!canHitServer()) {
-    return () => {};
-  }
-  const ref = doc(db, COLLECTION_ADMIN_SESSIONS, DOC_ADMIN_SESSION_PRIMARY);
-  return onSnapshot(
-    ref,
-    (snap) => {
-      if (!snap.exists()) return;
-      const remoteDeviceId = String(snap.data().activeDeviceId ?? '').trim();
-      const myDeviceId = getCurrentDeviceIdentity().deviceId;
-      const withinClaimWindow = Date.now() - lastWebAdminClaimAtMs < 4500;
-      if (snap.metadata.fromCache && withinClaimWindow && remoteDeviceId && remoteDeviceId !== myDeviceId) {
-        return;
-      }
-      onDeviceId(remoteDeviceId);
-    },
-    () => {
-      // Non-fatal
-    }
-  );
-}
-
 let lastWebResumeCheckAtMs = 0;
 
 export async function verifyActiveSessionOnResume(
   studentId?: string,
-  isAdminActive = false,
   force = false
 ): Promise<{
   studentProfile?: StudentProfile | null;
-  adminDeviceId?: string;
 }> {
   if (hasNativeFirebaseBridge()) {
     triggerNativeActiveSessionCheck();
@@ -258,7 +174,7 @@ export async function verifyActiveSessionOnResume(
   }
   lastWebResumeCheckAtMs = now;
 
-  const out: { studentProfile?: StudentProfile | null; adminDeviceId?: string } = {};
+  const out: { studentProfile?: StudentProfile | null } = {};
   if (studentId?.trim() && studentId.trim().startsWith('mob_')) {
     try {
       const snap = await getDocFromServer(doc(db, COLLECTION_STUDENTS, studentId.trim()));
@@ -266,17 +182,6 @@ export async function verifyActiveSessionOnResume(
         const mapped = mapStudentDoc(snap.id, snap.data());
         saveWebStudentBackup(mapped, false);
         out.studentProfile = mapped;
-        markServerSyncSuccess();
-      }
-    } catch (err) {
-      markServerSyncError(err);
-    }
-  }
-  if (isAdminActive && Date.now() - lastWebAdminClaimAtMs >= 4000) {
-    try {
-      const snap = await getDocFromServer(doc(db, COLLECTION_ADMIN_SESSIONS, DOC_ADMIN_SESSION_PRIMARY));
-      if (snap.exists()) {
-        out.adminDeviceId = String(snap.data().activeDeviceId ?? '').trim();
         markServerSyncSuccess();
       }
     } catch (err) {
@@ -341,231 +246,6 @@ export async function signInAdminWithGoogle(): Promise<AppAuthUser> {
   }
 }
 
-export interface StudentGmailSignInResult {
-  session: GmailStudentSessionMeta;
-  accessToken: string | null;
-  backup: StudentDriveBackupData | null;
-  driveFileId: string;
-}
-
-function getConfiguredWebOAuthClientId(): string {
-  const fromCfg =
-    typeof firebaseConfig === 'object' && firebaseConfig && 'oAuthClientId' in firebaseConfig
-      ? String((firebaseConfig as { oAuthClientId?: string }).oAuthClientId ?? '').trim()
-      : '';
-  return fromCfg || DEFAULT_WEB_OAUTH_CLIENT_ID;
-}
-
-export async function signInStudentWithGmail(): Promise<StudentGmailSignInResult> {
-  const clientId = getConfiguredWebOAuthClientId();
-
-  let accessToken: string | null = null;
-  let expiresIn = 3300;
-  let uid = '';
-  let email = '';
-  let displayName = '';
-  let photoUrl = '';
-
-  // Primary Web path: Google Identity Services token flow with drive.file + profile + email scopes.
-  // This requests Drive permission in one consent screen and works cleanly on any authorized Web origin.
-  try {
-    const tokenRes = await requestGoogleDriveAccessTokenViaGis({
-      clientId,
-      prompt: 'select_account',
-    });
-    accessToken = tokenRes.accessToken;
-    expiresIn = tokenRes.expiresIn;
-
-    const info = await fetchGoogleUserInfo(accessToken);
-    email = normalizeGmail(info.email);
-    uid = info.sub ? `gmail_${info.sub}` : `gmail_${email.replace(/[^a-z0-9]/g, '_')}`;
-    displayName = info.name || email.split('@')[0] || 'Student';
-    photoUrl = info.picture;
-  } catch (gisErr) {
-    const gisMsg = gisErr instanceof Error ? gisErr.message : String(gisErr ?? '');
-    if (gisMsg === 'SIGN_IN_CANCELLED') {
-      throw gisErr;
-    }
-
-    // Fallback path: Firebase Auth Google Popup (if GIS script couldn't load or popup needed Firebase fallback)
-    try {
-      const cred = await signInWithPopup(auth, studentGoogleProvider);
-      const oauthCred = GoogleAuthProvider.credentialFromResult(cred);
-      accessToken = oauthCred?.accessToken ?? null;
-      email = normalizeGmail(cred.user.email ?? '');
-      uid = `gmail_${cred.user.uid}`;
-      displayName = (cred.user.displayName ?? email.split('@')[0] ?? 'Student').slice(0, 60);
-      photoUrl = cred.user.photoURL ?? '';
-      if (accessToken) {
-        const hasDrive = await verifyDriveTokenHasAccess(accessToken);
-        if (!hasDrive) {
-          accessToken = null;
-        }
-      }
-    } catch (fbErr) {
-      const fbMsg = fbErr instanceof Error ? fbErr.message : String(fbErr ?? '');
-      if (fbMsg.toLowerCase().includes('popup-closed') || fbMsg.toLowerCase().includes('cancelled')) {
-        throw new Error('SIGN_IN_CANCELLED');
-      }
-      throw gisErr;
-    }
-  }
-
-  if (!email) {
-    throw new Error('GOOGLE_EMAIL_MISSING');
-  }
-
-  if (accessToken) {
-    storeDriveAccessToken(accessToken, email, expiresIn);
-  }
-
-  const session: GmailStudentSessionMeta = {
-    uid,
-    email,
-    displayName: displayName.slice(0, 60),
-    photoUrl,
-  };
-  saveGmailSessionMeta(session);
-
-  const localBackup = loadLocalGmailBackup(email);
-  let remoteDriveBackup: StudentDriveBackupData | null = null;
-  let driveFileId = '';
-
-  if (accessToken && canHitServer()) {
-    try {
-      const loaded = await loadStudentDataFromDrive(accessToken, email);
-      remoteDriveBackup = loaded.data;
-      driveFileId = loaded.fileId;
-    } catch (err) {
-      console.warn('Initial Google Drive load fallback to local cache:', err);
-    }
-  }
-
-  let mergedBackup = mergeStudentDriveBackups(localBackup, remoteDriveBackup);
-
-  // If the restored backup has a linked 10-digit mobile number, reconcile any server-side unlocks once
-  const linkedMobile = mergedBackup?.profile.mobileNumber?.replace(/\D/g, '').slice(-10) ?? '';
-  if (/^[0-9]{10}$/.test(linkedMobile) && canHitServer()) {
-    try {
-      const remoteProfile = await lookupStudentByMobile(linkedMobile);
-      if (remoteProfile && mergedBackup) {
-        const mergedUnlocked = Array.from(
-          new Set([
-            ...(mergedBackup.profile.unlockedSubjects ?? []),
-            ...(remoteProfile.unlockedSubjects ?? []),
-            ...(remoteProfile.hasQuizAccess ? ['all', ...ALL_SUBJECT_IDS] : []),
-          ])
-        );
-        const hasFull =
-          remoteProfile.hasQuizAccess ||
-          mergedBackup.profile.hasQuizAccess ||
-          mergedUnlocked.includes('all') ||
-          ALL_SUBJECT_IDS.every((s) => mergedUnlocked.includes(s));
-
-        mergedBackup = {
-          ...mergedBackup,
-          profile: {
-            ...mergedBackup.profile,
-            fullName: mergedBackup.profile.fullName || remoteProfile.fullName,
-            hasQuizAccess: hasFull,
-            redeemedCode: remoteProfile.redeemedCode || mergedBackup.profile.redeemedCode,
-            paymentStatus:
-              remoteProfile.paymentStatus !== 'none'
-                ? remoteProfile.paymentStatus
-                : mergedBackup.profile.paymentStatus,
-            totalQuizzesTaken: Math.max(
-              mergedBackup.profile.totalQuizzesTaken,
-              remoteProfile.totalQuizzesTaken
-            ),
-            bestScorePercent: Math.max(
-              mergedBackup.profile.bestScorePercent,
-              remoteProfile.bestScorePercent
-            ),
-            unlockedSubjects: hasFull
-              ? ['all', ...ALL_SUBJECT_IDS]
-              : mergedUnlocked.slice(0, 10),
-            paymentRequestIds: Array.from(
-              new Set([
-                ...(mergedBackup.profile.paymentRequestIds ?? []),
-                ...(remoteProfile.paymentRequestIds ?? []),
-              ])
-            ).slice(0, 25),
-          },
-        };
-      }
-    } catch {
-      // Non-fatal
-    }
-  }
-
-  if (!mergedBackup) {
-    mergedBackup = {
-      version: 1,
-      appId: 'std10_gujarati_quiz',
-      gmail: email,
-      uid,
-      updatedAtMs: Date.now(),
-      lastSyncedDevice: getCurrentDeviceIdentity().deviceName,
-      profile: {
-        fullName: session.displayName || 'Student',
-        mobileNumber: '',
-        email,
-        standard: 'ધોરણ 10',
-        hasQuizAccess: false,
-        redeemedCode: '',
-        paymentStatus: 'none',
-        totalQuizzesTaken: 0,
-        bestScorePercent: 0,
-        unlockedSubjects: [],
-        paymentRequestIds: [],
-      },
-      attempts: [],
-      paymentsSummary: [],
-    };
-  }
-
-  saveLocalGmailBackup(mergedBackup);
-
-  // Sync merged state back to Google Drive so Drive always holds the freshest copy
-  if (accessToken && (!remoteDriveBackup || localBackup)) {
-    try {
-      const saved = await saveStudentDataToDrive(accessToken, mergedBackup, {
-        knownFileId: driveFileId,
-      });
-      driveFileId = saved.fileId;
-    } catch {
-      // Local backup is already safe; Drive will retry on next action/reconnect
-    }
-  }
-
-  return {
-    session,
-    accessToken,
-    backup: mergedBackup,
-    driveFileId,
-  };
-}
-
-export async function reconnectStudentDriveToken(gmail: string): Promise<string | null> {
-  const cleanEmail = normalizeGmail(gmail);
-  if (!cleanEmail) return null;
-  const existing = getStoredDriveAccessToken(cleanEmail);
-  if (existing) return existing;
-
-  const clientId = getConfiguredWebOAuthClientId();
-  const tokenRes = await requestGoogleDriveAccessTokenViaGis({
-    clientId,
-    loginHint: cleanEmail,
-    prompt: 'consent',
-  });
-  storeDriveAccessToken(tokenRes.accessToken, cleanEmail, tokenRes.expiresIn);
-  return tokenRes.accessToken;
-}
-
-export async function signOutStudentGmail(): Promise<void> {
-  clearDriveAccessToken();
-  saveGmailSessionMeta(null);
-}
 
 export interface AdminPasscodeAuthResult {
   mode: 'firebase';
@@ -742,8 +422,6 @@ function mapStudentDoc(id: string, d: Record<string, unknown>): StudentProfile {
     paymentRequestIds: Array.isArray(d.paymentRequestIds)
       ? d.paymentRequestIds.map((x) => String(x))
       : [],
-    activeDeviceId: String(d.activeDeviceId ?? ''),
-    activeDeviceName: String(d.activeDeviceName ?? ''),
     createdAt: (d.createdAt as StudentProfile['createdAt']) ?? null,
     updatedAt: (d.updatedAt as StudentProfile['updatedAt']) ?? null,
   };
@@ -804,7 +482,7 @@ export async function lookupStudentByMobile(mobileNumber: string): Promise<Stude
   }
 }
 
-export async function loginStudentWithDeviceLock(params: {
+export async function loginStudentByMobile(params: {
   mobileNumber: string;
   fullName?: string;
   email?: string;
@@ -824,17 +502,13 @@ export async function loginStudentWithDeviceLock(params: {
     throw new Error('RESERVED_ADMIN_MOBILE');
   }
 
-  const { deviceId, deviceName } = getCurrentDeviceIdentity();
-
   if (hasNativeFirebaseBridge()) {
     const profile = await invokeNativeBridgeCall<StudentProfile>((callId) => {
-      window.AndroidFirebaseBridge?.loginStudentWithDeviceLock?.(
+      window.AndroidFirebaseBridge?.loginStudentByMobile?.(
         callId,
         JSON.stringify({
           mobileNumber: cleanMobile,
           fullName: cleanName,
-          deviceId,
-          deviceName,
         })
       );
     });
@@ -853,8 +527,6 @@ export async function loginStudentWithDeviceLock(params: {
         ...backup,
         fullName: effectiveName,
         email: cleanEmail || backup.email || '',
-        activeDeviceId: deviceId,
-        activeDeviceName: deviceName,
         isReturningUser: !backup.pendingServerSync,
       };
       saveWebStudentBackup(restored, Boolean(backup.pendingServerSync));
@@ -875,8 +547,6 @@ export async function loginStudentWithDeviceLock(params: {
       bestScorePercent: 0,
       unlockedSubjects: [],
       paymentRequestIds: [],
-      activeDeviceId: deviceId,
-      activeDeviceName: deviceName,
       isReturningUser: false,
       createdAt: null,
       updatedAt: null,
@@ -887,8 +557,6 @@ export async function loginStudentWithDeviceLock(params: {
       fullName: cleanName,
       mobileNumber: cleanMobile,
       email: cleanEmail,
-      deviceId,
-      deviceName,
     });
     return localProfile;
   }
@@ -913,8 +581,6 @@ export async function loginStudentWithDeviceLock(params: {
           bestScorePercent: 0,
           unlockedSubjects: [],
           paymentRequestIds: [],
-          activeDeviceId: deviceId,
-          activeDeviceName: deviceName,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
@@ -932,8 +598,6 @@ export async function loginStudentWithDeviceLock(params: {
           bestScorePercent: 0,
           unlockedSubjects: [],
           paymentRequestIds: [],
-          activeDeviceId: deviceId,
-          activeDeviceName: deviceName,
           isReturningUser: false,
           createdAt: null,
           updatedAt: null,
@@ -941,15 +605,11 @@ export async function loginStudentWithDeviceLock(params: {
       }
 
       const d = snap.data();
-      const existingDeviceId = String(d.activeDeviceId ?? '').trim();
-      const existingDeviceName = String(d.activeDeviceName ?? '').trim();
       const existingName = String(d.fullName ?? '').trim();
       const existingEmail = String(d.email ?? '').trim();
       const effectiveName = cleanName || existingName || 'Student';
       const effectiveEmail = cleanEmail || existingEmail;
       const needsUpdate =
-        existingDeviceId !== deviceId ||
-        existingDeviceName !== deviceName ||
         (cleanName.length > 0 && cleanName !== existingName) ||
         (cleanEmail.length > 0 && cleanEmail !== existingEmail);
 
@@ -957,8 +617,6 @@ export async function loginStudentWithDeviceLock(params: {
         tx.update(ref, {
           fullName: effectiveName,
           email: effectiveEmail,
-          activeDeviceId: deviceId,
-          activeDeviceName: deviceName,
           updatedAt: serverTimestamp(),
         });
       }
@@ -967,8 +625,6 @@ export async function loginStudentWithDeviceLock(params: {
         ...mapStudentDoc(snap.id, d),
         fullName: effectiveName,
         email: effectiveEmail,
-        activeDeviceId: deviceId,
-        activeDeviceName: deviceName,
         isReturningUser: true,
       };
     });
@@ -990,8 +646,6 @@ export async function loginStudentWithDeviceLock(params: {
           ...backup,
           fullName: effectiveName,
           email: cleanEmail || backup.email || '',
-          activeDeviceId: deviceId,
-          activeDeviceName: deviceName,
           isReturningUser: !backup.pendingServerSync,
         };
         saveWebStudentBackup(restored, Boolean(backup.pendingServerSync));
@@ -1013,8 +667,6 @@ export async function loginStudentWithDeviceLock(params: {
           bestScorePercent: 0,
           unlockedSubjects: [],
           paymentRequestIds: [],
-          activeDeviceId: deviceId,
-          activeDeviceName: deviceName,
           isReturningUser: false,
           createdAt: null,
           updatedAt: null,
@@ -1025,58 +677,11 @@ export async function loginStudentWithDeviceLock(params: {
           fullName: cleanName,
           mobileNumber: cleanMobile,
           email: cleanEmail,
-          deviceId,
-          deviceName,
         });
         return fallbackProfile;
       }
     }
     handleFirestoreError(error, OperationType.WRITE, ref.path);
-  }
-}
-
-export async function releaseStudentDeviceLock(mobileNumber: string): Promise<void> {
-  const cleanMobile = mobileNumber.replace(/\D/g, '').slice(-10);
-  if (!/^[0-9]{10}$/.test(cleanMobile) || cleanMobile === ADMIN_PHONE_TEN_DIGITS) {
-    return;
-  }
-  const { deviceId } = getCurrentDeviceIdentity();
-  const studentId = getStudentDocId(cleanMobile);
-  const existingBackup = loadWebStudentBackup(studentId);
-  if (existingBackup) {
-    saveWebStudentBackup(
-      { ...existingBackup, activeDeviceId: '', activeDeviceName: '' },
-      Boolean(existingBackup.pendingServerSync)
-    );
-  }
-
-  if (hasNativeFirebaseBridge()) {
-    await invokeNativeBridgeCall((callId) => {
-      window.AndroidFirebaseBridge?.releaseStudentDeviceLock?.(
-        callId,
-        JSON.stringify({ mobileNumber: cleanMobile, deviceId })
-      );
-    }).catch(() => {});
-    return;
-  }
-
-  if (!canHitServer()) return;
-  const ref = doc(db, COLLECTION_STUDENTS, studentId);
-  try {
-    await runTransaction(db, async (tx) => {
-      const snap = await tx.get(ref);
-      if (!snap.exists()) return;
-      const existingDeviceId = String(snap.data().activeDeviceId ?? '').trim();
-      if (!existingDeviceId || existingDeviceId === deviceId) {
-        tx.update(ref, {
-          activeDeviceId: '',
-          activeDeviceName: '',
-          updatedAt: serverTimestamp(),
-        });
-      }
-    });
-  } catch {
-    // Best effort on logout; do not block local sign-out
   }
 }
 
@@ -1087,31 +692,6 @@ export function observeStudentProfile(
 ): Unsubscribe {
   if (!userId.trim()) {
     onData(null);
-    return () => {};
-  }
-  // Gmail-only session before a mobile number is linked lives locally + in Google Drive
-  if (userId.startsWith('gmail_') && !hasNativeFirebaseBridge()) {
-    const gmailMeta = loadGmailSessionMeta();
-    const localBackup = gmailMeta ? loadLocalGmailBackup(gmailMeta.email) : null;
-    if (localBackup) {
-      onData({
-        id: userId,
-        userId,
-        fullName: localBackup.profile.fullName,
-        mobileNumber: localBackup.profile.mobileNumber,
-        email: localBackup.profile.email,
-        standard: localBackup.profile.standard,
-        hasQuizAccess: localBackup.profile.hasQuizAccess,
-        redeemedCode: localBackup.profile.redeemedCode,
-        paymentStatus: localBackup.profile.paymentStatus,
-        totalQuizzesTaken: localBackup.profile.totalQuizzesTaken,
-        bestScorePercent: localBackup.profile.bestScorePercent,
-        unlockedSubjects: localBackup.profile.unlockedSubjects,
-        paymentRequestIds: localBackup.profile.paymentRequestIds,
-        createdAt: null,
-        updatedAt: null,
-      });
-    }
     return () => {};
   }
   if (hasNativeFirebaseBridge()) {
@@ -1372,13 +952,12 @@ export async function submitPaymentRequest(params: {
       try {
         const stRef = doc(db, COLLECTION_STUDENTS, studentId);
         const stSnap = await getDoc(stRef);
-        const gmailEmail = loadGmailSessionMeta()?.email ?? '';
         if (!stSnap.exists()) {
           await setDoc(stRef, {
             userId: studentId,
             fullName: cleanName,
             mobileNumber: cleanMobile,
-            email: gmailEmail,
+            email: '',
             standard: 'ધોરણ 10',
             hasQuizAccess: false,
             redeemedCode: '',
@@ -1627,7 +1206,6 @@ export async function redeemAccessCodePublic(params: {
 
   const codeRef = doc(db, COLLECTION_ACCESS_CODES, cleanCode);
   const studentRef = doc(db, COLLECTION_STUDENTS, studentId);
-  const gmailEmail = loadGmailSessionMeta()?.email ?? '';
 
   const ensureStudentExistsWeb = async () => {
     if (!canSyncStudent) return;
@@ -1637,7 +1215,7 @@ export async function redeemAccessCodePublic(params: {
         userId: studentId,
         fullName: cleanName,
         mobileNumber: cleanMobile,
-        email: gmailEmail,
+        email: '',
         standard: 'ધોરણ 10',
         hasQuizAccess: false,
         redeemedCode: '',
@@ -2117,20 +1695,12 @@ export function observeMyQuizAttempts(
     return () => {};
   }
 
-  // Always hydrate from local/Gmail cache immediately
+  // Hydrate from local cache immediately so offline / returning views render instantly
   const cached = loadCachedMyAttempts(userId);
-  const gmailMeta = loadGmailSessionMeta();
-  const gmailBackup = gmailMeta ? loadLocalGmailBackup(gmailMeta.email) : null;
-  if (gmailBackup && gmailBackup.attempts.length > 0) {
-    const deserialized = gmailBackup.attempts.map(deserializeBackupAttempt);
-    onData(mergeRecordsByIdNewer(deserialized, cached).slice(0, 20));
-  } else if (cached.length > 0) {
+  if (cached.length > 0) {
     onData(cached);
   }
 
-  if (userId.startsWith('gmail_') && !hasNativeFirebaseBridge()) {
-    return () => {};
-  }
   if (hasNativeFirebaseBridge()) {
     return subscribeNativeMyAttempts(userId, onData);
   }
@@ -2190,7 +1760,7 @@ export async function recordQuizAttempt(params: {
     previousTotalQuizzes,
     previousBestScore,
   } = params;
-  const uid = studentId?.trim() || auth.currentUser?.uid || loadGmailSessionMeta()?.uid || '';
+  const uid = studentId?.trim() || auth.currentUser?.uid || '';
   if (!uid) return null;
 
   const percentage = totalQuestions > 0 ? Math.floor((score * 100) / totalQuestions) : 0;
@@ -2219,11 +1789,6 @@ export async function recordQuizAttempt(params: {
   // Immediately cache locally so quiz result is never lost even offline / quota exceeded
   const existingCached = loadCachedMyAttempts(uid);
   saveCachedMyAttempts(uid, [localAttempt, ...existingCached].slice(0, 20));
-
-  // If Gmail-only ID (without mobile doc yet), persistence happens via local cache + Google Drive
-  if (uid.startsWith('gmail_') && !hasNativeFirebaseBridge()) {
-    return localAttempt;
-  }
 
   if (hasNativeFirebaseBridge()) {
     await invokeNativeBridgeCall((callId) => {
@@ -2620,7 +2185,7 @@ export async function flushPendingSyncOperations(options: { forceDue?: boolean }
         break;
       }
       case 'student_profile_sync': {
-        await loginStudentWithDeviceLock({
+        await loginStudentByMobile({
           mobileNumber: String(p.mobileNumber ?? ''),
           fullName: String(p.fullName ?? ''),
           email: String(p.email ?? ''),
@@ -2636,16 +2201,6 @@ export async function flushPendingSyncOperations(options: { forceDue?: boolean }
           hasQuizAccess: grantAccess,
           unlockedSubjects: grantAccess ? ['all', ...ALL_SUBJECT_IDS] : [],
           ...(grantAccess ? { redeemedCode: redeemedCode || 'ADMIN-GRANTED' } : {}),
-          updatedAt: serverTimestamp(),
-        });
-        break;
-      }
-      case 'admin_unlock_device': {
-        requireUserId();
-        const studentId = String(p.studentId ?? '');
-        await updateDoc(doc(db, COLLECTION_STUDENTS, studentId), {
-          activeDeviceId: '',
-          activeDeviceName: '',
           updatedAt: serverTimestamp(),
         });
         break;
@@ -2911,39 +2466,6 @@ export async function deleteAccessCodeAdmin(code: string): Promise<void> {
   }
 }
 
-export async function adminUnlockStudentDevice(student: StudentProfile): Promise<void> {
-  const studentId = (student.id || student.userId).trim();
-  if (!studentId || !student.activeDeviceId) return;
-  if (hasNativeFirebaseBridge()) {
-    await invokeNativeBridgeCall((callId) => {
-      window.AndroidFirebaseBridge?.adminUnlockStudentDevice?.(
-        callId,
-        JSON.stringify({ studentId })
-      );
-    });
-    return;
-  }
-  requireUserId();
-  if (!canHitServer()) {
-    enqueueSyncOperation('admin_unlock_device', `unlock_${studentId}`, { studentId });
-    return;
-  }
-  const studentRef = doc(db, COLLECTION_STUDENTS, studentId);
-  try {
-    await updateDoc(studentRef, {
-      activeDeviceId: '',
-      activeDeviceName: '',
-      updatedAt: serverTimestamp(),
-    });
-    markServerSyncSuccess();
-  } catch (error) {
-    const kind = markServerSyncError(error);
-    if (kind === 'network' || kind === 'quota') {
-      enqueueSyncOperation('admin_unlock_device', `unlock_${studentId}`, { studentId });
-    }
-    handleFirestoreError(error, OperationType.UPDATE, studentRef.path);
-  }
-}
 
 export async function deleteStudentAdmin(student: StudentProfile): Promise<void> {
   const studentId = (student.id || student.userId).trim();

@@ -39,7 +39,6 @@ function bundleTsModule(entryRelPath, outName) {
 }
 
 const syncManager = await bundleTsModule('src/services/syncManager.ts', 'syncManager.mjs');
-const driveSync = await bundleTsModule('src/services/googleDriveSync.ts', 'googleDriveSync.mjs');
 
 test.after(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -205,82 +204,4 @@ test('mergeRecordsByIdNewer keeps newer records and mergeStudentProfilesConflict
   assert.equal(combined.totalQuizzesTaken, 4);
   assert.equal(combined.bestScorePercent, 90);
   assert.equal(combined.redeemedCode, 'CODE1234');
-});
-
-test('mergeStudentDriveBackups unions unlocked subjects, attempts, and computes deterministic signature', () => {
-  const driveRemote = {
-    version: 1,
-    appId: 'std10_gujarati_quiz',
-    gmail: 'student@gmail.com',
-    uid: 'gmail_student_at_gmail_com',
-    updatedAtMs: 1_000,
-    lastSyncedDevice: 'Pixel',
-    profile: {
-      fullName: 'Riya',
-      mobileNumber: '9898989898',
-      email: 'student@gmail.com',
-      standard: 'ધોરણ 10',
-      hasQuizAccess: false,
-      redeemedCode: 'AAAA1111',
-      paymentStatus: 'approved',
-      totalQuizzesTaken: 1,
-      bestScorePercent: 80,
-      unlockedSubjects: ['maths'],
-      paymentRequestIds: ['pay_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'],
-    },
-    attempts: [
-      {
-        id: 'att_1',
-        userId: 'gmail_student_at_gmail_com',
-        subjectId: 'maths',
-        subjectTitle: 'ગણિત',
-        chapterTitle: 'Ch 1',
-        score: 8,
-        totalQuestions: 10,
-        percentage: 80,
-        timeTakenSeconds: 40,
-        createdAtMs: 900,
-      },
-    ],
-    paymentsSummary: [],
-  };
-
-  const localNewer = {
-    ...driveRemote,
-    updatedAtMs: 2_000,
-    lastSyncedDevice: 'Chrome Web',
-    profile: {
-      ...driveRemote.profile,
-      unlockedSubjects: ['science'],
-      totalQuizzesTaken: 1,
-      bestScorePercent: 90,
-    },
-    attempts: [
-      {
-        id: 'att_2',
-        userId: 'gmail_student_at_gmail_com',
-        subjectId: 'science',
-        subjectTitle: 'વિજ્ઞાન',
-        chapterTitle: 'Ch 2',
-        score: 9,
-        totalQuestions: 10,
-        percentage: 90,
-        timeTakenSeconds: 35,
-        createdAtMs: 1_800,
-      },
-    ],
-  };
-
-  const merged = driveSync.mergeStudentDriveBackups(driveRemote, localNewer);
-  assert.ok(merged);
-  assert.equal(merged.attempts.length, 2);
-  assert.ok(merged.profile.unlockedSubjects.includes('maths'));
-  assert.ok(merged.profile.unlockedSubjects.includes('science'));
-  assert.equal(merged.profile.totalQuizzesTaken, 2);
-  assert.equal(merged.profile.bestScorePercent, 90);
-  assert.equal(merged.profile.mobileNumber, '9898989898');
-
-  const sig1 = driveSync.computeBackupSignature(merged);
-  const sig2 = driveSync.computeBackupSignature({ ...merged, updatedAtMs: merged.updatedAtMs + 5000 });
-  assert.equal(sig1, sig2);
 });

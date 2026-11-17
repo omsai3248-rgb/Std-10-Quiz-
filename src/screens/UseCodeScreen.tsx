@@ -3,7 +3,6 @@ import {
   ArrowRight,
   CheckCircle2,
   Clock,
-  Cloud,
   Copy,
   Folder,
   History,
@@ -11,7 +10,6 @@ import {
   KeyRound,
   Lock,
   Radio,
-  RefreshCw,
   Trophy,
   WifiOff,
   XCircle,
@@ -19,8 +17,7 @@ import {
 import { std10SubjectMetas } from '../data/curriculum/std10Curriculum';
 import { SubjectPaymentModal } from '../components/SubjectPaymentModal';
 import { useTranslation } from '../i18n/translations';
-import type { DriveSyncStatus } from '../services/googleDriveSync';
-import { formatLastSyncDateTime, type SyncStatusSnapshot } from '../services/syncManager';
+import type { SyncStatusSnapshot } from '../services/syncManager';
 import {
   ALL_SUBJECT_IDS,
   PRICE_ALL_SUBJECTS,
@@ -37,17 +34,12 @@ import { formatTimestampLabel, resolvePaymentImageSrc } from '../utils/imageUtil
 interface UseCodeScreenProps {
   studentName: string;
   studentMobile: string;
-  studentEmail?: string;
-  driveStatus?: DriveSyncStatus;
   syncStatus?: SyncStatusSnapshot;
   unlockedSubjects: string[];
   myPayments: PaymentRequest[];
   recentAttempts: QuizAttempt[];
   prefilledCode?: string;
   isBusy: boolean;
-  onSyncDriveNow?: () => void;
-  onReconnectDrive?: () => void;
-  onLinkedMobileSaved?: (mobile: string) => void;
   onSubmitPayment: (params: {
     studentName: string;
     mobileNumber: string;
@@ -70,17 +62,12 @@ interface UseCodeScreenProps {
 export const UseCodeScreen: React.FC<UseCodeScreenProps> = ({
   studentName,
   studentMobile,
-  studentEmail = '',
-  driveStatus,
   syncStatus,
   unlockedSubjects,
   myPayments,
   recentAttempts,
   prefilledCode = '',
   isBusy,
-  onSyncDriveNow,
-  onReconnectDrive,
-  onLinkedMobileSaved,
   onSubmitPayment,
   onRedeemCode,
   onOpenSubject,
@@ -114,88 +101,8 @@ export const UseCodeScreen: React.FC<UseCodeScreenProps> = ({
     }
   };
 
-  const driveBadgeLabel =
-    driveStatus?.state === 'syncing'
-      ? t.gmailDriveSyncingBadge
-      : driveStatus?.state === 'needs_reconnect'
-        ? t.gmailDriveNeedsReconnectBadge
-        : driveStatus?.state === 'offline'
-          ? t.gmailDriveOfflineBadge
-          : driveStatus?.state === 'error'
-            ? t.gmailDriveErrorBadge
-            : t.gmailDriveSyncedBadge;
-
-  const needsReconnect =
-    driveStatus?.state === 'needs_reconnect' || driveStatus?.state === 'error';
-
   return (
     <div className="max-w-2xl mx-auto px-3 sm:px-4 py-5 space-y-5">
-      {/* Compact Google Drive Personal Backup Status Strip (Gmail students only) */}
-      {studentEmail && (
-        <div
-          data-testid="gmail_drive_status_card"
-          className="rounded-2xl bg-[#EFF6FF] dark:bg-[#172554]/60 border border-[#3B82F6]/30 p-3 flex flex-wrap items-center justify-between gap-2.5"
-        >
-          <div className="flex items-center gap-2.5 min-w-0">
-            <div className="h-9 w-9 rounded-xl bg-white dark:bg-[#0F172A] text-[#1E3A8A] dark:text-[#93C5FD] flex items-center justify-center shrink-0 border border-[#BFDBFE] dark:border-[#334155]">
-              <Cloud className="h-4.5 w-4.5" />
-            </div>
-            <div className="min-w-0">
-              <div className="flex items-center gap-1.5 flex-wrap">
-                <span className="text-xs font-extrabold truncate max-w-[190px] sm:max-w-xs">
-                  {studentEmail}
-                </span>
-                <span
-                  className={`rounded-md px-2 py-0.5 text-[10px] font-extrabold ${
-                    needsReconnect
-                      ? 'bg-[#FEF3C7] text-[#92400E] dark:bg-[#451A03] dark:text-[#FDE68A]'
-                      : driveStatus?.state === 'offline'
-                        ? 'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200'
-                        : 'bg-[#D1FAE5] text-[#064E3B] dark:bg-[#064E3B] dark:text-[#D1FAE5]'
-                  }`}
-                >
-                  {driveBadgeLabel}
-                </span>
-              </div>
-              <p className="text-[11px] text-[#475569] dark:text-[#94A3B8] truncate">
-                {t.gmailDriveLastSyncLabel}{' '}
-                {formatLastSyncDateTime(driveStatus?.lastSyncAtMs ?? null, lang)}
-              </p>
-            </div>
-          </div>
-
-          <div className="shrink-0">
-            {needsReconnect && onReconnectDrive ? (
-              <button
-                type="button"
-                data-testid="reconnect_drive_button"
-                onClick={onReconnectDrive}
-                className="min-h-[44px] px-3.5 rounded-xl bg-[#D97706] hover:bg-[#B45309] text-white text-xs font-extrabold inline-flex items-center gap-1.5 cursor-pointer"
-              >
-                <Cloud className="h-3.5 w-3.5" />
-                <span>{t.gmailDriveReconnectBtn}</span>
-              </button>
-            ) : (
-              onSyncDriveNow && (
-                <button
-                  type="button"
-                  data-testid="sync_drive_now_button"
-                  disabled={driveStatus?.state === 'syncing'}
-                  onClick={onSyncDriveNow}
-                  className="min-h-[44px] px-3.5 rounded-xl bg-white dark:bg-[#0F172A] border border-[#BFDBFE] dark:border-[#334155] text-[#1E3A8A] dark:text-[#93C5FD] text-xs font-extrabold inline-flex items-center gap-1.5 hover:bg-blue-50 dark:hover:bg-slate-900 disabled:opacity-60 cursor-pointer"
-                >
-                  <RefreshCw
-                    className={`h-3.5 w-3.5 ${
-                      driveStatus?.state === 'syncing' ? 'animate-spin' : ''
-                    }`}
-                  />
-                  <span>{t.gmailDriveSyncNowBtn}</span>
-                </button>
-              )
-            )}
-          </div>
-        </div>
-      )}
 
       {/* Offline / Quota Protection Notice */}
       {syncStatus && (!syncStatus.isOnline || syncStatus.errorKind === 'quota') && (
@@ -500,11 +407,9 @@ export const UseCodeScreen: React.FC<UseCodeScreenProps> = ({
         initialCode={unlockModalState.code}
         studentName={studentName}
         studentMobile={studentMobile}
-        studentEmail={studentEmail}
         myPayments={myPayments}
         isBusy={isBusy}
         onClose={() => setUnlockModalState((prev) => ({ ...prev, isOpen: false }))}
-        onMobileNumberUpdate={onLinkedMobileSaved}
         onSubmitPayment={onSubmitPayment}
         onRedeemCode={onRedeemCode}
         onNotify={onNotify}

@@ -9,7 +9,6 @@ export type SyncOperationType =
   | 'student_profile_sync'
   | 'payment_submit'
   | 'admin_toggle_access'
-  | 'admin_unlock_device'
   | 'admin_reject_payment'
   | 'admin_release_config';
 

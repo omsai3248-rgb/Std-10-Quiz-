@@ -1,5 +1,5 @@
 import React from 'react';
-import { Languages, LogOut, Mail, Moon, ShieldCheck, Smartphone, Sun } from 'lucide-react';
+import { Languages, LogOut, Moon, ShieldCheck, Smartphone, Sun } from 'lucide-react';
 import { useTranslation } from '../i18n/translations';
 
 export type PublicTabId = 'quiz' | 'admin';
@@ -9,7 +9,6 @@ interface TopNavHeaderProps {
   isStudentLoggedIn: boolean;
   studentName?: string;
   studentMobile?: string;
-  studentEmail?: string;
   isAdmin: boolean;
   adminBadgeCount: number;
   isDarkTheme: boolean;
@@ -23,7 +22,6 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
   isStudentLoggedIn,
   studentName = '',
   studentMobile = '',
-  studentEmail = '',
   isAdmin,
   adminBadgeCount,
   isDarkTheme,
@@ -34,8 +32,7 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
   const { lang, toggleLang, t } = useTranslation();
 
   const identityLabel = [
-    studentName || studentEmail.split('@')[0] || 'Student',
-    studentEmail ? studentEmail : '',
+    studentName || 'Student',
     studentMobile ? `+91 ${studentMobile}` : '',
   ]
     .filter(Boolean)
@@ -102,11 +99,7 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
       {isStudentLoggedIn && activeTab === 'quiz' && (
         <div className="max-w-4xl mx-auto px-3 sm:px-4 py-1.5 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between gap-2 bg-[#FAF9F5]/80 dark:bg-[#0F172A]/60 text-xs">
           <div className="flex items-center gap-1.5 min-w-0 font-bold text-[#0F172A] dark:text-[#F8FAFC]">
-            {studentEmail ? (
-              <Mail className="h-3.5 w-3.5 text-[#1E3A8A] dark:text-[#93C5FD] shrink-0" />
-            ) : (
-              <Smartphone className="h-3.5 w-3.5 text-[#1E3A8A] dark:text-[#93C5FD] shrink-0" />
-            )}
+            <Smartphone className="h-3.5 w-3.5 text-[#1E3A8A] dark:text-[#93C5FD] shrink-0" />
             <span className="truncate">{identityLabel}</span>
           </div>
           <button

@@ -1,5 +1,5 @@
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { X } from 'lucide-react';
+import { AlertTriangle, BellRing, X } from 'lucide-react';
 import {
   getCachedChapter,
   getCachedSubject,
@@ -15,7 +15,6 @@ import { quizAudioPlayer } from './services/audioPlayer';
 import { extractReadableErrorMessage } from './services/firestoreErrorHandler';
 import {
   ADMIN_PAGE_SIZE,
-  adminUnlockStudentDevice,
   approvePaymentAndAssignCode,
   deleteAccessCodeAdmin,
   deletePaymentRequestAdmin,
@@ -24,7 +23,6 @@ import {
   forceRefreshNativeAdminListeners,
   generateBulkAccessCodes,
   generateDirectCodeForMobile,
-  getCurrentDeviceIdentity,
   getNativeActiveStudentSnapshot,
   getStudentDocId,
   hasNativeFirebaseBridge,
@@ -33,8 +31,7 @@ import {
   loadMoreAdminPayments,
   loadMoreAdminStudents,
   loadMyPaymentRequestIds,
-  loginStudentWithDeviceLock,
-  observeAdminSessionDevice,
+  loginStudentByMobile,
   observeAllAccessCodes,
   observeAllPaymentRequests,
   observeAllStudents,
@@ -45,18 +42,14 @@ import {
   observeReleaseConfig,
   observeStudentProfile,
   pauseNativeAdminListeners,
-  reconnectStudentDriveToken,
   recordQuizAttempt,
   redeemAccessCodePublic,
   rejectPaymentRequest,
-  releaseStudentDeviceLock,
   resumeNativeAdminListeners,
   saveMyPaymentRequestId,
   saveReleaseConfig,
   setNativeActiveStudentMobile,
-  signInStudentWithGmail,
   signOutAdminSession,
-  signOutStudentGmail,
   submitPaymentRequest,
   syncAdminDeltaSince,
   toggleStudentQuizAccess,
@@ -66,19 +59,6 @@ import {
   type AppAuthUser,
   type DirectMobileCodeResult,
 } from './services/quizRepository';
-import {
-  buildDriveBackupPayload,
-  deserializeBackupAttempt,
-  getDriveSyncStatus,
-  getStoredDriveAccessToken,
-  loadGmailSessionMeta,
-  loadLocalGmailBackup,
-  saveLocalGmailBackup,
-  saveStudentDataToDrive,
-  subscribeDriveSyncStatus,
-  type DriveSyncStatus,
-  type GmailStudentSessionMeta,
-} from './services/googleDriveSync';
 import {
   getSyncStatus,
   loadCachedMyAttempts,
@@ -168,53 +148,34 @@ function loadSavedUserMeta(): { name: string; mobile: string } {
 
 function loadInitialStudentSession(): {
   meta: { name: string; mobile: string };
-  gmailSession: GmailStudentSessionMeta | null;
   unlocked: string[];
   paymentIds: string[];
   initialAttempts: QuizAttempt[];
   nativeSnapshot: StudentProfile | null;
 } {
-  const gmailSession = loadGmailSessionMeta();
-  const gmailBackup = gmailSession?.email ? loadLocalGmailBackup(gmailSession.email) : null;
-
   const webMeta = loadSavedUserMeta();
   const nativeSnapshot = getNativeActiveStudentSnapshot();
   const nativeMobile = (nativeSnapshot?.mobileNumber ?? '').replace(/\D/g, '').slice(-10);
   const nativeName = (nativeSnapshot?.fullName ?? '').trim().slice(0, 60);
-  const backupMobile = (gmailBackup?.profile.mobileNumber ?? '').replace(/\D/g, '').slice(-10);
 
-  const effectiveMobile = /^[0-9]{10}$/.test(webMeta.mobile)
-    ? webMeta.mobile
-    : /^[0-9]{10}$/.test(backupMobile)
-      ? backupMobile
-      : nativeMobile;
-  const effectiveName =
-    webMeta.name || gmailBackup?.profile.fullName || gmailSession?.displayName || nativeName;
+  const effectiveMobile = /^[0-9]{10}$/.test(webMeta.mobile) ? webMeta.mobile : nativeMobile;
+  const effectiveName = webMeta.name || nativeName;
 
   const meta = {
     name: effectiveName,
     mobile: /^[0-9]{10}$/.test(effectiveMobile) ? effectiveMobile : '',
   };
 
-  if (meta.name && (meta.mobile || gmailSession)) {
+  if (meta.name && meta.mobile) {
     try {
       localStorage.setItem(LOCAL_USER_META_KEY, JSON.stringify(meta));
     } catch {
       // Ignore
     }
-    if (meta.mobile) {
-      setNativeActiveStudentMobile(meta.mobile);
-    }
+    setNativeActiveStudentMobile(meta.mobile);
   }
 
   const unlockedSet = new Set<string>(loadSavedUnlockedSubjects(meta.mobile));
-  if (gmailBackup) {
-    (gmailBackup.profile.unlockedSubjects ?? []).forEach((s) => unlockedSet.add(String(s)));
-    if (gmailBackup.profile.hasQuizAccess) {
-      unlockedSet.add('all');
-      ALL_SUBJECT_IDS.forEach((s) => unlockedSet.add(s));
-    }
-  }
   if (nativeSnapshot && nativeMobile === meta.mobile) {
     (nativeSnapshot.unlockedSubjects ?? []).forEach((s) => unlockedSet.add(String(s)));
     if (nativeSnapshot.hasQuizAccess) {
@@ -234,13 +195,6 @@ function loadInitialStudentSession(): {
   }
 
   let paymentIds = loadMyPaymentRequestIds(meta.mobile);
-  if (gmailBackup?.profile.paymentRequestIds?.length) {
-    gmailBackup.profile.paymentRequestIds.forEach((pid) => {
-      if (/^pay_[a-f0-9]{32}$/.test(pid)) {
-        paymentIds = saveMyPaymentRequestId(pid, meta.mobile);
-      }
-    });
-  }
   if (nativeSnapshot && nativeMobile === meta.mobile && nativeSnapshot.paymentRequestIds?.length) {
     nativeSnapshot.paymentRequestIds.forEach((pid) => {
       if (/^pay_[a-f0-9]{32}$/.test(pid)) {
@@ -249,46 +203,14 @@ function loadInitialStudentSession(): {
     });
   }
 
-  const resolvedDocId = meta.mobile
-    ? getStudentDocId(meta.mobile)
-    : gmailSession?.uid ?? '';
-  const cachedAttempts = resolvedDocId ? loadCachedMyAttempts(resolvedDocId) : [];
-  const driveAttempts = gmailBackup?.attempts?.map(deserializeBackupAttempt) ?? [];
-  const attemptMap = new Map<string, QuizAttempt>();
-  [...driveAttempts, ...cachedAttempts].forEach((a) => {
-    if (a?.id && !attemptMap.has(a.id)) attemptMap.set(a.id, a);
-  });
-  const initialAttempts = Array.from(attemptMap.values())
-    .sort((a, b) => (b.createdAt?.seconds ?? 0) - (a.createdAt?.seconds ?? 0))
-    .slice(0, 20);
+  const resolvedDocId = meta.mobile ? getStudentDocId(meta.mobile) : '';
+  const initialAttempts = resolvedDocId ? loadCachedMyAttempts(resolvedDocId).slice(0, 20) : [];
 
-  let hydratedSnapshot: StudentProfile | null =
+  const hydratedSnapshot: StudentProfile | null =
     nativeSnapshot && nativeMobile === meta.mobile ? nativeSnapshot : null;
-  if (!hydratedSnapshot && gmailBackup && gmailSession) {
-    hydratedSnapshot = {
-      id: resolvedDocId || gmailSession.uid,
-      userId: resolvedDocId || gmailSession.uid,
-      fullName: effectiveName || 'Student',
-      mobileNumber: meta.mobile,
-      email: gmailSession.email,
-      standard: gmailBackup.profile.standard || 'ધોરણ 10',
-      hasQuizAccess: gmailBackup.profile.hasQuizAccess,
-      redeemedCode: gmailBackup.profile.redeemedCode,
-      paymentStatus: gmailBackup.profile.paymentStatus,
-      totalQuizzesTaken: gmailBackup.profile.totalQuizzesTaken,
-      bestScorePercent: gmailBackup.profile.bestScorePercent,
-      activeDeviceId: getCurrentDeviceIdentity().deviceId,
-      activeDeviceName: getCurrentDeviceIdentity().deviceName,
-      unlockedSubjects: Array.from(unlockedSet),
-      paymentRequestIds: paymentIds,
-      createdAt: null,
-      updatedAt: null,
-    };
-  }
 
   return {
     meta,
-    gmailSession,
     unlocked: Array.from(unlockedSet),
     paymentIds,
     initialAttempts,
@@ -303,10 +225,6 @@ export const App: React.FC = () => {
   const [authUser, setAuthUser] = useState<AppAuthUser | null>(null);
   const [authInitialized, setAuthInitialized] = useState(false);
 
-  const [gmailSession, setGmailSession] = useState<GmailStudentSessionMeta | null>(
-    initialSession.gmailSession
-  );
-  const [driveStatus, setDriveStatus] = useState<DriveSyncStatus>(getDriveSyncStatus);
   const [syncStatus, setSyncStatus] = useState<SyncStatusSnapshot>(getSyncStatus);
   const [isDocumentVisible, setIsDocumentVisible] = useState<boolean>(() =>
     typeof document !== 'undefined' ? document.visibilityState !== 'hidden' : true
@@ -349,22 +267,10 @@ export const App: React.FC = () => {
   const [availableUpdate, setAvailableUpdate] = useState<GitHubReleaseInfo | null>(null);
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
   const lastCheckedConfigKeyRef = useRef<string>('');
-  const deviceClaimedForStudentRef = useRef<string>('');
-  const lastStudentTakeoverAtRef = useRef<number>(0);
-  const lastAdminTakeoverAtRef = useRef<number>(0);
   const knownPendingIdsRef = useRef<Set<string> | null>(null);
   const knownUsedCodesRef = useRef<Set<string> | null>(null);
   const isSoundEnabledRef = useRef(isSoundEnabled);
   const langRef = useRef(lang);
-
-  const gmailSessionRef = useRef(gmailSession);
-  const studentRef = useRef(student);
-  const savedUserMetaRef = useRef(savedUserMeta);
-  const localUnlockedRef = useRef(localUnlockedSubjects);
-  const myAttemptsRef = useRef(myAttempts);
-  const myPaymentsRef = useRef(myPayments);
-  const driveSyncTimerRef = useRef<number | null>(null);
-  const pendingDriveUploadRef = useRef(false);
 
   useEffect(() => {
     isSoundEnabledRef.current = isSoundEnabled;
@@ -374,50 +280,17 @@ export const App: React.FC = () => {
     langRef.current = lang;
   }, [lang]);
 
-  useEffect(() => {
-    gmailSessionRef.current = gmailSession;
-  }, [gmailSession]);
-
-  useEffect(() => {
-    studentRef.current = student;
-  }, [student]);
-
-  useEffect(() => {
-    savedUserMetaRef.current = savedUserMeta;
-  }, [savedUserMeta]);
-
-  useEffect(() => {
-    localUnlockedRef.current = localUnlockedSubjects;
-  }, [localUnlockedSubjects]);
-
-  useEffect(() => {
-    myAttemptsRef.current = myAttempts;
-  }, [myAttempts]);
-
-  useEffect(() => {
-    myPaymentsRef.current = myPayments;
-  }, [myPayments]);
-
   const hasValidMobile = useMemo(
     () => /^[0-9]{10}$/.test(savedUserMeta.mobile),
     [savedUserMeta.mobile]
   );
 
   const isStudentLoggedIn = useMemo(
-    () =>
-      Boolean(gmailSession?.email) ||
-      (savedUserMeta.name.trim().length > 0 && hasValidMobile),
-    [gmailSession?.email, hasValidMobile, savedUserMeta.name]
+    () => savedUserMeta.name.trim().length > 0 && hasValidMobile,
+    [hasValidMobile, savedUserMeta.name]
   );
 
-  const effectiveStudentName = useMemo(
-    () =>
-      savedUserMeta.name.trim() ||
-      gmailSession?.displayName ||
-      gmailSession?.email?.split('@')[0] ||
-      '',
-    [gmailSession?.displayName, gmailSession?.email, savedUserMeta.name]
-  );
+  const effectiveStudentName = useMemo(() => savedUserMeta.name.trim(), [savedUserMeta.name]);
 
   const formatAppError = useCallback(
     (err: unknown, fallback?: string): string => {
@@ -508,23 +381,13 @@ export const App: React.FC = () => {
     if (hasValidMobile) {
       return getStudentDocId(savedUserMeta.mobile);
     }
-    if (gmailSession?.uid) {
-      return gmailSession.uid;
-    }
     if (authUser && !isFirebaseAdmin) {
       return authUser.uid;
     }
     return '';
-  }, [authUser, gmailSession?.uid, hasValidMobile, isFirebaseAdmin, savedUserMeta.mobile]);
+  }, [authUser, hasValidMobile, isFirebaseAdmin, savedUserMeta.mobile]);
 
-  const clearLocalStudentSession = useCallback((noticeMessage?: string, isErrorNotice = true) => {
-    deviceClaimedForStudentRef.current = '';
-    if (driveSyncTimerRef.current) {
-      window.clearTimeout(driveSyncTimerRef.current);
-      driveSyncTimerRef.current = null;
-    }
-    pendingDriveUploadRef.current = false;
-    setGmailSession(null);
+  const clearLocalStudentSession = useCallback(() => {
     setSavedUserMeta({ name: '', mobile: '' });
     setStudent(null);
     setMyAttempts([]);
@@ -539,76 +402,18 @@ export const App: React.FC = () => {
       // Ignore
     }
     setRoute({ name: 'public', tab: 'quiz' });
-    if (noticeMessage) {
-      setBanner({ isError: isErrorNotice, message: noticeMessage });
-    }
   }, []);
 
-  const syncStudentToGoogleDrive = useCallback(async (options: { force?: boolean } = {}) => {
-    const session = gmailSessionRef.current;
-    if (!session?.email) return;
-
-    const payload = buildDriveBackupPayload({
-      gmail: session.email,
-      uid: session.uid,
-      student: studentRef.current,
-      unlockedSubjects: localUnlockedRef.current,
-      attempts: myAttemptsRef.current,
-      payments: myPaymentsRef.current,
-      fallbackName: savedUserMetaRef.current.name || session.displayName,
-      fallbackMobile: savedUserMetaRef.current.mobile,
-    });
-    saveLocalGmailBackup(payload);
-
-    const token = getStoredDriveAccessToken(session.email);
-    if (!token || (typeof navigator !== 'undefined' && navigator.onLine === false)) {
-      pendingDriveUploadRef.current = true;
-      return;
-    }
-
-    try {
-      await saveStudentDataToDrive(token, payload, { force: options.force });
-      pendingDriveUploadRef.current = false;
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : '';
-      if (msg === 'DRIVE_AUTH_EXPIRED' || msg.startsWith('DRIVE_')) {
-        pendingDriveUploadRef.current = true;
-      }
-    }
-  }, []);
-
-  const scheduleDriveBackup = useCallback(
-    (delayMs = 800) => {
-      if (!gmailSessionRef.current?.email) return;
-      if (driveSyncTimerRef.current) {
-        window.clearTimeout(driveSyncTimerRef.current);
-      }
-      driveSyncTimerRef.current = window.setTimeout(() => {
-        driveSyncTimerRef.current = null;
-        void syncStudentToGoogleDrive();
-      }, delayMs);
-    },
-    [syncStudentToGoogleDrive]
-  );
-
-  // Subscribe to global Smart Live Sync telemetry & Google Drive sync telemetry
+  // Subscribe to global Smart Live Sync telemetry
   useEffect(() => {
-    const unsubSync = subscribeSyncStatus(setSyncStatus);
-    const unsubDrive = subscribeDriveSyncStatus(setDriveStatus);
-    return () => {
-      unsubSync();
-      unsubDrive();
-    };
+    return subscribeSyncStatus(setSyncStatus);
   }, []);
 
-  // Monitor Online/Offline transitions and auto-flush pending Firestore & Google Drive updates
+  // Monitor Online/Offline transitions and auto-flush pending Firestore updates
   useEffect(() => {
     const onOnline = () => {
       setOnlineState(true);
       void flushPendingSyncOperations();
-      if (gmailSessionRef.current?.email && pendingDriveUploadRef.current) {
-        void syncStudentToGoogleDrive({ force: true });
-      }
       if (isFirebaseAdmin) {
         const lastMs = getSyncStatus().lastSyncAtMs ?? 0;
         if (lastMs > 0) {
@@ -626,7 +431,7 @@ export const App: React.FC = () => {
       window.removeEventListener('online', onOnline);
       window.removeEventListener('offline', onOffline);
     };
-  }, [isFirebaseAdmin, syncStudentToGoogleDrive]);
+  }, [isFirebaseAdmin]);
 
   // Dynamically load heavy chapter question banks only when a subject or quiz route is active
   const activeSubjectId: SubjectId | null =
@@ -687,7 +492,6 @@ export const App: React.FC = () => {
     if (!studentDocId) {
       setStudent(null);
       setMyAttempts([]);
-      deviceClaimedForStudentRef.current = '';
       return;
     }
 
@@ -878,12 +682,11 @@ export const App: React.FC = () => {
     };
   }, [isAdminPanelVisible, isFirebaseAdmin, syncVersion]);
 
-  // 4. Sync restored Firestore student details & enforce strict 1-device session watchdog (mobile-linked profiles only)
+  // 4. Sync restored Firestore student details cleanly across any number of logged-in devices
   useEffect(() => {
     if (!hasValidMobile || !student || !studentDocId || !studentDocId.startsWith('mob_')) return;
     if ((student.id || student.userId) !== studentDocId) return;
 
-    // Keep local unlocked subjects & name & payment IDs synced with remote profile
     if (student.fullName.trim() && student.fullName.trim() !== savedUserMeta.name) {
       const syncedMeta = { name: student.fullName.trim().slice(0, 60), mobile: savedUserMeta.mobile };
       setSavedUserMeta(syncedMeta);
@@ -917,54 +720,20 @@ export const App: React.FC = () => {
         }
       });
     }
-
-    // Single-device lock enforcement
-    const myDeviceId = getCurrentDeviceIdentity().deviceId;
-    const remoteDeviceId = (student.activeDeviceId ?? '').trim();
-    const withinTakeoverGrace = Date.now() - lastStudentTakeoverAtRef.current < 4500;
-
-    if (remoteDeviceId && remoteDeviceId !== myDeviceId) {
-      if (withinTakeoverGrace) {
-        return;
-      }
-      clearLocalStudentSession(t.deviceKickedOutMsg, true);
-      return;
-    }
-
-    if (remoteDeviceId === myDeviceId) {
-      deviceClaimedForStudentRef.current = studentDocId;
-      return;
-    }
-
-    // remoteDeviceId is empty: either Admin force-unlocked this device OR legacy session needs to claim lock once
-    if (deviceClaimedForStudentRef.current === studentDocId) {
-      clearLocalStudentSession(t.deviceKickedOutMsg, true);
-      return;
-    }
-
-    deviceClaimedForStudentRef.current = studentDocId;
-    lastStudentTakeoverAtRef.current = Date.now();
-    void loginStudentWithDeviceLock({
-      mobileNumber: savedUserMeta.mobile,
-      fullName: student.fullName || savedUserMeta.name,
-      email: gmailSession?.email || student.email || '',
-    }).catch(() => {});
   }, [
-    clearLocalStudentSession,
-    gmailSession?.email,
     hasValidMobile,
     savedUserMeta.mobile,
     savedUserMeta.name,
     student,
     studentDocId,
-    t.deviceKickedOutMsg,
   ]);
 
   useEffect(() => {
     if (!banner) return;
-    const timer = window.setTimeout(() => setBanner(null), 5000);
+    const timeoutMs = isAdmin ? 6500 : 5000;
+    const timer = window.setTimeout(() => setBanner(null), timeoutMs);
     return () => window.clearTimeout(timer);
-  }, [banner]);
+  }, [banner, isAdmin]);
 
   const effectiveGithubRepo = useMemo(
     () => sanitizeOwnerRepo(releaseConfig?.githubOwnerRepo ?? ''),
@@ -1040,17 +809,14 @@ export const App: React.FC = () => {
     const cleanMobile = mobile.replace(/\D/g, '').slice(-10);
     if (!/^[0-9]{10}$/.test(cleanMobile)) throw new Error('INVALID_MOBILE');
 
-    const profile = await loginStudentWithDeviceLock({
+    const profile = await loginStudentByMobile({
       mobileNumber: cleanMobile,
       fullName: cleanName,
-      email: gmailSession?.email || '',
     });
 
     const effectiveName = (profile.fullName || cleanName).trim().slice(0, 60);
     if (!effectiveName) throw new Error('INVALID_NAME');
 
-    lastStudentTakeoverAtRef.current = Date.now();
-    deviceClaimedForStudentRef.current = profile.id || getStudentDocId(cleanMobile);
     setStudent(profile);
     persistUserMeta(effectiveName, cleanMobile);
 
@@ -1088,155 +854,8 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleGmailLoginSuccess = async () => {
-    const res = await signInStudentWithGmail();
-    const { session, backup } = res;
-    setGmailSession(session);
-
-    const restoredName = (backup?.profile.fullName || session.displayName || 'Student')
-      .trim()
-      .slice(0, 60);
-    const restoredMobile = (backup?.profile.mobileNumber || '').replace(/\D/g, '').slice(-10);
-    persistUserMeta(restoredName, restoredMobile);
-
-    const restoredSubjects = new Set<string>(backup?.profile.unlockedSubjects ?? []);
-    if (backup?.profile.hasQuizAccess) {
-      restoredSubjects.add('all');
-      ALL_SUBJECT_IDS.forEach((s) => restoredSubjects.add(s));
-    }
-    const unlockedArr = Array.from(restoredSubjects);
-    setLocalUnlockedSubjects(unlockedArr);
-    if (unlockedArr.length > 0 && restoredMobile) {
-      try {
-        localStorage.setItem(`${LOCAL_UNLOCKS_KEY}_${restoredMobile}`, JSON.stringify(unlockedArr));
-      } catch {
-        // Ignore
-      }
-    }
-
-    const restoredAttempts = (backup?.attempts ?? []).map(deserializeBackupAttempt);
-    if (restoredAttempts.length > 0) {
-      setMyAttempts(restoredAttempts);
-    }
-
-    const restoredPayIds = (backup?.profile.paymentRequestIds ?? []).filter((pid) =>
-      /^pay_[a-f0-9]{32}$/.test(pid)
-    );
-    if (restoredPayIds.length > 0) {
-      setMyPaymentIds(restoredPayIds);
-      restoredPayIds.forEach((pid) => saveMyPaymentRequestId(pid, restoredMobile));
-    }
-
-    const activeDocId = /^[0-9]{10}$/.test(restoredMobile)
-      ? getStudentDocId(restoredMobile)
-      : session.uid;
-
-    setStudent({
-      id: activeDocId,
-      userId: activeDocId,
-      fullName: restoredName,
-      mobileNumber: restoredMobile,
-      email: session.email,
-      standard: backup?.profile.standard || 'ધોરણ 10',
-      hasQuizAccess: Boolean(backup?.profile.hasQuizAccess),
-      redeemedCode: backup?.profile.redeemedCode || '',
-      paymentStatus: backup?.profile.paymentStatus || 'none',
-      totalQuizzesTaken: backup?.profile.totalQuizzesTaken || restoredAttempts.length,
-      bestScorePercent: backup?.profile.bestScorePercent || 0,
-      activeDeviceId: getCurrentDeviceIdentity().deviceId,
-      activeDeviceName: getCurrentDeviceIdentity().deviceName,
-      unlockedSubjects: unlockedArr,
-      paymentRequestIds: restoredPayIds,
-      createdAt: null,
-      updatedAt: null,
-    });
-
-    if (/^[0-9]{10}$/.test(restoredMobile)) {
-      lastStudentTakeoverAtRef.current = Date.now();
-      deviceClaimedForStudentRef.current = activeDocId;
-      void loginStudentWithDeviceLock({
-        mobileNumber: restoredMobile,
-        fullName: restoredName,
-        email: session.email,
-      }).catch(() => {});
-    }
-
-    setRoute({ name: 'public', tab: 'quiz' });
-    setBanner({
-      isError: false,
-      message: `${restoredName} — ${t.gmailWelcomeRestored}`,
-    });
-  };
-
-  const handleLinkedMobileSaved = useCallback(
-    (mobile: string) => {
-      const cleanMob = normalizeIndianMobileInput(mobile);
-      if (!/^[0-9]{10}$/.test(cleanMob)) return;
-      persistUserMeta(effectiveStudentName, cleanMob);
-      setStudent((prev) =>
-        prev
-          ? { ...prev, mobileNumber: cleanMob }
-          : {
-              id: getStudentDocId(cleanMob),
-              userId: getStudentDocId(cleanMob),
-              fullName: effectiveStudentName || 'Student',
-              mobileNumber: cleanMob,
-              email: gmailSession?.email || '',
-              standard: 'ધોરણ 10',
-              hasQuizAccess: localUnlockedRef.current.includes('all'),
-              redeemedCode: '',
-              paymentStatus: 'none',
-              totalQuizzesTaken: myAttemptsRef.current.length,
-              bestScorePercent: 0,
-              activeDeviceId: getCurrentDeviceIdentity().deviceId,
-              activeDeviceName: getCurrentDeviceIdentity().deviceName,
-              unlockedSubjects: localUnlockedRef.current,
-              paymentRequestIds: [],
-              createdAt: null,
-              updatedAt: null,
-            }
-      );
-      scheduleDriveBackup(400);
-    },
-    [effectiveStudentName, gmailSession?.email, persistUserMeta, scheduleDriveBackup]
-  );
-
-  const handleReconnectDrive = useCallback(async () => {
-    const email = gmailSessionRef.current?.email;
-    if (!email) return;
-    try {
-      await reconnectStudentDriveToken(email);
-      await syncStudentToGoogleDrive({ force: true });
-      setBanner({ isError: false, message: t.gmailDriveSyncedBadge });
-    } catch (err) {
-      setBanner({
-        isError: true,
-        message: formatAppError(err, t.errGoogleDriveAuthFailed),
-      });
-    }
-  }, [formatAppError, syncStudentToGoogleDrive, t.errGoogleDriveAuthFailed, t.gmailDriveSyncedBadge]);
-
-  const handleSyncDriveNow = useCallback(async () => {
-    const email = gmailSessionRef.current?.email;
-    if (!email) return;
-    if (!getStoredDriveAccessToken(email)) {
-      await handleReconnectDrive();
-      return;
-    }
-    await syncStudentToGoogleDrive({ force: true });
-    setBanner({ isError: false, message: t.gmailDriveSyncedBadge });
-  }, [handleReconnectDrive, syncStudentToGoogleDrive, t.gmailDriveSyncedBadge]);
-
   const handleStudentLogout = () => {
-    const mob = savedUserMeta.mobile;
-    const hadGmail = Boolean(gmailSessionRef.current?.email);
     clearLocalStudentSession();
-    if (hadGmail) {
-      void signOutStudentGmail().catch(() => {});
-    }
-    if (/^[0-9]{10}$/.test(mob)) {
-      void releaseStudentDeviceLock(mob).catch(() => {});
-    }
   };
 
   const persistUnlockedSubject = (subjectId: string, mobile = savedUserMeta.mobile) => {
@@ -1276,7 +895,6 @@ export const App: React.FC = () => {
       const reqId = await submitPaymentRequest(params);
       setMyPaymentIds(saveMyPaymentRequestId(reqId, params.mobileNumber));
       setBanner({ isError: false, message: t.requestSentTitle });
-      scheduleDriveBackup(600);
       return reqId;
     } finally {
       setIsBusy(false);
@@ -1304,7 +922,6 @@ export const App: React.FC = () => {
         isError: false,
         message: `${t.codeSuccessTitle} (${res.code})`,
       });
-      scheduleDriveBackup(500);
       return res;
     } finally {
       setIsBusy(false);
@@ -1501,21 +1118,6 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleUnlockStudentDevice = async (st: StudentProfile) => {
-    setIsBusy(true);
-    try {
-      await adminUnlockStudentDevice(st);
-      setBanner({
-        isError: false,
-        message: `${st.fullName || st.mobileNumber} — ${t.unlockDeviceSuccess}`,
-      });
-    } catch (err) {
-      setBanner({ isError: true, message: formatAppError(err, 'Unlock failed') });
-    } finally {
-      setIsBusy(false);
-    }
-  };
-
   const handleDeleteStudent = async (st: StudentProfile) => {
     setIsBusy(true);
     try {
@@ -1528,28 +1130,21 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleAdminSignOut = useCallback(
-    async (noticeMessage?: string, isErrorNotice = true) => {
-      try {
-        await signOutAdminSession().catch(() => {});
-        setAuthUser(null);
-        setApprovedConfirmation(null);
-        setRoute({ name: 'public', tab: 'quiz' });
-        if (noticeMessage) {
-          setBanner({ isError: isErrorNotice, message: noticeMessage });
-        }
-      } catch (err) {
-        setBanner({
-          isError: true,
-          message: formatAppError(err, 'Sign out error'),
-        });
-      }
-    },
-    [formatAppError]
-  );
+  const handleAdminSignOut = useCallback(async () => {
+    try {
+      await signOutAdminSession().catch(() => {});
+      setAuthUser(null);
+      setApprovedConfirmation(null);
+      setRoute({ name: 'public', tab: 'quiz' });
+    } catch (err) {
+      setBanner({
+        isError: true,
+        message: formatAppError(err, 'Sign out error'),
+      });
+    }
+  }, [formatAppError]);
 
   const handleAdminLoginSuccess = (result: AdminPasscodeAuthResult) => {
-    lastAdminTakeoverAtRef.current = Date.now();
     setAuthUser(result.user);
     setSyncVersion((v) => v + 1);
     setRoute({ name: 'public', tab: 'admin' });
@@ -1562,65 +1157,18 @@ export const App: React.FC = () => {
     });
   };
 
-  // Enforce single-device session for Admin (if Admin signs in on another device, sign out here automatically)
-  useEffect(() => {
-    if (!isFirebaseAdmin) return;
-    const unsub = observeAdminSessionDevice((remoteDeviceId) => {
-      const cleanRemote = (remoteDeviceId ?? '').trim();
-      const myDeviceId = getCurrentDeviceIdentity().deviceId;
-      if (
-        cleanRemote &&
-        cleanRemote !== myDeviceId &&
-        Date.now() - lastAdminTakeoverAtRef.current > 4500
-      ) {
-        void handleAdminSignOut(t.deviceKickedOutMsg, true);
-      }
-    });
-    return () => unsub();
-  }, [handleAdminSignOut, isFirebaseAdmin, t.deviceKickedOutMsg]);
-
-  // Track document visibility + verify active device session cleanly (throttled inside repository)
+  // Track document visibility + refresh student profile unlocks on resume (throttled inside repository)
   useEffect(() => {
     const onVisibility = () => {
       const visible = document.visibilityState !== 'hidden';
       setIsDocumentVisible(visible);
       if (!visible) return;
-      if (!hasValidMobile && !isFirebaseAdmin) return;
-      void verifyActiveSessionOnResume(
-        hasValidMobile ? studentDocId : undefined,
-        isFirebaseAdmin
-      ).then((res) => {
-        const myDeviceId = getCurrentDeviceIdentity().deviceId;
-        if (res.studentProfile && hasValidMobile) {
-          const remoteDev = (res.studentProfile.activeDeviceId ?? '').trim();
-          if (
-            remoteDev &&
-            remoteDev !== myDeviceId &&
-            Date.now() - lastStudentTakeoverAtRef.current > 4500
-          ) {
-            clearLocalStudentSession(t.deviceKickedOutMsg, true);
-          }
-        }
-        if (
-          res.adminDeviceId &&
-          isFirebaseAdmin &&
-          res.adminDeviceId !== myDeviceId &&
-          Date.now() - lastAdminTakeoverAtRef.current > 4500
-        ) {
-          void handleAdminSignOut(t.deviceKickedOutMsg, true);
-        }
-      });
+      if (!hasValidMobile) return;
+      void verifyActiveSessionOnResume(studentDocId);
     };
     document.addEventListener('visibilitychange', onVisibility);
     return () => document.removeEventListener('visibilitychange', onVisibility);
-  }, [
-    clearLocalStudentSession,
-    handleAdminSignOut,
-    hasValidMobile,
-    isFirebaseAdmin,
-    studentDocId,
-    t.deviceKickedOutMsg,
-  ]);
+  }, [hasValidMobile, studentDocId]);
 
   const handleLoadMorePayments = async () => {
     if (isLoadingMorePayments || allPayments.length === 0) return;
@@ -1774,9 +1322,8 @@ export const App: React.FC = () => {
           onTestUpdateCheck={() => void checkForUpdates(true)}
           onDeletePayment={handleDeletePayment}
           onDeleteCode={handleDeleteCode}
-          onUnlockStudentDevice={handleUnlockStudentDevice}
           onDeleteStudent={handleDeleteStudent}
-          onNotify={(msg) => setBanner({ isError: false, message: msg })}
+          onNotify={(msg, isErr) => setBanner({ isError: Boolean(isErr), message: msg })}
         />
       </Suspense>
     );
@@ -1795,14 +1342,12 @@ export const App: React.FC = () => {
             hasQuizAccess={hasAccess}
             studentName={effectiveStudentName}
             studentMobile={savedUserMeta.mobile}
-            studentEmail={gmailSession?.email || ''}
             myPayments={myPayments}
             isBusy={isBusy}
             onBack={() => setRoute({ name: 'public', tab: 'quiz' })}
             onStartChapterQuiz={(ch) =>
               setRoute({ name: 'quiz', subjectId: subject.id, chapterId: ch.id })
             }
-            onLinkedMobileSaved={handleLinkedMobileSaved}
             onSubmitPayment={handleSubmitPayment}
             onRedeemCode={handleRedeemCode}
             onNotify={(msg, isErr) => setBanner({ isError: Boolean(isErr), message: msg })}
@@ -1848,7 +1393,6 @@ export const App: React.FC = () => {
                           }
                         : prev
                     );
-                    scheduleDriveBackup(400);
                   }
                 })
                 .catch(() => {});
@@ -1868,7 +1412,6 @@ export const App: React.FC = () => {
           isStudentLoggedIn={isStudentLoggedIn}
           studentName={effectiveStudentName}
           studentMobile={savedUserMeta.mobile}
-          studentEmail={gmailSession?.email || ''}
           isAdmin={isAdmin}
           adminBadgeCount={liveAlerts.length || pendingBadge}
           isDarkTheme={isDarkTheme}
@@ -1883,24 +1426,18 @@ export const App: React.FC = () => {
               initialName={savedUserMeta.name}
               initialMobile={savedUserMeta.mobile}
               onLoginSuccess={handleStudentLogin}
-              onGmailLoginSuccess={handleGmailLoginSuccess}
               onAdminAuthenticated={handleAdminLoginSuccess}
             />
           ) : (
             <UseCodeScreen
               studentName={effectiveStudentName}
               studentMobile={savedUserMeta.mobile}
-              studentEmail={gmailSession?.email || ''}
-              driveStatus={driveStatus}
               syncStatus={syncStatus}
               unlockedSubjects={effectiveUnlockedSubjects}
               myPayments={myPayments}
               recentAttempts={myAttempts}
               prefilledCode={prefilledCode}
               isBusy={isBusy}
-              onSyncDriveNow={() => void handleSyncDriveNow()}
-              onReconnectDrive={() => void handleReconnectDrive()}
-              onLinkedMobileSaved={handleLinkedMobileSaved}
               onSubmitPayment={handleSubmitPayment}
               onRedeemCode={handleRedeemCode}
               onOpenSubject={(subjectId) => setRoute({ name: 'subject', subjectId })}
@@ -1916,7 +1453,82 @@ export const App: React.FC = () => {
     <>
       {bodyNode}
 
-      {banner && (
+      {banner && isAdmin && (
+        <div
+          className="fixed top-3 inset-x-0 z-[70] flex justify-center px-3 pt-[env(safe-area-inset-top)] pointer-events-none"
+          data-testid="admin_top_popup"
+        >
+          <div
+            role="alert"
+            aria-live="assertive"
+            className={`admin-top-popup pointer-events-auto max-w-md w-full rounded-2xl p-3.5 shadow-2xl backdrop-blur-md border-2 flex items-start gap-3 ${
+              banner.isError
+                ? 'bg-[#FEF2F2]/95 dark:bg-[#450A0A]/95 text-[#7F1D1D] dark:text-[#FEE2E2] border-[#DC2626]'
+                : 'bg-white/95 dark:bg-[#0F172A]/95 text-[#0F172A] dark:text-[#F8FAFC] border-[#1E3A8A] dark:border-[#3B82F6]'
+            }`}
+          >
+            <div
+              className={`h-9 w-9 rounded-xl flex items-center justify-center shrink-0 ${
+                banner.isError
+                  ? 'bg-[#DC2626] text-white'
+                  : 'bg-[#1E3A8A] dark:bg-[#2563EB] text-white'
+              }`}
+            >
+              {banner.isError ? (
+                <AlertTriangle className="h-4 w-4" />
+              ) : (
+                <BellRing className="h-4 w-4 animate-bounce" />
+              )}
+            </div>
+
+            <div className="min-w-0 flex-1 space-y-1">
+              <div className="flex items-center justify-between gap-2">
+                <span
+                  className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wide ${
+                    banner.isError
+                      ? 'bg-[#FEE2E2] dark:bg-[#7F1D1D] text-[#991B1B] dark:text-[#FECACA]'
+                      : 'bg-[#DBEAFE] dark:bg-[#1E3A8A] text-[#1E3A8A] dark:text-[#DBEAFE]'
+                  }`}
+                >
+                  {banner.isError
+                    ? lang === 'en'
+                      ? 'Admin Alert'
+                      : 'એડમિન એલર્ટ'
+                    : lang === 'en'
+                      ? 'Admin Notification'
+                      : 'એડમિન મેસેજ'}
+                </span>
+              </div>
+              <p className="text-xs sm:text-sm font-bold leading-snug break-words">
+                {banner.message}
+              </p>
+              {(route.name !== 'public' || route.tab !== 'admin') && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRoute({ name: 'public', tab: 'admin' });
+                    setBanner(null);
+                  }}
+                  className="mt-1 inline-flex items-center rounded-lg bg-[#1E3A8A] hover:bg-[#172554] dark:bg-[#2563EB] text-white px-2.5 py-1 text-[11px] font-extrabold cursor-pointer"
+                >
+                  {lang === 'en' ? 'Open Admin Panel' : 'એડમિન પેનલ ખોલો'}
+                </button>
+              )}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setBanner(null)}
+              aria-label={t.closeBtn}
+              className="h-9 w-9 rounded-xl hover:bg-black/10 dark:hover:bg-white/10 flex items-center justify-center cursor-pointer shrink-0"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {banner && !isAdmin && (
         <div className="fixed bottom-4 inset-x-0 z-50 flex justify-center px-4 pointer-events-none">
           <div
             role="status"

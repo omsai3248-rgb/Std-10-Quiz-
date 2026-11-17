@@ -23,12 +23,10 @@ interface SubjectChaptersScreenProps {
   hasQuizAccess: boolean;
   studentName: string;
   studentMobile: string;
-  studentEmail?: string;
   myPayments: PaymentRequest[];
   isBusy?: boolean;
   onBack: () => void;
   onStartChapterQuiz: (chapter: QuizChapter) => void;
-  onLinkedMobileSaved?: (mobile: string) => void;
   onSubmitPayment: (params: {
     studentName: string;
     mobileNumber: string;
@@ -52,12 +50,10 @@ export const SubjectChaptersScreen: React.FC<SubjectChaptersScreenProps> = ({
   hasQuizAccess,
   studentName,
   studentMobile,
-  studentEmail = '',
   myPayments,
   isBusy = false,
   onBack,
   onStartChapterQuiz,
-  onLinkedMobileSaved,
   onSubmitPayment,
   onRedeemCode,
   onNotify,
@@ -218,11 +214,9 @@ export const SubjectChaptersScreen: React.FC<SubjectChaptersScreenProps> = ({
         initialMode={modalMode ?? 'pay'}
         studentName={studentName}
         studentMobile={studentMobile}
-        studentEmail={studentEmail}
         myPayments={myPayments}
         isBusy={isBusy}
         onClose={() => setModalMode(null)}
-        onMobileNumberUpdate={onLinkedMobileSaved}
         onSubmitPayment={onSubmitPayment}
         onRedeemCode={onRedeemCode}
         onNotify={onNotify}

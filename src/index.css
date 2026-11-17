@@ -97,3 +97,18 @@
   font-weight: 500;
 }
 
+@keyframes adminTopPopupEnter {
+  0% {
+    opacity: 0;
+    transform: translateY(-16px) scale(0.96);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.admin-top-popup {
+  animation: adminTopPopupEnter 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+

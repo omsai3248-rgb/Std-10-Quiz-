@@ -37,14 +37,7 @@ export interface Translations {
   returningAccountTitle: string;
   returningAccountLoaded: string;
   checkingAccountLabel: string;
-  singleDeviceNote: string;
-  deviceLockedOnLabel: string;
-  deviceKickedOutMsg: string;
   returningWelcomeMsg: string;
-  deviceActiveBadge: string;
-  deviceFreeBadge: string;
-  unlockDeviceBtn: string;
-  unlockDeviceSuccess: string;
   unlockSingleSubjectLabel: string;
   unlockAllSubjectsLabel: string;
   fixedPriceBadge: string;
@@ -199,26 +192,6 @@ export interface Translations {
   errCodeAlreadyUsed: string;
   errAlreadyApproved: string;
 
-  // Student Gmail & Google Drive
-  loginWithGmailTitle: string;
-  loginWithGmailDesc: string;
-  loginWithGmailBtn: string;
-  loginWithGmailLoading: string;
-  orMobileDivider: string;
-  gmailDriveSyncedBadge: string;
-  gmailDriveSyncingBadge: string;
-  gmailDriveOfflineBadge: string;
-  gmailDriveNeedsReconnectBadge: string;
-  gmailDriveErrorBadge: string;
-  gmailDriveReconnectBtn: string;
-  gmailDriveSyncNowBtn: string;
-  gmailDriveLastSyncLabel: string;
-  gmailWelcomeRestored: string;
-  fieldOptionalLinkedMobile: string;
-  errPopupBlocked: string;
-  errGoogleDriveAuthFailed: string;
-  errGoogleEmailMissing: string;
-
   // Smart Live Sync & Quota/Offline
   syncStatusTitle: string;
   syncInternetLabel: string;
@@ -278,14 +251,7 @@ const GU: Translations = {
   returningAccountTitle: 'તમારું જૂનું એકાઉન્ટ મળી ગયું!',
   returningAccountLoaded: 'અનલૉક વિષયો અને ક્વિઝ વિગતો આપમેળે લોડ થઈ જશે.',
   checkingAccountLabel: 'એકાઉન્ટ વિગત તપાસાઈ રહી છે...',
-  singleDeviceNote: 'આ નંબરથી નવા ડિવાઇસમાં લૉગિન કરતાં જ જૂના ડિવાઇસમાંથી આપમેળે લૉગ આઉટ થઈ જશે.',
-  deviceLockedOnLabel: 'અહીં લૉગિન કરવાથી જૂના ડિવાઇસમાંથી આપમેળે લૉગ આઉટ થશે:',
-  deviceKickedOutMsg: 'આ નંબરથી અન્ય ડિવાઇસ પર લૉગિન થયું હોવાથી (અથવા એડમિન અનલૉક થવાથી) અહીંથી આપમેળે લૉગ આઉટ થયું છે.',
   returningWelcomeMsg: 'ફરી સ્વાગત છે! તમારી જૂની વિગતો અને અનલૉક વિષયો લોડ થઈ ગયા છે.',
-  deviceActiveBadge: 'લૉગિન ચાલુ',
-  deviceFreeBadge: 'લૉગ આઉટ / ફ્રી',
-  unlockDeviceBtn: 'ડિવાઇસ અનલૉક કરો',
-  unlockDeviceSuccess: 'જૂના ડિવાઇસનું સેશન લૉગ આઉટ કરી દેવાયું છે.',
   unlockSingleSubjectLabel: 'માત્ર આ વિષય',
   unlockAllSubjectsLabel: 'બધા વિષયો (ગણિત + વિજ્ઞાન + સા.વિ.)',
   fixedPriceBadge: 'ફિક્સ ફી',
@@ -438,26 +404,6 @@ const GU: Translations = {
   errCodeAlreadyUsed: 'આ કોડ પહેલેથી વપરાઈ ચૂક્યો છે! એક કોડ ફક્ત એક જ વાર વાપરી શકાય છે.',
   errAlreadyApproved: 'આ વિનંતી પહેલેથી પ્રોસેસ થઈ ચૂકી છે.',
 
-  loginWithGmailTitle: 'Gmail ID થી લૉગિન (Google Drive બેકઅપ)',
-  loginWithGmailDesc:
-    'તમારા Gmail થી લૉગિન કરો — તમારા અનલૉક વિષયો, કોડ અને તમામ ક્વિઝ પરિણામો સીધા તમારી Google Drive માં સુરક્ષિત રહેશે. ગમે ત્યારે ફરી Gmail થી લૉગિન કરી બધો ડેટા પાછો મેળવો.',
-  loginWithGmailBtn: 'Gmail વડે લૉગિન કરો',
-  loginWithGmailLoading: 'Gmail અને Google Drive જોડાઈ રહ્યું છે...',
-  orMobileDivider: 'અથવા મોબાઇલ નંબરથી લૉગિન',
-  gmailDriveSyncedBadge: 'Google Drive સેવ ✓',
-  gmailDriveSyncingBadge: 'Drive સિંક ચાલુ...',
-  gmailDriveOfflineBadge: 'ઓફલાઇન (સ્થાનિક સેવ)',
-  gmailDriveNeedsReconnectBadge: 'Drive ફરી જોડો',
-  gmailDriveErrorBadge: 'Drive સિંક ભૂલ',
-  gmailDriveReconnectBtn: 'Drive જોડો',
-  gmailDriveSyncNowBtn: 'Drive સિંક',
-  gmailDriveLastSyncLabel: 'છેલ્લું Drive સિંક:',
-  gmailWelcomeRestored: 'તમારું Gmail એકાઉન્ટ અને Google Drive ડેટા લોડ થઈ ગયો છે!',
-  fieldOptionalLinkedMobile: 'પેમેન્ટ / કોડ માટે ૧૦ અંકનો મોબાઇલ નંબર નાખો *',
-  errPopupBlocked: 'બ્રાઉઝરે Google લૉગિન પોપઅપ બ્લોક કર્યું છે. કૃપા કરીને પોપઅપ Allow કરી ફરી પ્રયાસ કરો.',
-  errGoogleDriveAuthFailed: 'Google Drive જોડાણ પૂર્ણ થઈ શક્યું નથી. કૃપા કરીને ફરી પ્રયાસ કરો.',
-  errGoogleEmailMissing: 'Google એકાઉન્ટમાંથી Gmail સરનામું મળ્યું નથી.',
-
   syncStatusTitle: 'સ્માર્ટ લાઇવ સિંક સ્ટેટસ',
   syncInternetLabel: 'ઇન્ટરનેટ સ્ટેટસ',
   syncInternetOnline: 'Online',
@@ -518,14 +464,7 @@ const EN: Translations = {
   returningAccountTitle: 'Existing Account Found!',
   returningAccountLoaded: 'Your saved details and unlocked subjects will be restored automatically.',
   checkingAccountLabel: 'Checking saved account...',
-  singleDeviceNote: 'Logging in on a new device will automatically log out this number from the previous device.',
-  deviceLockedOnLabel: 'Logging in here will automatically sign out:',
-  deviceKickedOutMsg: 'Signed out automatically because this number logged in on another device (or was unlocked by Admin).',
   returningWelcomeMsg: 'Welcome back! Your saved profile and unlocked subjects have been restored.',
-  deviceActiveBadge: 'Active Device',
-  deviceFreeBadge: 'Logged Out / Free',
-  unlockDeviceBtn: 'Unlock Device',
-  unlockDeviceSuccess: 'Previous device session has been signed out.',
   unlockSingleSubjectLabel: 'Single Subject Only',
   unlockAllSubjectsLabel: 'All Subjects (Maths + Science + SS)',
   fixedPriceBadge: 'Fixed Price',
@@ -678,26 +617,6 @@ const EN: Translations = {
   errCodeNotFound: 'This access code is invalid or does not exist.',
   errCodeAlreadyUsed: 'This access code has already been used and cannot be reused.',
   errAlreadyApproved: 'This request has already been processed.',
-
-  loginWithGmailTitle: 'Login with Gmail (Google Drive Backup)',
-  loginWithGmailDesc:
-    'Sign in with Gmail — all unlocked subjects, codes, and quiz progress are saved directly in your own Google Drive so you can restore anytime on any device.',
-  loginWithGmailBtn: 'Continue with Gmail',
-  loginWithGmailLoading: 'Connecting Gmail & Google Drive...',
-  orMobileDivider: 'OR LOGIN WITH MOBILE NUMBER',
-  gmailDriveSyncedBadge: 'Google Drive Synced ✓',
-  gmailDriveSyncingBadge: 'Syncing Drive...',
-  gmailDriveOfflineBadge: 'Offline (Saved Locally)',
-  gmailDriveNeedsReconnectBadge: 'Reconnect Drive',
-  gmailDriveErrorBadge: 'Drive Sync Error',
-  gmailDriveReconnectBtn: 'Reconnect Drive',
-  gmailDriveSyncNowBtn: 'Sync Drive',
-  gmailDriveLastSyncLabel: 'Last Drive Sync:',
-  gmailWelcomeRestored: 'Gmail account & Google Drive data restored!',
-  fieldOptionalLinkedMobile: 'Enter 10-digit Mobile Number for Payment / Code *',
-  errPopupBlocked: 'Popup was blocked by browser. Please allow popups and try again.',
-  errGoogleDriveAuthFailed: 'Could not connect Google Drive. Please try again.',
-  errGoogleEmailMissing: 'No Gmail address was returned from Google Sign-In.',
 
   syncStatusTitle: 'Smart Live Sync Status',
   syncInternetLabel: 'Internet Status',

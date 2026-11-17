@@ -36,12 +36,3 @@ storage.maxOperationRetryTime = 8000;
 
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
-
-export const studentGoogleProvider = new GoogleAuthProvider();
-studentGoogleProvider.addScope('https://www.googleapis.com/auth/drive.file');
-studentGoogleProvider.addScope('https://www.googleapis.com/auth/userinfo.email');
-studentGoogleProvider.addScope('https://www.googleapis.com/auth/userinfo.profile');
-studentGoogleProvider.setCustomParameters({
-  prompt: 'select_account',
-  include_granted_scopes: 'true',
-});

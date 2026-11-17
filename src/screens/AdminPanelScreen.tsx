@@ -111,9 +111,8 @@ interface AdminPanelScreenProps {
   onTestUpdateCheck: () => void;
   onDeletePayment: (req: PaymentRequest) => Promise<void> | void;
   onDeleteCode: (code: AccessCode) => Promise<void> | void;
-  onUnlockStudentDevice: (student: StudentProfile) => Promise<void> | void;
   onDeleteStudent: (student: StudentProfile) => Promise<void> | void;
-  onNotify?: (message: string) => void;
+  onNotify?: (message: string, isError?: boolean) => void;
 }
 
 type PendingDeleteTarget =
@@ -161,7 +160,6 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
   onTestUpdateCheck,
   onDeletePayment,
   onDeleteCode,
-  onUnlockStudentDevice,
   onDeleteStudent,
   onNotify,
 }) => {
@@ -635,7 +633,6 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
             onLoadMore={onLoadMoreStudents}
             onToggleStudentAccess={onToggleStudentAccess}
             onUpdateStudentSubjectAccess={onUpdateStudentSubjectAccess}
-            onUnlockStudentDevice={(st) => void onUnlockStudentDevice(st)}
             onDeleteStudent={(st) =>
               openDeleteModal({
                 kind: 'student',

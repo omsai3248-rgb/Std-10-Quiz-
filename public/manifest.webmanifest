@@ -1,7 +1,7 @@
 {
   "name": "ધોરણ 10 ક્વિઝ",
   "short_name": "ધોરણ 10 ક્વિઝ",
-  "description": "Std 10 Gujarati Quiz App (Maths, Science, Social Science) with Google Drive student backup, UPI verification & live sync.",
+  "description": "Std 10 Gujarati Quiz App (Maths, Science, Social Science) with offline caching, UPI verification & live sync.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#FAF9F5",

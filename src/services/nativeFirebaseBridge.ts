@@ -23,13 +23,11 @@ export interface AppAuthUser {
 interface AndroidFirebaseBridgeApi {
   hasNativeFirebase?: () => boolean;
   getFirebaseConfigSummary?: () => string;
-  getDeviceSessionIdentity?: () => string;
   getCurrentAuthUser?: () => string;
   requestGoogleSignIn?: (callId: string) => void;
   signOutGoogle?: (callId: string) => void;
   lookupStudentProfile?: (callId: string, mobileNumber: string) => void;
-  loginStudentWithDeviceLock?: (callId: string, payloadJson: string) => void;
-  releaseStudentDeviceLock?: (callId: string, payloadJson: string) => void;
+  loginStudentByMobile?: (callId: string, payloadJson: string) => void;
   registerOrUpdateStudentProfile?: (callId: string, payloadJson: string) => void;
   startStudentListeners?: (studentId: string) => void;
   stopStudentListeners?: () => void;
@@ -48,14 +46,12 @@ interface AndroidFirebaseBridgeApi {
   saveReleaseConfig?: (callId: string, payloadJson: string) => void;
   toggleStudentQuizAccess?: (callId: string, payloadJson: string) => void;
   updateStudentSubjectAccess?: (callId: string, payloadJson: string) => void;
-  adminUnlockStudentDevice?: (callId: string, payloadJson: string) => void;
   deletePaymentRequest?: (callId: string, payloadJson: string) => void;
   deleteAccessCode?: (callId: string, payloadJson: string) => void;
   deleteStudent?: (callId: string, payloadJson: string) => void;
   generateDirectCodeForMobile?: (callId: string, payloadJson: string) => void;
   setActiveStudentMobile?: (mobileOrId: string) => void;
   getActiveStudentSnapshot?: () => string;
-  claimAdminSessionDevice?: (callId: string, payloadJson: string) => void;
   verifyActiveSessionNow?: () => void;
   pauseAdminListeners?: () => void;
   resumeAdminListeners?: () => void;
@@ -68,7 +64,6 @@ declare global {
     __resolveNativeFirebaseCall?: (callId: string, ok: boolean, payload: unknown) => void;
     __onNativeAuthStateChanged?: (user: AppAuthUser | null) => void;
     __onNativeReleaseConfig?: (cfg: AppReleaseConfig | null) => void;
-    __onNativeAdminSessionDevice?: (deviceId: string) => void;
     __onNativeMyPayments?: (list: PaymentRequest[]) => void;
     __onNativeStudentProfile?: (profile: StudentProfile | null) => void;
     __onNativeMyAttempts?: (list: QuizAttempt[]) => void;
@@ -141,7 +136,6 @@ const pendingCalls = new Map<
 
 const authListeners = new Set<(user: AppAuthUser | null) => void>();
 const releaseListeners = new Set<(cfg: AppReleaseConfig | null) => void>();
-const adminSessionDeviceListeners = new Set<(deviceId: string) => void>();
 const myPaymentListeners = new Set<(list: PaymentRequest[]) => void>();
 const studentProfileListeners = new Set<(profile: StudentProfile | null) => void>();
 const myAttemptListeners = new Set<(list: QuizAttempt[]) => void>();
@@ -152,7 +146,6 @@ const adminErrorListeners = new Set<(err: Error) => void>();
 
 let latestAuthUser: AppAuthUser | null | undefined;
 let latestReleaseConfig: AppReleaseConfig | null | undefined;
-let latestAdminSessionDevice: string | undefined;
 let latestMyPayments: PaymentRequest[] | undefined;
 let latestStudentProfile: StudentProfile | null | undefined;
 let latestMyAttempts: QuizAttempt[] | undefined;
@@ -180,11 +173,6 @@ if (typeof window !== 'undefined') {
   window.__onNativeReleaseConfig = (cfg) => {
     latestReleaseConfig = cfg ?? null;
     releaseListeners.forEach((cb) => cb(latestReleaseConfig ?? null));
-  };
-
-  window.__onNativeAdminSessionDevice = (deviceId) => {
-    latestAdminSessionDevice = typeof deviceId === 'string' ? deviceId : '';
-    adminSessionDeviceListeners.forEach((cb) => cb(latestAdminSessionDevice!));
   };
 
   window.__onNativeMyPayments = (list) => {
@@ -292,8 +280,7 @@ function maybeStopNativeAdminListeners(): void {
     allPaymentListeners.size === 0 &&
     allCodeListeners.size === 0 &&
     allStudentListeners.size === 0 &&
-    releaseListeners.size === 0 &&
-    adminSessionDeviceListeners.size === 0
+    releaseListeners.size === 0
   ) {
     adminListenersStarted = false;
     setLiveSyncState('paused');
@@ -347,22 +334,6 @@ export function subscribeNativeReleaseConfig(
     releaseListeners.delete(cb);
     maybeStopNativeAdminListeners();
   };
-}
-
-export function subscribeNativeAdminSessionDevice(
-  cb: (deviceId: string) => void
-): () => void {
-  adminSessionDeviceListeners.add(cb);
-  if (latestAdminSessionDevice !== undefined) cb(latestAdminSessionDevice);
-  ensureNativeAdminListenersStarted();
-  return () => {
-    adminSessionDeviceListeners.delete(cb);
-    maybeStopNativeAdminListeners();
-  };
-}
-
-export function resetNativeAdminSessionDeviceCache(): void {
-  latestAdminSessionDevice = undefined;
 }
 
 export function triggerNativeActiveSessionCheck(): void {

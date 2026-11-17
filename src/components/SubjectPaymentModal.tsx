@@ -56,11 +56,9 @@ interface SubjectPaymentModalProps {
   initialCode?: string;
   studentName: string;
   studentMobile: string;
-  studentEmail?: string;
   myPayments: PaymentRequest[];
   isBusy: boolean;
   onClose: () => void;
-  onMobileNumberUpdate?: (mobile: string) => void;
   onSubmitPayment: (params: {
     studentName: string;
     mobileNumber: string;
@@ -86,11 +84,9 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
   initialCode = '',
   studentName,
   studentMobile,
-  studentEmail = '',
   myPayments,
   isBusy,
   onClose,
-  onMobileNumberUpdate,
   onSubmitPayment,
   onRedeemCode,
   onNotify,
@@ -257,11 +253,9 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
       return;
     }
 
-    onMobileNumberUpdate?.(effectiveMobile);
-
     try {
       const reqId = await onSubmitPayment({
-        studentName: studentName || studentEmail.split('@')[0] || 'Student',
+        studentName: studentName || 'Student',
         mobileNumber: effectiveMobile,
         amountRupees: fixedAmount,
         upiTransactionRef: '',
@@ -286,7 +280,7 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
       relevantPayments.length > 0 ? resolvePaymentImageSrc(relevantPayments[0]) : '';
     const effectivePreviewUrl = previewDataUrl || lastPreviewUrl || latestSubmittedThumb;
     launchWhatsAppPaymentWithScreenshot({
-      studentName: studentName || studentEmail.split('@')[0] || 'Student',
+      studentName: studentName || 'Student',
       mobileNumber: effectiveMobile,
       amountRupees: fixedAmount,
       subjectId: selectedPlanSubject,
@@ -306,11 +300,10 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
       setLocalError(t.errInvalidCodeFormat);
       return;
     }
-    onMobileNumberUpdate?.(effectiveMobile);
     try {
       const res = await onRedeemCode({
         code: cleaned,
-        name: studentName || studentEmail.split('@')[0] || 'Student',
+        name: studentName || 'Student',
         mobile: effectiveMobile,
         expectedSubjectId: defaultSubjectId === 'all' ? undefined : defaultSubjectId,
       });
@@ -330,11 +323,10 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
       setLocalError(t.errInvalidMobile);
       return;
     }
-    onMobileNumberUpdate?.(mob);
     try {
       const res = await onRedeemCode({
         code: req.assignedCode,
-        name: studentName || studentEmail.split('@')[0] || 'Student',
+        name: studentName || 'Student',
         mobile: mob,
         expectedSubjectId: defaultSubjectId === 'all' ? undefined : defaultSubjectId,
       });
@@ -370,7 +362,7 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
               </h3>
               <p className="text-xs text-[#475569] dark:text-[#94A3B8] truncate">
                 {studentName}
-                {studentMobile ? ` • +91 ${studentMobile}` : studentEmail ? ` • ${studentEmail}` : ''}
+                {studentMobile ? ` • +91 ${studentMobile}` : ''}
               </p>
             </div>
           </div>
@@ -622,7 +614,7 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
                     htmlFor="modal-pay-mobile-input"
                     className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1"
                   >
-                    {t.fieldOptionalLinkedMobile}
+                    {t.fieldMobile}
                   </label>
                   <div className="flex items-center rounded-xl border border-[#CBD5E1] dark:border-[#334155] bg-[#FAF9F5] dark:bg-[#0F172A] px-3.5 h-12 focus-within:border-[#1E3A8A]">
                     <Smartphone className="h-4 w-4 text-slate-400 mr-2 shrink-0" />
@@ -825,7 +817,7 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
                   htmlFor="modal-code-mobile-input"
                   className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1"
                 >
-                  {t.fieldOptionalLinkedMobile}
+                  {t.fieldMobile}
                 </label>
                 <div className="flex items-center rounded-xl border border-[#CBD5E1] dark:border-[#334155] bg-[#FAF9F5] dark:bg-[#0F172A] px-3.5 h-12 focus-within:border-[#1E3A8A]">
                   <Smartphone className="h-4 w-4 text-slate-400 mr-2 shrink-0" />
