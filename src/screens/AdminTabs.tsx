@@ -245,11 +245,35 @@ const DetailRow: React.FC<{ label: string; value: string }> = ({ label, value })
   </div>
 );
 
+const LoadMoreButton: React.FC<{
+  hasMore?: boolean;
+  isLoadingMore?: boolean;
+  onLoadMore?: () => void;
+}> = ({ hasMore, isLoadingMore, onLoadMore }) => {
+  const { t } = useTranslation();
+  if (!hasMore || !onLoadMore) return null;
+  return (
+    <div className="pt-2 flex justify-center">
+      <button
+        type="button"
+        disabled={isLoadingMore}
+        onClick={onLoadMore}
+        className="min-h-[48px] px-6 rounded-xl border border-[#CBD5E1] dark:border-[#334155] bg-white dark:bg-[#1E293B] hover:bg-slate-50 dark:hover:bg-slate-800 text-xs sm:text-sm font-extrabold text-[#1E3A8A] dark:text-[#93C5FD] transition-colors disabled:opacity-60 cursor-pointer"
+      >
+        {isLoadingMore ? t.loadingMoreBtn : t.loadMoreBtn}
+      </button>
+    </div>
+  );
+};
+
 /* --- Tab 1: Live Payment Requests --- */
 export const AdminRequestsTab: React.FC<{
   payments: PaymentRequest[];
   students: StudentProfile[];
   isBusy: boolean;
+  hasMore?: boolean;
+  isLoadingMore?: boolean;
+  onLoadMore?: () => void;
   onZoomScreenshot: (url: string) => void;
   onApprove: (req: PaymentRequest, adminNote: string, subjectId: string) => void;
   onReject: (req: PaymentRequest, reason: string) => void;
@@ -264,6 +288,9 @@ export const AdminRequestsTab: React.FC<{
   payments,
   students,
   isBusy,
+  hasMore,
+  isLoadingMore,
+  onLoadMore,
   onZoomScreenshot,
   onApprove,
   onReject,
@@ -351,6 +378,12 @@ export const AdminRequestsTab: React.FC<{
           ))}
         </div>
       )}
+
+      <LoadMoreButton
+        hasMore={hasMore}
+        isLoadingMore={isLoadingMore}
+        onLoadMore={onLoadMore}
+      />
     </div>
   );
 };
@@ -572,6 +605,9 @@ export const AdminAllCodesTab: React.FC<{
   students: StudentProfile[];
   lastGeneratedBatch: string[];
   isBusy: boolean;
+  hasMore?: boolean;
+  isLoadingMore?: boolean;
+  onLoadMore?: () => void;
   onGenerateBulkCodes: (count: number, batchName: string, subjectId: string) => void;
   onGenerateDirectCode: (params: {
     mobileNumber: string;
@@ -585,6 +621,9 @@ export const AdminAllCodesTab: React.FC<{
   students,
   lastGeneratedBatch,
   isBusy,
+  hasMore,
+  isLoadingMore,
+  onLoadMore,
   onGenerateBulkCodes,
   onGenerateDirectCode,
   onDeleteCode,
@@ -902,6 +941,12 @@ export const AdminAllCodesTab: React.FC<{
           })}
         </div>
       )}
+
+      <LoadMoreButton
+        hasMore={hasMore}
+        isLoadingMore={isLoadingMore}
+        onLoadMore={onLoadMore}
+      />
     </div>
   );
 };
@@ -1024,6 +1069,9 @@ export const AdminUsedCodesTab: React.FC<{
 export const AdminStudentsTab: React.FC<{
   students: StudentProfile[];
   isBusy: boolean;
+  hasMore?: boolean;
+  isLoadingMore?: boolean;
+  onLoadMore?: () => void;
   onToggleStudentAccess: (student: StudentProfile, grantAccess: boolean) => void;
   onUpdateStudentSubjectAccess: (
     student: StudentProfile,
@@ -1035,6 +1083,9 @@ export const AdminStudentsTab: React.FC<{
 }> = ({
   students,
   isBusy,
+  hasMore,
+  isLoadingMore,
+  onLoadMore,
   onToggleStudentAccess,
   onUpdateStudentSubjectAccess,
   onUnlockStudentDevice,
@@ -1204,6 +1255,12 @@ export const AdminStudentsTab: React.FC<{
           })}
         </div>
       )}
+
+      <LoadMoreButton
+        hasMore={hasMore}
+        isLoadingMore={isLoadingMore}
+        onLoadMore={onLoadMore}
+      />
     </div>
   );
 };

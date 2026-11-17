@@ -4,6 +4,8 @@ import {
   ArrowLeft,
   Bell,
   CheckCircle2,
+  Clock,
+  Cloud,
   Copy,
   Eye,
   EyeOff,
@@ -20,10 +22,17 @@ import {
   Volume2,
   VolumeX,
   Wallet,
+  Wifi,
+  WifiOff,
   X,
 } from 'lucide-react';
 import { useTranslation } from '../i18n/translations';
 import { ADMIN_PASSCODE, type DirectMobileCodeResult } from '../services/quizRepository';
+import {
+  formatLastSyncDateTime,
+  resetFailedOperationsForRetry,
+  type SyncStatusSnapshot,
+} from '../services/syncManager';
 import {
   displayPaymentTransactionRef,
   getSubjectDisplayName,
@@ -66,10 +75,21 @@ interface AdminPanelScreenProps {
   currentVersionName: string;
   isBusy: boolean;
   isCheckingUpdate: boolean;
+  syncStatus: SyncStatusSnapshot;
+  hasMorePayments?: boolean;
+  isLoadingMorePayments?: boolean;
+  onLoadMorePayments?: () => void;
+  hasMoreCodes?: boolean;
+  isLoadingMoreCodes?: boolean;
+  onLoadMoreCodes?: () => void;
+  hasMoreStudents?: boolean;
+  isLoadingMoreStudents?: boolean;
+  onLoadMoreStudents?: () => void;
   approvedConfirmation?: PaymentRequest | null;
   onDismissApprovedConfirmation?: () => void;
   onBackToPublic: () => void;
   onForceSync: () => void;
+  onSyncNow: () => void;
   onToggleSound: () => void;
   onClearAlerts: () => void;
   onSignOut: () => void;
@@ -113,10 +133,21 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
   currentVersionName,
   isBusy,
   isCheckingUpdate,
+  syncStatus,
+  hasMorePayments = false,
+  isLoadingMorePayments = false,
+  onLoadMorePayments,
+  hasMoreCodes = false,
+  isLoadingMoreCodes = false,
+  onLoadMoreCodes,
+  hasMoreStudents = false,
+  isLoadingMoreStudents = false,
+  onLoadMoreStudents,
   approvedConfirmation = null,
   onDismissApprovedConfirmation,
   onBackToPublic,
   onForceSync,
+  onSyncNow,
   onToggleSound,
   onClearAlerts,
   onSignOut,
@@ -209,9 +240,21 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
                 <h1 className="text-sm sm:text-base font-extrabold truncate">
                   {t.adminPanelTitle}
                 </h1>
-                <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-extrabold shrink-0 bg-[#D1FAE5] dark:bg-[#064E3B] text-[#064E3B] dark:text-[#D1FAE5]">
-                  <Radio className="h-3 w-3 animate-pulse" />
-                  <span>{t.liveBadge}</span>
+                <span
+                  className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-extrabold shrink-0 ${
+                    syncStatus.liveSyncState === 'active'
+                      ? 'bg-[#D1FAE5] dark:bg-[#064E3B] text-[#064E3B] dark:text-[#D1FAE5]'
+                      : 'bg-[#FEF3C7] dark:bg-[#451A03] text-[#92400E] dark:text-[#FDE68A]'
+                  }`}
+                >
+                  <Radio
+                    className={`h-3 w-3 ${
+                      syncStatus.liveSyncState === 'active' ? 'animate-pulse' : ''
+                    }`}
+                  />
+                  <span>
+                    {syncStatus.liveSyncState === 'active' ? t.liveBadge : t.syncLivePaused}
+                  </span>
                 </span>
               </div>
               <p className="text-[11px] text-[#475569] dark:text-[#94A3B8] truncate tabular-nums">
@@ -384,11 +427,149 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
       </header>
 
       <main className="flex-1 max-w-6xl w-full mx-auto">
+        {/* Smart Live Sync Status Card (7 Telemetry Metrics + Sync Now) */}
+        <section className="px-3 sm:px-4 pt-3 space-y-2.5">
+          {(!syncStatus.isOnline || syncStatus.errorKind === 'quota') && (
+            <div className="rounded-2xl bg-[#FEF3C7] dark:bg-[#451A03]/70 border border-[#F59E0B]/40 p-3 flex items-start gap-2.5 text-xs font-semibold text-[#92400E] dark:text-[#FDE68A]">
+              <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+              <span>
+                {!syncStatus.isOnline ? t.offlineModeBanner : t.quotaCooldownBanner}
+              </span>
+            </div>
+          )}
+
+          <div
+            data-testid="admin_sync_status_card"
+            className="rounded-2xl bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] p-3.5 shadow-sm space-y-3"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Cloud className="h-4 w-4 text-[#1E3A8A] dark:text-[#93C5FD]" />
+                <h2 className="text-xs sm:text-sm font-extrabold">{t.syncStatusTitle}</h2>
+              </div>
+              <button
+                type="button"
+                data-testid="admin_sync_now_button"
+                disabled={syncStatus.isSyncing}
+                onClick={() => {
+                  resetFailedOperationsForRetry();
+                  onSyncNow();
+                }}
+                className="min-h-[44px] px-3.5 rounded-xl bg-[#1E3A8A] hover:bg-[#172554] dark:bg-[#2563EB] text-white text-xs font-extrabold inline-flex items-center gap-1.5 transition-colors disabled:opacity-60 cursor-pointer"
+              >
+                <RefreshCw
+                  className={`h-3.5 w-3.5 ${syncStatus.isSyncing ? 'animate-spin' : ''}`}
+                />
+                <span>{syncStatus.isSyncing ? t.syncingNowBtn : t.syncNowBtn}</span>
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 text-xs">
+              {/* 1. Internet Status */}
+              <div className="rounded-xl bg-[#EFF4FA] dark:bg-[#0F172A] px-2.5 py-2">
+                <p className="text-[10px] font-bold text-[#64748B] dark:text-[#94A3B8]">
+                  {t.syncInternetLabel}
+                </p>
+                <p
+                  className={`font-extrabold flex items-center gap-1 mt-0.5 ${
+                    syncStatus.isOnline
+                      ? 'text-[#047857] dark:text-[#6EE7B7]'
+                      : 'text-[#DC2626] dark:text-[#FCA5A5]'
+                  }`}
+                >
+                  {syncStatus.isOnline ? (
+                    <Wifi className="h-3.5 w-3.5 shrink-0" />
+                  ) : (
+                    <WifiOff className="h-3.5 w-3.5 shrink-0" />
+                  )}
+                  <span>{syncStatus.isOnline ? t.syncInternetOnline : t.syncInternetOffline}</span>
+                </p>
+              </div>
+
+              {/* 2. Server Connection */}
+              <div className="rounded-xl bg-[#EFF4FA] dark:bg-[#0F172A] px-2.5 py-2">
+                <p className="text-[10px] font-bold text-[#64748B] dark:text-[#94A3B8]">
+                  {t.syncServerLabel}
+                </p>
+                <p
+                  className={`font-extrabold mt-0.5 ${
+                    syncStatus.serverConnected
+                      ? 'text-[#047857] dark:text-[#6EE7B7]'
+                      : 'text-[#D97706] dark:text-[#FCD34D]'
+                  }`}
+                >
+                  {syncStatus.serverConnected
+                    ? t.syncServerConnected
+                    : t.syncServerDisconnected}
+                </p>
+              </div>
+
+              {/* 3. Live Sync */}
+              <div className="rounded-xl bg-[#EFF4FA] dark:bg-[#0F172A] px-2.5 py-2">
+                <p className="text-[10px] font-bold text-[#64748B] dark:text-[#94A3B8]">
+                  {t.syncLiveSyncLabel}
+                </p>
+                <p
+                  className={`font-extrabold mt-0.5 ${
+                    syncStatus.liveSyncState === 'active'
+                      ? 'text-[#047857] dark:text-[#6EE7B7]'
+                      : 'text-[#64748B] dark:text-[#CBD5E1]'
+                  }`}
+                >
+                  {syncStatus.liveSyncState === 'active' ? t.syncLiveActive : t.syncLivePaused}
+                </p>
+              </div>
+
+              {/* 4. Last Sync Date & Time */}
+              <div className="rounded-xl bg-[#EFF4FA] dark:bg-[#0F172A] px-2.5 py-2">
+                <p className="text-[10px] font-bold text-[#64748B] dark:text-[#94A3B8]">
+                  {t.syncLastSyncLabel}
+                </p>
+                <p className="font-bold text-[11px] mt-0.5 flex items-center gap-1 truncate">
+                  <Clock className="h-3 w-3 shrink-0 text-[#1E3A8A] dark:text-[#93C5FD]" />
+                  <span className="truncate">
+                    {formatLastSyncDateTime(syncStatus.lastSyncAtMs, lang)}
+                  </span>
+                </p>
+              </div>
+
+              {/* 5. Pending Sync Records */}
+              <div className="rounded-xl bg-[#EFF4FA] dark:bg-[#0F172A] px-2.5 py-2">
+                <p className="text-[10px] font-bold text-[#64748B] dark:text-[#94A3B8]">
+                  {t.syncPendingLabel}
+                </p>
+                <p className="font-extrabold tabular-nums mt-0.5 text-[#1E3A8A] dark:text-[#93C5FD]">
+                  {syncStatus.pendingSyncCount}
+                </p>
+              </div>
+
+              {/* 6. Failed Sync Records */}
+              <div className="rounded-xl bg-[#EFF4FA] dark:bg-[#0F172A] px-2.5 py-2">
+                <p className="text-[10px] font-bold text-[#64748B] dark:text-[#94A3B8]">
+                  {t.syncFailedLabel}
+                </p>
+                <p
+                  className={`font-extrabold tabular-nums mt-0.5 ${
+                    syncStatus.failedSyncCount > 0
+                      ? 'text-[#DC2626] dark:text-[#FCA5A5]'
+                      : 'text-[#0F172A] dark:text-[#F8FAFC]'
+                  }`}
+                >
+                  {syncStatus.failedSyncCount}
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
+
         {selectedTab === 'requests' && (
           <AdminRequestsTab
             payments={payments}
             students={students}
             isBusy={isBusy}
+            hasMore={hasMorePayments}
+            isLoadingMore={isLoadingMorePayments}
+            onLoadMore={onLoadMorePayments}
             onZoomScreenshot={setZoomedScreenshotUrl}
             onApprove={onApprovePayment}
             onReject={onRejectPayment}
@@ -411,6 +592,9 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
             students={students}
             lastGeneratedBatch={lastGeneratedBatch}
             isBusy={isBusy}
+            hasMore={hasMoreCodes}
+            isLoadingMore={isLoadingMoreCodes}
+            onLoadMore={onLoadMoreCodes}
             onGenerateBulkCodes={onGenerateBulkCodes}
             onGenerateDirectCode={onGenerateDirectCode}
             onDeleteCode={(item) =>
@@ -446,6 +630,9 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
           <AdminStudentsTab
             students={students}
             isBusy={isBusy}
+            hasMore={hasMoreStudents}
+            isLoadingMore={isLoadingMoreStudents}
+            onLoadMore={onLoadMoreStudents}
             onToggleStudentAccess={onToggleStudentAccess}
             onUpdateStudentSubjectAccess={onUpdateStudentSubjectAccess}
             onUnlockStudentDevice={(st) => void onUnlockStudentDevice(st)}

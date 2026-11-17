@@ -14,11 +14,13 @@ import type { AdminLiveAlert } from './screens/AdminPanelScreen';
 import { quizAudioPlayer } from './services/audioPlayer';
 import { extractReadableErrorMessage } from './services/firestoreErrorHandler';
 import {
+  ADMIN_PAGE_SIZE,
   adminUnlockStudentDevice,
   approvePaymentAndAssignCode,
   deleteAccessCodeAdmin,
   deletePaymentRequestAdmin,
   deleteStudentAdmin,
+  flushPendingSyncOperations,
   forceRefreshNativeAdminListeners,
   generateBulkAccessCodes,
   generateDirectCodeForMobile,
@@ -27,6 +29,9 @@ import {
   getStudentDocId,
   hasNativeFirebaseBridge,
   isAdminAccount,
+  loadMoreAdminCodes,
+  loadMoreAdminPayments,
+  loadMoreAdminStudents,
   loadMyPaymentRequestIds,
   loginStudentWithDeviceLock,
   observeAdminSessionDevice,
@@ -39,15 +44,21 @@ import {
   observePaymentRequestsByIds,
   observeReleaseConfig,
   observeStudentProfile,
+  pauseNativeAdminListeners,
+  reconnectStudentDriveToken,
   recordQuizAttempt,
   redeemAccessCodePublic,
   rejectPaymentRequest,
   releaseStudentDeviceLock,
+  resumeNativeAdminListeners,
   saveMyPaymentRequestId,
   saveReleaseConfig,
   setNativeActiveStudentMobile,
+  signInStudentWithGmail,
   signOutAdminSession,
+  signOutStudentGmail,
   submitPaymentRequest,
+  syncAdminDeltaSince,
   toggleStudentQuizAccess,
   updateStudentSubjectAccess,
   verifyActiveSessionOnResume,
@@ -55,6 +66,28 @@ import {
   type AppAuthUser,
   type DirectMobileCodeResult,
 } from './services/quizRepository';
+import {
+  buildDriveBackupPayload,
+  deserializeBackupAttempt,
+  getDriveSyncStatus,
+  getStoredDriveAccessToken,
+  loadGmailSessionMeta,
+  loadLocalGmailBackup,
+  saveLocalGmailBackup,
+  saveStudentDataToDrive,
+  subscribeDriveSyncStatus,
+  type DriveSyncStatus,
+  type GmailStudentSessionMeta,
+} from './services/googleDriveSync';
+import {
+  getSyncStatus,
+  loadCachedMyAttempts,
+  mergeStudentProfilesConflictSafe,
+  setLiveSyncState,
+  setOnlineState,
+  subscribeSyncStatus,
+  type SyncStatusSnapshot,
+} from './services/syncManager';
 import {
   APP_VERSION_NAME,
   fetchLatestRelease,
@@ -74,7 +107,11 @@ import {
   type StudentProfile,
   type SubjectId,
 } from './types/models';
-import { buildPaymentApprovalWhatsAppHref, launchExternalUrl } from './utils/imageUtils';
+import {
+  buildPaymentApprovalWhatsAppHref,
+  launchExternalUrl,
+  normalizeIndianMobileInput,
+} from './utils/imageUtils';
 
 const LazyAdminPanelScreen = lazy(() =>
   import('./screens/AdminPanelScreen').then((m) => ({ default: m.AdminPanelScreen }))
@@ -131,51 +168,79 @@ function loadSavedUserMeta(): { name: string; mobile: string } {
 
 function loadInitialStudentSession(): {
   meta: { name: string; mobile: string };
+  gmailSession: GmailStudentSessionMeta | null;
   unlocked: string[];
   paymentIds: string[];
+  initialAttempts: QuizAttempt[];
   nativeSnapshot: StudentProfile | null;
 } {
+  const gmailSession = loadGmailSessionMeta();
+  const gmailBackup = gmailSession?.email ? loadLocalGmailBackup(gmailSession.email) : null;
+
   const webMeta = loadSavedUserMeta();
   const nativeSnapshot = getNativeActiveStudentSnapshot();
   const nativeMobile = (nativeSnapshot?.mobileNumber ?? '').replace(/\D/g, '').slice(-10);
   const nativeName = (nativeSnapshot?.fullName ?? '').trim().slice(0, 60);
+  const backupMobile = (gmailBackup?.profile.mobileNumber ?? '').replace(/\D/g, '').slice(-10);
 
-  const effectiveMobile = /^[0-9]{10}$/.test(webMeta.mobile) ? webMeta.mobile : nativeMobile;
-  const effectiveName = webMeta.name || nativeName;
+  const effectiveMobile = /^[0-9]{10}$/.test(webMeta.mobile)
+    ? webMeta.mobile
+    : /^[0-9]{10}$/.test(backupMobile)
+      ? backupMobile
+      : nativeMobile;
+  const effectiveName =
+    webMeta.name || gmailBackup?.profile.fullName || gmailSession?.displayName || nativeName;
+
   const meta = {
     name: effectiveName,
     mobile: /^[0-9]{10}$/.test(effectiveMobile) ? effectiveMobile : '',
   };
 
-  if (meta.name && meta.mobile) {
+  if (meta.name && (meta.mobile || gmailSession)) {
     try {
       localStorage.setItem(LOCAL_USER_META_KEY, JSON.stringify(meta));
     } catch {
       // Ignore
     }
-    setNativeActiveStudentMobile(meta.mobile);
+    if (meta.mobile) {
+      setNativeActiveStudentMobile(meta.mobile);
+    }
   }
 
   const unlockedSet = new Set<string>(loadSavedUnlockedSubjects(meta.mobile));
+  if (gmailBackup) {
+    (gmailBackup.profile.unlockedSubjects ?? []).forEach((s) => unlockedSet.add(String(s)));
+    if (gmailBackup.profile.hasQuizAccess) {
+      unlockedSet.add('all');
+      ALL_SUBJECT_IDS.forEach((s) => unlockedSet.add(s));
+    }
+  }
   if (nativeSnapshot && nativeMobile === meta.mobile) {
     (nativeSnapshot.unlockedSubjects ?? []).forEach((s) => unlockedSet.add(String(s)));
     if (nativeSnapshot.hasQuizAccess) {
       unlockedSet.add('all');
       ALL_SUBJECT_IDS.forEach((s) => unlockedSet.add(s));
     }
-    if (unlockedSet.size > 0 && meta.mobile) {
-      try {
-        localStorage.setItem(
-          `${LOCAL_UNLOCKS_KEY}_${meta.mobile}`,
-          JSON.stringify(Array.from(unlockedSet))
-        );
-      } catch {
-        // Ignore
-      }
+  }
+  if (unlockedSet.size > 0 && meta.mobile) {
+    try {
+      localStorage.setItem(
+        `${LOCAL_UNLOCKS_KEY}_${meta.mobile}`,
+        JSON.stringify(Array.from(unlockedSet))
+      );
+    } catch {
+      // Ignore
     }
   }
 
   let paymentIds = loadMyPaymentRequestIds(meta.mobile);
+  if (gmailBackup?.profile.paymentRequestIds?.length) {
+    gmailBackup.profile.paymentRequestIds.forEach((pid) => {
+      if (/^pay_[a-f0-9]{32}$/.test(pid)) {
+        paymentIds = saveMyPaymentRequestId(pid, meta.mobile);
+      }
+    });
+  }
   if (nativeSnapshot && nativeMobile === meta.mobile && nativeSnapshot.paymentRequestIds?.length) {
     nativeSnapshot.paymentRequestIds.forEach((pid) => {
       if (/^pay_[a-f0-9]{32}$/.test(pid)) {
@@ -184,12 +249,50 @@ function loadInitialStudentSession(): {
     });
   }
 
+  const resolvedDocId = meta.mobile
+    ? getStudentDocId(meta.mobile)
+    : gmailSession?.uid ?? '';
+  const cachedAttempts = resolvedDocId ? loadCachedMyAttempts(resolvedDocId) : [];
+  const driveAttempts = gmailBackup?.attempts?.map(deserializeBackupAttempt) ?? [];
+  const attemptMap = new Map<string, QuizAttempt>();
+  [...driveAttempts, ...cachedAttempts].forEach((a) => {
+    if (a?.id && !attemptMap.has(a.id)) attemptMap.set(a.id, a);
+  });
+  const initialAttempts = Array.from(attemptMap.values())
+    .sort((a, b) => (b.createdAt?.seconds ?? 0) - (a.createdAt?.seconds ?? 0))
+    .slice(0, 20);
+
+  let hydratedSnapshot: StudentProfile | null =
+    nativeSnapshot && nativeMobile === meta.mobile ? nativeSnapshot : null;
+  if (!hydratedSnapshot && gmailBackup && gmailSession) {
+    hydratedSnapshot = {
+      id: resolvedDocId || gmailSession.uid,
+      userId: resolvedDocId || gmailSession.uid,
+      fullName: effectiveName || 'Student',
+      mobileNumber: meta.mobile,
+      email: gmailSession.email,
+      standard: gmailBackup.profile.standard || 'ધોરણ 10',
+      hasQuizAccess: gmailBackup.profile.hasQuizAccess,
+      redeemedCode: gmailBackup.profile.redeemedCode,
+      paymentStatus: gmailBackup.profile.paymentStatus,
+      totalQuizzesTaken: gmailBackup.profile.totalQuizzesTaken,
+      bestScorePercent: gmailBackup.profile.bestScorePercent,
+      activeDeviceId: getCurrentDeviceIdentity().deviceId,
+      activeDeviceName: getCurrentDeviceIdentity().deviceName,
+      unlockedSubjects: Array.from(unlockedSet),
+      paymentRequestIds: paymentIds,
+      createdAt: null,
+      updatedAt: null,
+    };
+  }
+
   return {
     meta,
+    gmailSession,
     unlocked: Array.from(unlockedSet),
     paymentIds,
-    nativeSnapshot:
-      nativeSnapshot && nativeMobile === meta.mobile ? nativeSnapshot : null,
+    initialAttempts,
+    nativeSnapshot: hydratedSnapshot,
   };
 }
 
@@ -199,6 +302,15 @@ export const App: React.FC = () => {
   const [initialSession] = useState(loadInitialStudentSession);
   const [authUser, setAuthUser] = useState<AppAuthUser | null>(null);
   const [authInitialized, setAuthInitialized] = useState(false);
+
+  const [gmailSession, setGmailSession] = useState<GmailStudentSessionMeta | null>(
+    initialSession.gmailSession
+  );
+  const [driveStatus, setDriveStatus] = useState<DriveSyncStatus>(getDriveSyncStatus);
+  const [syncStatus, setSyncStatus] = useState<SyncStatusSnapshot>(getSyncStatus);
+  const [isDocumentVisible, setIsDocumentVisible] = useState<boolean>(() =>
+    typeof document !== 'undefined' ? document.visibilityState !== 'hidden' : true
+  );
 
   const [student, setStudent] = useState<StudentProfile | null>(initialSession.nativeSnapshot);
   const [savedUserMeta, setSavedUserMeta] = useState<{ name: string; mobile: string }>(
@@ -211,11 +323,18 @@ export const App: React.FC = () => {
   const [prefilledCode] = useState('');
 
   const [myPayments, setMyPayments] = useState<PaymentRequest[]>([]);
-  const [myAttempts, setMyAttempts] = useState<QuizAttempt[]>([]);
+  const [myAttempts, setMyAttempts] = useState<QuizAttempt[]>(initialSession.initialAttempts);
   const [allPayments, setAllPayments] = useState<PaymentRequest[]>([]);
   const [allCodes, setAllCodes] = useState<AccessCode[]>([]);
   const [allStudents, setAllStudents] = useState<StudentProfile[]>([]);
   const [releaseConfig, setReleaseConfig] = useState<AppReleaseConfig | null>(null);
+
+  const [hasMorePayments, setHasMorePayments] = useState(false);
+  const [hasMoreCodes, setHasMoreCodes] = useState(false);
+  const [hasMoreStudents, setHasMoreStudents] = useState(false);
+  const [isLoadingMorePayments, setIsLoadingMorePayments] = useState(false);
+  const [isLoadingMoreCodes, setIsLoadingMoreCodes] = useState(false);
+  const [isLoadingMoreStudents, setIsLoadingMoreStudents] = useState(false);
 
   const [syncVersion, setSyncVersion] = useState(0);
   const [route, setRoute] = useState<AppRoute>({ name: 'public', tab: 'quiz' });
@@ -238,6 +357,15 @@ export const App: React.FC = () => {
   const isSoundEnabledRef = useRef(isSoundEnabled);
   const langRef = useRef(lang);
 
+  const gmailSessionRef = useRef(gmailSession);
+  const studentRef = useRef(student);
+  const savedUserMetaRef = useRef(savedUserMeta);
+  const localUnlockedRef = useRef(localUnlockedSubjects);
+  const myAttemptsRef = useRef(myAttempts);
+  const myPaymentsRef = useRef(myPayments);
+  const driveSyncTimerRef = useRef<number | null>(null);
+  const pendingDriveUploadRef = useRef(false);
+
   useEffect(() => {
     isSoundEnabledRef.current = isSoundEnabled;
   }, [isSoundEnabled]);
@@ -246,9 +374,49 @@ export const App: React.FC = () => {
     langRef.current = lang;
   }, [lang]);
 
+  useEffect(() => {
+    gmailSessionRef.current = gmailSession;
+  }, [gmailSession]);
+
+  useEffect(() => {
+    studentRef.current = student;
+  }, [student]);
+
+  useEffect(() => {
+    savedUserMetaRef.current = savedUserMeta;
+  }, [savedUserMeta]);
+
+  useEffect(() => {
+    localUnlockedRef.current = localUnlockedSubjects;
+  }, [localUnlockedSubjects]);
+
+  useEffect(() => {
+    myAttemptsRef.current = myAttempts;
+  }, [myAttempts]);
+
+  useEffect(() => {
+    myPaymentsRef.current = myPayments;
+  }, [myPayments]);
+
+  const hasValidMobile = useMemo(
+    () => /^[0-9]{10}$/.test(savedUserMeta.mobile),
+    [savedUserMeta.mobile]
+  );
+
   const isStudentLoggedIn = useMemo(
-    () => savedUserMeta.name.trim().length > 0 && /^[0-9]{10}$/.test(savedUserMeta.mobile),
-    [savedUserMeta]
+    () =>
+      Boolean(gmailSession?.email) ||
+      (savedUserMeta.name.trim().length > 0 && hasValidMobile),
+    [gmailSession?.email, hasValidMobile, savedUserMeta.name]
+  );
+
+  const effectiveStudentName = useMemo(
+    () =>
+      savedUserMeta.name.trim() ||
+      gmailSession?.displayName ||
+      gmailSession?.email?.split('@')[0] ||
+      '',
+    [gmailSession?.displayName, gmailSession?.email, savedUserMeta.name]
   );
 
   const formatAppError = useCallback(
@@ -337,17 +505,26 @@ export const App: React.FC = () => {
   const isAdmin = isFirebaseAdmin;
 
   const studentDocId = useMemo(() => {
-    if (isStudentLoggedIn) {
+    if (hasValidMobile) {
       return getStudentDocId(savedUserMeta.mobile);
+    }
+    if (gmailSession?.uid) {
+      return gmailSession.uid;
     }
     if (authUser && !isFirebaseAdmin) {
       return authUser.uid;
     }
     return '';
-  }, [authUser, isFirebaseAdmin, isStudentLoggedIn, savedUserMeta.mobile]);
+  }, [authUser, gmailSession?.uid, hasValidMobile, isFirebaseAdmin, savedUserMeta.mobile]);
 
   const clearLocalStudentSession = useCallback((noticeMessage?: string, isErrorNotice = true) => {
     deviceClaimedForStudentRef.current = '';
+    if (driveSyncTimerRef.current) {
+      window.clearTimeout(driveSyncTimerRef.current);
+      driveSyncTimerRef.current = null;
+    }
+    pendingDriveUploadRef.current = false;
+    setGmailSession(null);
     setSavedUserMeta({ name: '', mobile: '' });
     setStudent(null);
     setMyAttempts([]);
@@ -366,6 +543,90 @@ export const App: React.FC = () => {
       setBanner({ isError: isErrorNotice, message: noticeMessage });
     }
   }, []);
+
+  const syncStudentToGoogleDrive = useCallback(async (options: { force?: boolean } = {}) => {
+    const session = gmailSessionRef.current;
+    if (!session?.email) return;
+
+    const payload = buildDriveBackupPayload({
+      gmail: session.email,
+      uid: session.uid,
+      student: studentRef.current,
+      unlockedSubjects: localUnlockedRef.current,
+      attempts: myAttemptsRef.current,
+      payments: myPaymentsRef.current,
+      fallbackName: savedUserMetaRef.current.name || session.displayName,
+      fallbackMobile: savedUserMetaRef.current.mobile,
+    });
+    saveLocalGmailBackup(payload);
+
+    const token = getStoredDriveAccessToken(session.email);
+    if (!token || (typeof navigator !== 'undefined' && navigator.onLine === false)) {
+      pendingDriveUploadRef.current = true;
+      return;
+    }
+
+    try {
+      await saveStudentDataToDrive(token, payload, { force: options.force });
+      pendingDriveUploadRef.current = false;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      if (msg === 'DRIVE_AUTH_EXPIRED' || msg.startsWith('DRIVE_')) {
+        pendingDriveUploadRef.current = true;
+      }
+    }
+  }, []);
+
+  const scheduleDriveBackup = useCallback(
+    (delayMs = 800) => {
+      if (!gmailSessionRef.current?.email) return;
+      if (driveSyncTimerRef.current) {
+        window.clearTimeout(driveSyncTimerRef.current);
+      }
+      driveSyncTimerRef.current = window.setTimeout(() => {
+        driveSyncTimerRef.current = null;
+        void syncStudentToGoogleDrive();
+      }, delayMs);
+    },
+    [syncStudentToGoogleDrive]
+  );
+
+  // Subscribe to global Smart Live Sync telemetry & Google Drive sync telemetry
+  useEffect(() => {
+    const unsubSync = subscribeSyncStatus(setSyncStatus);
+    const unsubDrive = subscribeDriveSyncStatus(setDriveStatus);
+    return () => {
+      unsubSync();
+      unsubDrive();
+    };
+  }, []);
+
+  // Monitor Online/Offline transitions and auto-flush pending Firestore & Google Drive updates
+  useEffect(() => {
+    const onOnline = () => {
+      setOnlineState(true);
+      void flushPendingSyncOperations();
+      if (gmailSessionRef.current?.email && pendingDriveUploadRef.current) {
+        void syncStudentToGoogleDrive({ force: true });
+      }
+      if (isFirebaseAdmin) {
+        const lastMs = getSyncStatus().lastSyncAtMs ?? 0;
+        if (lastMs > 0) {
+          void syncAdminDeltaSince(lastMs);
+        }
+      }
+    };
+    const onOffline = () => {
+      setOnlineState(false);
+    };
+    window.addEventListener('online', onOnline);
+    window.addEventListener('offline', onOffline);
+    setOnlineState(typeof navigator !== 'undefined' ? navigator.onLine : true);
+    return () => {
+      window.removeEventListener('online', onOnline);
+      window.removeEventListener('offline', onOffline);
+    };
+  }, [isFirebaseAdmin, syncStudentToGoogleDrive]);
 
   // Dynamically load heavy chapter question banks only when a subject or quiz route is active
   const activeSubjectId: SubjectId | null =
@@ -432,10 +693,23 @@ export const App: React.FC = () => {
 
     const unsubProfile = observeStudentProfile(
       studentDocId,
-      (profile) => setStudent(profile),
+      (profile) => {
+        if (!profile) return;
+        setStudent((prev) => mergeStudentProfilesConflictSafe(profile, prev));
+      },
       () => {}
     );
-    const unsubAttempts = observeMyQuizAttempts(studentDocId, setMyAttempts);
+    const unsubAttempts = observeMyQuizAttempts(studentDocId, (remoteAttempts) => {
+      setMyAttempts((prev) => {
+        const map = new Map<string, QuizAttempt>();
+        [...remoteAttempts, ...prev].forEach((a) => {
+          if (a?.id && !map.has(a.id)) map.set(a.id, a);
+        });
+        return Array.from(map.values())
+          .sort((a, b) => (b.createdAt?.seconds ?? 0) - (a.createdAt?.seconds ?? 0))
+          .slice(0, 20);
+      });
+    });
 
     return () => {
       unsubProfile();
@@ -456,7 +730,10 @@ export const App: React.FC = () => {
     return undefined;
   }, [authUserUid, isFirebaseAdmin, mergedPaymentIdsKey]);
 
-  // 3. Admin live collection listeners (attached once per Admin session or explicit sync)
+  const isAdminPanelVisible =
+    isFirebaseAdmin && route.name === 'public' && route.tab === 'admin' && isDocumentVisible;
+
+  // 3. Admin live collection listeners — active ONLY when Admin Panel is visible in foreground
   useEffect(() => {
     if (!isFirebaseAdmin) {
       knownPendingIdsRef.current = null;
@@ -466,8 +743,22 @@ export const App: React.FC = () => {
       setAllStudents([]);
       setReleaseConfig(null);
       setAvailableUpdate(null);
+      setLiveSyncState('paused');
       return;
     }
+
+    if (!isAdminPanelVisible) {
+      setLiveSyncState('paused');
+      if (hasNativeFirebaseBridge()) {
+        pauseNativeAdminListeners();
+      }
+      return;
+    }
+
+    if (hasNativeFirebaseBridge()) {
+      resumeNativeAdminListeners();
+    }
+    setLiveSyncState('active');
 
     const onAdminListenerError = (err: unknown) => {
       const raw = err instanceof Error ? err.message : String(err ?? '');
@@ -488,10 +779,14 @@ export const App: React.FC = () => {
 
     const unsubs = [
       observeReleaseConfig(setReleaseConfig),
-      observeAllStudents(setAllStudents, onAdminListenerError),
+      observeAllStudents((list) => {
+        setAllStudents(list);
+        setHasMoreStudents(list.length >= ADMIN_PAGE_SIZE);
+      }, onAdminListenerError),
 
       observeAllPaymentRequests((items) => {
         setAllPayments(items);
+        setHasMorePayments(items.length >= ADMIN_PAGE_SIZE);
         const pendingItems = items.filter((p) => p.status === 'pending');
         const pendingIds = new Set(pendingItems.map((p) => p.id));
 
@@ -534,6 +829,7 @@ export const App: React.FC = () => {
 
       observeAllAccessCodes((codes) => {
         setAllCodes(codes);
+        setHasMoreCodes(codes.length >= ADMIN_PAGE_SIZE);
         const usedItems = codes.filter((c) => c.status === 'used' || c.isUsed);
         const usedCodeSet = new Set(usedItems.map((c) => c.code));
 
@@ -580,11 +876,11 @@ export const App: React.FC = () => {
     return () => {
       unsubs.forEach((u) => u());
     };
-  }, [isFirebaseAdmin, syncVersion]);
+  }, [isAdminPanelVisible, isFirebaseAdmin, syncVersion]);
 
-  // 4. Sync restored Firestore student details & enforce strict 1-device session watchdog
+  // 4. Sync restored Firestore student details & enforce strict 1-device session watchdog (mobile-linked profiles only)
   useEffect(() => {
-    if (!isStudentLoggedIn || !student || !studentDocId) return;
+    if (!hasValidMobile || !student || !studentDocId || !studentDocId.startsWith('mob_')) return;
     if ((student.id || student.userId) !== studentDocId) return;
 
     // Keep local unlocked subjects & name & payment IDs synced with remote profile
@@ -651,10 +947,12 @@ export const App: React.FC = () => {
     void loginStudentWithDeviceLock({
       mobileNumber: savedUserMeta.mobile,
       fullName: student.fullName || savedUserMeta.name,
+      email: gmailSession?.email || student.email || '',
     }).catch(() => {});
   }, [
     clearLocalStudentSession,
-    isStudentLoggedIn,
+    gmailSession?.email,
+    hasValidMobile,
     savedUserMeta.mobile,
     savedUserMeta.name,
     student,
@@ -715,8 +1013,8 @@ export const App: React.FC = () => {
     }
   }, [isAdmin, effectiveGithubRepo, checkForUpdates]);
 
-  const persistUserMeta = (name: string, mobile: string) => {
-    const cleanMobile = mobile.replace(/\D/g, '').slice(-10);
+  const persistUserMeta = useCallback((name: string, mobile: string) => {
+    const cleanMobile = normalizeIndianMobileInput(mobile);
     const next = { name: name.trim().slice(0, 60), mobile: cleanMobile };
     setSavedUserMeta(next);
     if (cleanMobile) {
@@ -727,9 +1025,15 @@ export const App: React.FC = () => {
     } catch {
       // Ignore
     }
-    setLocalUnlockedSubjects(loadSavedUnlockedSubjects(cleanMobile));
-    setMyPaymentIds(loadMyPaymentRequestIds(cleanMobile));
-  };
+    if (cleanMobile) {
+      setLocalUnlockedSubjects((prev) =>
+        Array.from(new Set([...prev, ...loadSavedUnlockedSubjects(cleanMobile)]))
+      );
+      setMyPaymentIds((prev) =>
+        Array.from(new Set([...prev, ...loadMyPaymentRequestIds(cleanMobile)])).slice(0, 25)
+      );
+    }
+  }, []);
 
   const handleStudentLogin = async (name: string, mobile: string) => {
     const cleanName = name.trim().slice(0, 60);
@@ -739,6 +1043,7 @@ export const App: React.FC = () => {
     const profile = await loginStudentWithDeviceLock({
       mobileNumber: cleanMobile,
       fullName: cleanName,
+      email: gmailSession?.email || '',
     });
 
     const effectiveName = (profile.fullName || cleanName).trim().slice(0, 60);
@@ -783,9 +1088,152 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleGmailLoginSuccess = async () => {
+    const res = await signInStudentWithGmail();
+    const { session, backup } = res;
+    setGmailSession(session);
+
+    const restoredName = (backup?.profile.fullName || session.displayName || 'Student')
+      .trim()
+      .slice(0, 60);
+    const restoredMobile = (backup?.profile.mobileNumber || '').replace(/\D/g, '').slice(-10);
+    persistUserMeta(restoredName, restoredMobile);
+
+    const restoredSubjects = new Set<string>(backup?.profile.unlockedSubjects ?? []);
+    if (backup?.profile.hasQuizAccess) {
+      restoredSubjects.add('all');
+      ALL_SUBJECT_IDS.forEach((s) => restoredSubjects.add(s));
+    }
+    const unlockedArr = Array.from(restoredSubjects);
+    setLocalUnlockedSubjects(unlockedArr);
+    if (unlockedArr.length > 0 && restoredMobile) {
+      try {
+        localStorage.setItem(`${LOCAL_UNLOCKS_KEY}_${restoredMobile}`, JSON.stringify(unlockedArr));
+      } catch {
+        // Ignore
+      }
+    }
+
+    const restoredAttempts = (backup?.attempts ?? []).map(deserializeBackupAttempt);
+    if (restoredAttempts.length > 0) {
+      setMyAttempts(restoredAttempts);
+    }
+
+    const restoredPayIds = (backup?.profile.paymentRequestIds ?? []).filter((pid) =>
+      /^pay_[a-f0-9]{32}$/.test(pid)
+    );
+    if (restoredPayIds.length > 0) {
+      setMyPaymentIds(restoredPayIds);
+      restoredPayIds.forEach((pid) => saveMyPaymentRequestId(pid, restoredMobile));
+    }
+
+    const activeDocId = /^[0-9]{10}$/.test(restoredMobile)
+      ? getStudentDocId(restoredMobile)
+      : session.uid;
+
+    setStudent({
+      id: activeDocId,
+      userId: activeDocId,
+      fullName: restoredName,
+      mobileNumber: restoredMobile,
+      email: session.email,
+      standard: backup?.profile.standard || 'ધોરણ 10',
+      hasQuizAccess: Boolean(backup?.profile.hasQuizAccess),
+      redeemedCode: backup?.profile.redeemedCode || '',
+      paymentStatus: backup?.profile.paymentStatus || 'none',
+      totalQuizzesTaken: backup?.profile.totalQuizzesTaken || restoredAttempts.length,
+      bestScorePercent: backup?.profile.bestScorePercent || 0,
+      activeDeviceId: getCurrentDeviceIdentity().deviceId,
+      activeDeviceName: getCurrentDeviceIdentity().deviceName,
+      unlockedSubjects: unlockedArr,
+      paymentRequestIds: restoredPayIds,
+      createdAt: null,
+      updatedAt: null,
+    });
+
+    if (/^[0-9]{10}$/.test(restoredMobile)) {
+      lastStudentTakeoverAtRef.current = Date.now();
+      deviceClaimedForStudentRef.current = activeDocId;
+      void loginStudentWithDeviceLock({
+        mobileNumber: restoredMobile,
+        fullName: restoredName,
+        email: session.email,
+      }).catch(() => {});
+    }
+
+    setRoute({ name: 'public', tab: 'quiz' });
+    setBanner({
+      isError: false,
+      message: `${restoredName} — ${t.gmailWelcomeRestored}`,
+    });
+  };
+
+  const handleLinkedMobileSaved = useCallback(
+    (mobile: string) => {
+      const cleanMob = normalizeIndianMobileInput(mobile);
+      if (!/^[0-9]{10}$/.test(cleanMob)) return;
+      persistUserMeta(effectiveStudentName, cleanMob);
+      setStudent((prev) =>
+        prev
+          ? { ...prev, mobileNumber: cleanMob }
+          : {
+              id: getStudentDocId(cleanMob),
+              userId: getStudentDocId(cleanMob),
+              fullName: effectiveStudentName || 'Student',
+              mobileNumber: cleanMob,
+              email: gmailSession?.email || '',
+              standard: 'ધોરણ 10',
+              hasQuizAccess: localUnlockedRef.current.includes('all'),
+              redeemedCode: '',
+              paymentStatus: 'none',
+              totalQuizzesTaken: myAttemptsRef.current.length,
+              bestScorePercent: 0,
+              activeDeviceId: getCurrentDeviceIdentity().deviceId,
+              activeDeviceName: getCurrentDeviceIdentity().deviceName,
+              unlockedSubjects: localUnlockedRef.current,
+              paymentRequestIds: [],
+              createdAt: null,
+              updatedAt: null,
+            }
+      );
+      scheduleDriveBackup(400);
+    },
+    [effectiveStudentName, gmailSession?.email, persistUserMeta, scheduleDriveBackup]
+  );
+
+  const handleReconnectDrive = useCallback(async () => {
+    const email = gmailSessionRef.current?.email;
+    if (!email) return;
+    try {
+      await reconnectStudentDriveToken(email);
+      await syncStudentToGoogleDrive({ force: true });
+      setBanner({ isError: false, message: t.gmailDriveSyncedBadge });
+    } catch (err) {
+      setBanner({
+        isError: true,
+        message: formatAppError(err, t.errGoogleDriveAuthFailed),
+      });
+    }
+  }, [formatAppError, syncStudentToGoogleDrive, t.errGoogleDriveAuthFailed, t.gmailDriveSyncedBadge]);
+
+  const handleSyncDriveNow = useCallback(async () => {
+    const email = gmailSessionRef.current?.email;
+    if (!email) return;
+    if (!getStoredDriveAccessToken(email)) {
+      await handleReconnectDrive();
+      return;
+    }
+    await syncStudentToGoogleDrive({ force: true });
+    setBanner({ isError: false, message: t.gmailDriveSyncedBadge });
+  }, [handleReconnectDrive, syncStudentToGoogleDrive, t.gmailDriveSyncedBadge]);
+
   const handleStudentLogout = () => {
     const mob = savedUserMeta.mobile;
+    const hadGmail = Boolean(gmailSessionRef.current?.email);
     clearLocalStudentSession();
+    if (hadGmail) {
+      void signOutStudentGmail().catch(() => {});
+    }
     if (/^[0-9]{10}$/.test(mob)) {
       void releaseStudentDeviceLock(mob).catch(() => {});
     }
@@ -828,6 +1276,7 @@ export const App: React.FC = () => {
       const reqId = await submitPaymentRequest(params);
       setMyPaymentIds(saveMyPaymentRequestId(reqId, params.mobileNumber));
       setBanner({ isError: false, message: t.requestSentTitle });
+      scheduleDriveBackup(600);
       return reqId;
     } finally {
       setIsBusy(false);
@@ -855,6 +1304,7 @@ export const App: React.FC = () => {
         isError: false,
         message: `${t.codeSuccessTitle} (${res.code})`,
       });
+      scheduleDriveBackup(500);
       return res;
     } finally {
       setIsBusy(false);
@@ -1129,17 +1579,19 @@ export const App: React.FC = () => {
     return () => unsub();
   }, [handleAdminSignOut, isFirebaseAdmin, t.deviceKickedOutMsg]);
 
-  // Verify active device session immediately when returning to the app
+  // Track document visibility + verify active device session cleanly (throttled inside repository)
   useEffect(() => {
     const onVisibility = () => {
-      if (document.visibilityState !== 'visible') return;
-      if (!isStudentLoggedIn && !isFirebaseAdmin) return;
+      const visible = document.visibilityState !== 'hidden';
+      setIsDocumentVisible(visible);
+      if (!visible) return;
+      if (!hasValidMobile && !isFirebaseAdmin) return;
       void verifyActiveSessionOnResume(
-        isStudentLoggedIn ? studentDocId : undefined,
+        hasValidMobile ? studentDocId : undefined,
         isFirebaseAdmin
       ).then((res) => {
         const myDeviceId = getCurrentDeviceIdentity().deviceId;
-        if (res.studentProfile && isStudentLoggedIn) {
+        if (res.studentProfile && hasValidMobile) {
           const remoteDev = (res.studentProfile.activeDeviceId ?? '').trim();
           if (
             remoteDev &&
@@ -1164,11 +1616,94 @@ export const App: React.FC = () => {
   }, [
     clearLocalStudentSession,
     handleAdminSignOut,
+    hasValidMobile,
     isFirebaseAdmin,
-    isStudentLoggedIn,
     studentDocId,
     t.deviceKickedOutMsg,
   ]);
+
+  const handleLoadMorePayments = async () => {
+    if (isLoadingMorePayments || allPayments.length === 0) return;
+    const lastCursor = allPayments[allPayments.length - 1]?.createdAt ?? null;
+    if (!lastCursor) {
+      setHasMorePayments(false);
+      return;
+    }
+    setIsLoadingMorePayments(true);
+    try {
+      const res = await loadMoreAdminPayments(lastCursor, ADMIN_PAGE_SIZE);
+      if (res.items.length > 0) {
+        setAllPayments((prev) => {
+          const seen = new Set(prev.map((x) => x.id));
+          return [...prev, ...res.items.filter((x) => !seen.has(x.id))];
+        });
+      }
+      setHasMorePayments(res.hasMore);
+    } finally {
+      setIsLoadingMorePayments(false);
+    }
+  };
+
+  const handleLoadMoreCodes = async () => {
+    if (isLoadingMoreCodes || allCodes.length === 0) return;
+    const lastCursor = allCodes[allCodes.length - 1]?.createdAt ?? null;
+    if (!lastCursor) {
+      setHasMoreCodes(false);
+      return;
+    }
+    setIsLoadingMoreCodes(true);
+    try {
+      const res = await loadMoreAdminCodes(lastCursor, ADMIN_PAGE_SIZE);
+      if (res.items.length > 0) {
+        setAllCodes((prev) => {
+          const seen = new Set(prev.map((x) => x.code));
+          return [...prev, ...res.items.filter((x) => !seen.has(x.code))];
+        });
+      }
+      setHasMoreCodes(res.hasMore);
+    } finally {
+      setIsLoadingMoreCodes(false);
+    }
+  };
+
+  const handleLoadMoreStudents = async () => {
+    if (isLoadingMoreStudents || allStudents.length === 0) return;
+    const lastCursor = allStudents[allStudents.length - 1]?.updatedAt ?? null;
+    if (!lastCursor) {
+      setHasMoreStudents(false);
+      return;
+    }
+    setIsLoadingMoreStudents(true);
+    try {
+      const res = await loadMoreAdminStudents(lastCursor, ADMIN_PAGE_SIZE);
+      if (res.items.length > 0) {
+        setAllStudents((prev) => {
+          const seen = new Set(prev.map((x) => x.id || x.userId));
+          return [...prev, ...res.items.filter((x) => !seen.has(x.id || x.userId))];
+        });
+      }
+      setHasMoreStudents(res.hasMore);
+    } finally {
+      setIsLoadingMoreStudents(false);
+    }
+  };
+
+  const handleAdminSyncNow = async () => {
+    const res = await flushPendingSyncOperations({ forceDue: true });
+    if (hasNativeFirebaseBridge()) {
+      forceRefreshNativeAdminListeners();
+    } else {
+      await syncAdminDeltaSince(syncStatus.lastSyncAtMs ?? 0);
+      setSyncVersion((v) => v + 1);
+    }
+    setBanner({
+      isError: false,
+      message:
+        lang === 'en'
+          ? `Sync finished (${res.synced} uploaded, ${res.remaining} pending)`
+          : `સિંક પૂર્ણ (${res.synced} અપલોડ, ${res.remaining} બાકી)`,
+    });
+  };
 
   if (!authInitialized) {
     return (
@@ -1203,6 +1738,16 @@ export const App: React.FC = () => {
           currentVersionName={APP_VERSION_NAME}
           isBusy={isBusy}
           isCheckingUpdate={isCheckingUpdate}
+          syncStatus={syncStatus}
+          hasMorePayments={hasMorePayments}
+          isLoadingMorePayments={isLoadingMorePayments}
+          onLoadMorePayments={() => void handleLoadMorePayments()}
+          hasMoreCodes={hasMoreCodes}
+          isLoadingMoreCodes={isLoadingMoreCodes}
+          onLoadMoreCodes={() => void handleLoadMoreCodes()}
+          hasMoreStudents={hasMoreStudents}
+          isLoadingMoreStudents={isLoadingMoreStudents}
+          onLoadMoreStudents={() => void handleLoadMoreStudents()}
           approvedConfirmation={approvedConfirmation}
           onDismissApprovedConfirmation={() => setApprovedConfirmation(null)}
           onBackToPublic={() => setRoute({ name: 'public', tab: 'quiz' })}
@@ -1213,6 +1758,7 @@ export const App: React.FC = () => {
               setSyncVersion((v) => v + 1);
             }
           }}
+          onSyncNow={() => void handleAdminSyncNow()}
           onToggleSound={() => setIsSoundEnabled((prev) => !prev)}
           onClearAlerts={() => setLiveAlerts([])}
           onSignOut={() => void handleAdminSignOut()}
@@ -1247,14 +1793,16 @@ export const App: React.FC = () => {
           <LazySubjectChaptersScreen
             subject={subject}
             hasQuizAccess={hasAccess}
-            studentName={savedUserMeta.name}
+            studentName={effectiveStudentName}
             studentMobile={savedUserMeta.mobile}
+            studentEmail={gmailSession?.email || ''}
             myPayments={myPayments}
             isBusy={isBusy}
             onBack={() => setRoute({ name: 'public', tab: 'quiz' })}
             onStartChapterQuiz={(ch) =>
               setRoute({ name: 'quiz', subjectId: subject.id, chapterId: ch.id })
             }
+            onLinkedMobileSaved={handleLinkedMobileSaved}
             onSubmitPayment={handleSubmitPayment}
             onRedeemCode={handleRedeemCode}
             onNotify={(msg, isErr) => setBanner({ isError: Boolean(isErr), message: msg })}
@@ -1284,9 +1832,26 @@ export const App: React.FC = () => {
                 score,
                 totalQuestions: total,
                 timeTakenSeconds: elapsedSeconds,
-                previousTotalQuizzes: student?.totalQuizzesTaken ?? 0,
+                previousTotalQuizzes: student?.totalQuizzesTaken ?? myAttempts.length,
                 previousBestScore: student?.bestScorePercent ?? 0,
-              }).catch(() => {});
+              })
+                .then((attempt) => {
+                  if (attempt) {
+                    setMyAttempts((prev) => [attempt, ...prev.filter((a) => a.id !== attempt.id)].slice(0, 20));
+                    const pct = attempt.percentage;
+                    setStudent((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            totalQuizzesTaken: prev.totalQuizzesTaken + 1,
+                            bestScorePercent: Math.max(prev.bestScorePercent, pct),
+                          }
+                        : prev
+                    );
+                    scheduleDriveBackup(400);
+                  }
+                })
+                .catch(() => {});
             }}
             onExit={() => setRoute({ name: 'subject', subjectId: subject.id })}
           />
@@ -1301,8 +1866,9 @@ export const App: React.FC = () => {
         <TopNavHeader
           activeTab="quiz"
           isStudentLoggedIn={isStudentLoggedIn}
-          studentName={savedUserMeta.name}
+          studentName={effectiveStudentName}
           studentMobile={savedUserMeta.mobile}
+          studentEmail={gmailSession?.email || ''}
           isAdmin={isAdmin}
           adminBadgeCount={liveAlerts.length || pendingBadge}
           isDarkTheme={isDarkTheme}
@@ -1317,17 +1883,24 @@ export const App: React.FC = () => {
               initialName={savedUserMeta.name}
               initialMobile={savedUserMeta.mobile}
               onLoginSuccess={handleStudentLogin}
+              onGmailLoginSuccess={handleGmailLoginSuccess}
               onAdminAuthenticated={handleAdminLoginSuccess}
             />
           ) : (
             <UseCodeScreen
-              studentName={savedUserMeta.name}
+              studentName={effectiveStudentName}
               studentMobile={savedUserMeta.mobile}
+              studentEmail={gmailSession?.email || ''}
+              driveStatus={driveStatus}
+              syncStatus={syncStatus}
               unlockedSubjects={effectiveUnlockedSubjects}
               myPayments={myPayments}
               recentAttempts={myAttempts}
               prefilledCode={prefilledCode}
               isBusy={isBusy}
+              onSyncDriveNow={() => void handleSyncDriveNow()}
+              onReconnectDrive={() => void handleReconnectDrive()}
+              onLinkedMobileSaved={handleLinkedMobileSaved}
               onSubmitPayment={handleSubmitPayment}
               onRedeemCode={handleRedeemCode}
               onOpenSubject={(subjectId) => setRoute({ name: 'subject', subjectId })}

@@ -6,6 +6,12 @@ import type {
   QuizAttempt,
   StudentProfile,
 } from '../types/models';
+import {
+  applyNativeSyncSnapshot,
+  setLiveSyncState,
+  setOnlineState,
+  type SyncStatusSnapshot,
+} from './syncManager';
 
 export interface AppAuthUser {
   uid: string;
@@ -51,6 +57,9 @@ interface AndroidFirebaseBridgeApi {
   getActiveStudentSnapshot?: () => string;
   claimAdminSessionDevice?: (callId: string, payloadJson: string) => void;
   verifyActiveSessionNow?: () => void;
+  pauseAdminListeners?: () => void;
+  resumeAdminListeners?: () => void;
+  loadMoreAdminCollection?: (callId: string, collectionName: string, cursorSeconds: number) => void;
 }
 
 declare global {
@@ -67,6 +76,8 @@ declare global {
     __onNativeAllCodes?: (list: AccessCode[]) => void;
     __onNativeAllStudents?: (list: StudentProfile[]) => void;
     __onNativeAdminError?: (message: string) => void;
+    __onNativeSyncState?: (state: Partial<SyncStatusSnapshot>) => void;
+    __onNativeNetworkStateChanged?: (isOnline: boolean) => void;
   }
 }
 
@@ -210,6 +221,16 @@ if (typeof window !== 'undefined') {
     const err = new Error(msg || 'Permission denied');
     adminErrorListeners.forEach((cb) => cb(err));
   };
+
+  window.__onNativeSyncState = (patch) => {
+    if (patch && typeof patch === 'object') {
+      applyNativeSyncSnapshot(patch);
+    }
+  };
+
+  window.__onNativeNetworkStateChanged = (online) => {
+    setOnlineState(Boolean(online));
+  };
 }
 
 export function invokeNativeBridgeCall<T>(
@@ -275,13 +296,45 @@ function maybeStopNativeAdminListeners(): void {
     adminSessionDeviceListeners.size === 0
   ) {
     adminListenersStarted = false;
+    setLiveSyncState('paused');
     window.AndroidFirebaseBridge?.stopAdminListeners?.();
   }
 }
 
+let lastNativeForceRefreshAt = 0;
+
 export function forceRefreshNativeAdminListeners(): void {
+  const now = Date.now();
+  if (now - lastNativeForceRefreshAt < 3500) return;
+  lastNativeForceRefreshAt = now;
   adminListenersStarted = true;
   window.AndroidFirebaseBridge?.forceRefreshAdminListeners?.();
+}
+
+export function pauseNativeAdminListeners(): void {
+  if (!adminListenersStarted) return;
+  adminListenersStarted = false;
+  setLiveSyncState('paused');
+  window.AndroidFirebaseBridge?.pauseAdminListeners?.();
+}
+
+export function resumeNativeAdminListeners(): void {
+  if (adminListenersStarted) return;
+  adminListenersStarted = true;
+  window.AndroidFirebaseBridge?.resumeAdminListeners?.();
+}
+
+export async function loadMoreNativeAdminCollection<T>(
+  collectionName: 'payment_requests' | 'access_codes' | 'students',
+  cursorSeconds: number
+): Promise<T[]> {
+  return invokeNativeBridgeCall<T[]>((callId) => {
+    window.AndroidFirebaseBridge?.loadMoreAdminCollection?.(
+      callId,
+      collectionName,
+      cursorSeconds
+    );
+  });
 }
 
 export function subscribeNativeReleaseConfig(

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Languages, LogOut, Moon, ShieldCheck, Smartphone, Sun } from 'lucide-react';
+import { Languages, LogOut, Mail, Moon, ShieldCheck, Smartphone, Sun } from 'lucide-react';
 import { useTranslation } from '../i18n/translations';
 
 export type PublicTabId = 'quiz' | 'admin';
@@ -9,6 +9,7 @@ interface TopNavHeaderProps {
   isStudentLoggedIn: boolean;
   studentName?: string;
   studentMobile?: string;
+  studentEmail?: string;
   isAdmin: boolean;
   adminBadgeCount: number;
   isDarkTheme: boolean;
@@ -22,6 +23,7 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
   isStudentLoggedIn,
   studentName = '',
   studentMobile = '',
+  studentEmail = '',
   isAdmin,
   adminBadgeCount,
   isDarkTheme,
@@ -30,6 +32,14 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
   onToggleTheme,
 }) => {
   const { lang, toggleLang, t } = useTranslation();
+
+  const identityLabel = [
+    studentName || studentEmail.split('@')[0] || 'Student',
+    studentEmail ? studentEmail : '',
+    studentMobile ? `+91 ${studentMobile}` : '',
+  ]
+    .filter(Boolean)
+    .join(' • ');
 
   return (
     <header className="sticky top-0 z-30 bg-white/95 dark:bg-[#1E293B]/95 backdrop-blur border-b border-[#E2E8F0] dark:border-[#334155]">
@@ -92,15 +102,18 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
       {isStudentLoggedIn && activeTab === 'quiz' && (
         <div className="max-w-4xl mx-auto px-3 sm:px-4 py-1.5 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between gap-2 bg-[#FAF9F5]/80 dark:bg-[#0F172A]/60 text-xs">
           <div className="flex items-center gap-1.5 min-w-0 font-bold text-[#0F172A] dark:text-[#F8FAFC]">
-            <Smartphone className="h-3.5 w-3.5 text-[#1E3A8A] dark:text-[#93C5FD] shrink-0" />
-            <span className="truncate">
-              {studentName} • +91 {studentMobile}
-            </span>
+            {studentEmail ? (
+              <Mail className="h-3.5 w-3.5 text-[#1E3A8A] dark:text-[#93C5FD] shrink-0" />
+            ) : (
+              <Smartphone className="h-3.5 w-3.5 text-[#1E3A8A] dark:text-[#93C5FD] shrink-0" />
+            )}
+            <span className="truncate">{identityLabel}</span>
           </div>
           <button
             type="button"
+            data-testid="student_logout_button"
             onClick={onStudentLogout}
-            className="shrink-0 inline-flex items-center gap-1 rounded-lg border border-[#CBD5E1] dark:border-[#334155] px-2 py-1 text-[11px] font-bold text-[#475569] dark:text-[#94A3B8] hover:text-red-600 dark:hover:text-red-400 cursor-pointer"
+            className="shrink-0 inline-flex items-center gap-1 rounded-lg border border-[#CBD5E1] dark:border-[#334155] px-2.5 py-1 min-h-[32px] text-[11px] font-bold text-[#475569] dark:text-[#94A3B8] hover:text-red-600 dark:hover:text-red-400 cursor-pointer"
           >
             <LogOut className="h-3 w-3" />
             <span>{t.switchAccountBtn}</span>

@@ -14,6 +14,7 @@ import {
   Radio,
   Send,
   Share2,
+  Smartphone,
   Upload,
   X,
   XCircle,
@@ -41,6 +42,7 @@ import {
   formatTimestampLabel,
   launchUpiPayment,
   launchWhatsAppPaymentWithScreenshot,
+  normalizeIndianMobileInput,
   resolvePaymentImageSrc,
   saveOrSharePngDataUrl,
   toImageDataUrl,
@@ -54,9 +56,11 @@ interface SubjectPaymentModalProps {
   initialCode?: string;
   studentName: string;
   studentMobile: string;
+  studentEmail?: string;
   myPayments: PaymentRequest[];
   isBusy: boolean;
   onClose: () => void;
+  onMobileNumberUpdate?: (mobile: string) => void;
   onSubmitPayment: (params: {
     studentName: string;
     mobileNumber: string;
@@ -82,9 +86,11 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
   initialCode = '',
   studentName,
   studentMobile,
+  studentEmail = '',
   myPayments,
   isBusy,
   onClose,
+  onMobileNumberUpdate,
   onSubmitPayment,
   onRedeemCode,
   onNotify,
@@ -93,6 +99,7 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
 
   const [activeTab, setActiveTab] = useState<'pay' | 'code'>(initialMode);
   const [selectedPlanSubject, setSelectedPlanSubject] = useState<string>(defaultSubjectId);
+  const [mobileInput, setMobileInput] = useState<string>(studentMobile);
   const [imageBlob, setImageBlob] = useState<Blob | null>(null);
   const [imageBase64, setImageBase64] = useState<string | null>(null);
   const [lastPreviewUrl, setLastPreviewUrl] = useState<string>('');
@@ -102,13 +109,19 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
   const [submittedRequestId, setSubmittedRequestId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  const hasSavedValidMobile = /^[0-9]{10}$/.test(studentMobile);
+  const effectiveMobile = (hasSavedValidMobile ? studentMobile : mobileInput)
+    .replace(/\D/g, '')
+    .slice(-10);
+
   useEffect(() => {
     if (!isOpen) return;
     setActiveTab(initialMode);
     setSelectedPlanSubject(defaultSubjectId);
     setCodeInput(initialCode);
+    setMobileInput(studentMobile);
     setLocalError(null);
-  }, [isOpen, initialMode, defaultSubjectId, initialCode]);
+  }, [isOpen, initialMode, defaultSubjectId, initialCode, studentMobile]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -130,8 +143,8 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
   const fixedAmount = getFixedPlanPrice(selectedPlanSubject);
 
   const upiPaymentUrl = useMemo(
-    () => buildUpiPaymentHref(ADMIN_UPI_ID, ADMIN_UPI_NAME, fixedAmount, studentMobile),
-    [fixedAmount, studentMobile]
+    () => buildUpiPaymentHref(ADMIN_UPI_ID, ADMIN_UPI_NAME, fixedAmount, effectiveMobile),
+    [fixedAmount, effectiveMobile]
   );
 
   const qrMatrix = useMemo(() => generateQrMatrix(upiPaymentUrl), [upiPaymentUrl]);
@@ -234,15 +247,22 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
     e.preventDefault();
     setLocalError(null);
 
+    if (!/^[0-9]{10}$/.test(effectiveMobile)) {
+      setLocalError(t.errInvalidMobile);
+      return;
+    }
+
     if (!imageBlob || !imageBase64) {
       setLocalError(t.errScreenshotRequired);
       return;
     }
 
+    onMobileNumberUpdate?.(effectiveMobile);
+
     try {
       const reqId = await onSubmitPayment({
-        studentName,
-        mobileNumber: studentMobile,
+        studentName: studentName || studentEmail.split('@')[0] || 'Student',
+        mobileNumber: effectiveMobile,
         amountRupees: fixedAmount,
         upiTransactionRef: '',
         imageBlob,
@@ -266,8 +286,8 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
       relevantPayments.length > 0 ? resolvePaymentImageSrc(relevantPayments[0]) : '';
     const effectivePreviewUrl = previewDataUrl || lastPreviewUrl || latestSubmittedThumb;
     launchWhatsAppPaymentWithScreenshot({
-      studentName,
-      mobileNumber: studentMobile,
+      studentName: studentName || studentEmail.split('@')[0] || 'Student',
+      mobileNumber: effectiveMobile,
       amountRupees: fixedAmount,
       subjectId: selectedPlanSubject,
       imageDataUrl: effectivePreviewUrl || undefined,
@@ -277,16 +297,21 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
   const handleCodeSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLocalError(null);
+    if (!/^[0-9]{10}$/.test(effectiveMobile)) {
+      setLocalError(t.errInvalidMobile);
+      return;
+    }
     const cleaned = codeInput.trim().toUpperCase();
     if (!/^[A-Z0-9_-]{4,32}$/.test(cleaned)) {
       setLocalError(t.errInvalidCodeFormat);
       return;
     }
+    onMobileNumberUpdate?.(effectiveMobile);
     try {
       const res = await onRedeemCode({
         code: cleaned,
-        name: studentName,
-        mobile: studentMobile,
+        name: studentName || studentEmail.split('@')[0] || 'Student',
+        mobile: effectiveMobile,
         expectedSubjectId: defaultSubjectId === 'all' ? undefined : defaultSubjectId,
       });
       if (res) {
@@ -300,11 +325,17 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
 
   const handleQuickUnlockWithApprovedCode = async (req: PaymentRequest) => {
     setLocalError(null);
+    const mob = req.mobileNumber || effectiveMobile;
+    if (!/^[0-9]{10}$/.test(mob)) {
+      setLocalError(t.errInvalidMobile);
+      return;
+    }
+    onMobileNumberUpdate?.(mob);
     try {
       const res = await onRedeemCode({
         code: req.assignedCode,
-        name: studentName,
-        mobile: studentMobile,
+        name: studentName || studentEmail.split('@')[0] || 'Student',
+        mobile: mob,
         expectedSubjectId: defaultSubjectId === 'all' ? undefined : defaultSubjectId,
       });
       if (res) onClose();
@@ -338,7 +369,8 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
                   : `${getSubjectDisplayName(defaultSubjectId, lang)} • ${lang === 'en' ? 'Unlock Quiz' : 'ક્વિઝ અનલૉક કરો'}`}
               </h3>
               <p className="text-xs text-[#475569] dark:text-[#94A3B8] truncate">
-                {studentName} • +91 {studentMobile}
+                {studentName}
+                {studentMobile ? ` • +91 ${studentMobile}` : studentEmail ? ` • ${studentEmail}` : ''}
               </p>
             </div>
           </div>
@@ -584,6 +616,34 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
               onSubmit={(e) => void handlePaymentSubmit(e)}
               className="rounded-2xl bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] p-4 space-y-3.5 shadow-sm"
             >
+              {!hasSavedValidMobile && (
+                <div>
+                  <label
+                    htmlFor="modal-pay-mobile-input"
+                    className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1"
+                  >
+                    {t.fieldOptionalLinkedMobile}
+                  </label>
+                  <div className="flex items-center rounded-xl border border-[#CBD5E1] dark:border-[#334155] bg-[#FAF9F5] dark:bg-[#0F172A] px-3.5 h-12 focus-within:border-[#1E3A8A]">
+                    <Smartphone className="h-4 w-4 text-slate-400 mr-2 shrink-0" />
+                    <span className="text-sm font-bold text-slate-500 mr-1.5">+91</span>
+                    <input
+                      id="modal-pay-mobile-input"
+                      type="tel"
+                      inputMode="tel"
+                      maxLength={14}
+                      value={mobileInput}
+                      onChange={(e) => {
+                        setMobileInput(normalizeIndianMobileInput(e.target.value));
+                        setLocalError(null);
+                      }}
+                      placeholder={t.fieldMobilePlaceholder}
+                      className="w-full bg-transparent text-base font-bold tabular-nums outline-none"
+                    />
+                  </div>
+                </div>
+              )}
+
               <div className="space-y-2">
                 <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">
                   {t.fieldScreenshot}
@@ -758,6 +818,34 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
             <p className="text-xs sm:text-sm text-[#475569] dark:text-[#94A3B8] leading-relaxed">
               {t.useCodeSubtitle}
             </p>
+
+            {!hasSavedValidMobile && (
+              <div>
+                <label
+                  htmlFor="modal-code-mobile-input"
+                  className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1"
+                >
+                  {t.fieldOptionalLinkedMobile}
+                </label>
+                <div className="flex items-center rounded-xl border border-[#CBD5E1] dark:border-[#334155] bg-[#FAF9F5] dark:bg-[#0F172A] px-3.5 h-12 focus-within:border-[#1E3A8A]">
+                  <Smartphone className="h-4 w-4 text-slate-400 mr-2 shrink-0" />
+                  <span className="text-sm font-bold text-slate-500 mr-1.5">+91</span>
+                  <input
+                    id="modal-code-mobile-input"
+                    type="tel"
+                    inputMode="tel"
+                    maxLength={14}
+                    value={mobileInput}
+                    onChange={(e) => {
+                      setMobileInput(normalizeIndianMobileInput(e.target.value));
+                      setLocalError(null);
+                    }}
+                    placeholder={t.fieldMobilePlaceholder}
+                    className="w-full bg-transparent text-base font-bold tabular-nums outline-none"
+                  />
+                </div>
+              </div>
+            )}
 
             <div>
               <label

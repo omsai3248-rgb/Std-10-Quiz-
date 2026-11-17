@@ -198,6 +198,48 @@ export interface Translations {
   errCodeNotFound: string;
   errCodeAlreadyUsed: string;
   errAlreadyApproved: string;
+
+  // Student Gmail & Google Drive
+  loginWithGmailTitle: string;
+  loginWithGmailDesc: string;
+  loginWithGmailBtn: string;
+  loginWithGmailLoading: string;
+  orMobileDivider: string;
+  gmailDriveSyncedBadge: string;
+  gmailDriveSyncingBadge: string;
+  gmailDriveOfflineBadge: string;
+  gmailDriveNeedsReconnectBadge: string;
+  gmailDriveErrorBadge: string;
+  gmailDriveReconnectBtn: string;
+  gmailDriveSyncNowBtn: string;
+  gmailDriveLastSyncLabel: string;
+  gmailWelcomeRestored: string;
+  fieldOptionalLinkedMobile: string;
+  errPopupBlocked: string;
+  errGoogleDriveAuthFailed: string;
+  errGoogleEmailMissing: string;
+
+  // Smart Live Sync & Quota/Offline
+  syncStatusTitle: string;
+  syncInternetLabel: string;
+  syncInternetOnline: string;
+  syncInternetOffline: string;
+  syncServerLabel: string;
+  syncServerConnected: string;
+  syncServerDisconnected: string;
+  syncLiveSyncLabel: string;
+  syncLiveActive: string;
+  syncLivePaused: string;
+  syncLastSyncLabel: string;
+  syncPendingLabel: string;
+  syncFailedLabel: string;
+  syncNowBtn: string;
+  syncingNowBtn: string;
+  loadMoreBtn: string;
+  loadingMoreBtn: string;
+  quotaCooldownBanner: string;
+  offlineModeBanner: string;
+  pendingSyncSavedNote: string;
 }
 
 const GU: Translations = {
@@ -395,6 +437,49 @@ const GU: Translations = {
   errCodeNotFound: 'આ કોડ ખોટો છે અથવા અસ્તિત્વમાં નથી.',
   errCodeAlreadyUsed: 'આ કોડ પહેલેથી વપરાઈ ચૂક્યો છે! એક કોડ ફક્ત એક જ વાર વાપરી શકાય છે.',
   errAlreadyApproved: 'આ વિનંતી પહેલેથી પ્રોસેસ થઈ ચૂકી છે.',
+
+  loginWithGmailTitle: 'Gmail ID થી લૉગિન (Google Drive બેકઅપ)',
+  loginWithGmailDesc:
+    'તમારા Gmail થી લૉગિન કરો — તમારા અનલૉક વિષયો, કોડ અને તમામ ક્વિઝ પરિણામો સીધા તમારી Google Drive માં સુરક્ષિત રહેશે. ગમે ત્યારે ફરી Gmail થી લૉગિન કરી બધો ડેટા પાછો મેળવો.',
+  loginWithGmailBtn: 'Gmail વડે લૉગિન કરો',
+  loginWithGmailLoading: 'Gmail અને Google Drive જોડાઈ રહ્યું છે...',
+  orMobileDivider: 'અથવા મોબાઇલ નંબરથી લૉગિન',
+  gmailDriveSyncedBadge: 'Google Drive સેવ ✓',
+  gmailDriveSyncingBadge: 'Drive સિંક ચાલુ...',
+  gmailDriveOfflineBadge: 'ઓફલાઇન (સ્થાનિક સેવ)',
+  gmailDriveNeedsReconnectBadge: 'Drive ફરી જોડો',
+  gmailDriveErrorBadge: 'Drive સિંક ભૂલ',
+  gmailDriveReconnectBtn: 'Drive જોડો',
+  gmailDriveSyncNowBtn: 'Drive સિંક',
+  gmailDriveLastSyncLabel: 'છેલ્લું Drive સિંક:',
+  gmailWelcomeRestored: 'તમારું Gmail એકાઉન્ટ અને Google Drive ડેટા લોડ થઈ ગયો છે!',
+  fieldOptionalLinkedMobile: 'પેમેન્ટ / કોડ માટે ૧૦ અંકનો મોબાઇલ નંબર નાખો *',
+  errPopupBlocked: 'બ્રાઉઝરે Google લૉગિન પોપઅપ બ્લોક કર્યું છે. કૃપા કરીને પોપઅપ Allow કરી ફરી પ્રયાસ કરો.',
+  errGoogleDriveAuthFailed: 'Google Drive જોડાણ પૂર્ણ થઈ શક્યું નથી. કૃપા કરીને ફરી પ્રયાસ કરો.',
+  errGoogleEmailMissing: 'Google એકાઉન્ટમાંથી Gmail સરનામું મળ્યું નથી.',
+
+  syncStatusTitle: 'સ્માર્ટ લાઇવ સિંક સ્ટેટસ',
+  syncInternetLabel: 'ઇન્ટરનેટ સ્ટેટસ',
+  syncInternetOnline: 'Online',
+  syncInternetOffline: 'Offline',
+  syncServerLabel: 'સર્વર કનેક્શન',
+  syncServerConnected: 'Connected',
+  syncServerDisconnected: 'Disconnected',
+  syncLiveSyncLabel: 'લાઇવ સિંક',
+  syncLiveActive: 'Active',
+  syncLivePaused: 'Paused',
+  syncLastSyncLabel: 'છેલ્લો સિંક સમય',
+  syncPendingLabel: 'બાકી સિંક રેકોર્ડ્સ',
+  syncFailedLabel: 'નિષ્ફળ સિંક રેકોર્ડ્સ',
+  syncNowBtn: 'હમણાં સિંક કરો (Sync Now)',
+  syncingNowBtn: 'સિંક થઈ રહ્યું છે...',
+  loadMoreBtn: 'વધુ લોડ કરો (+25)',
+  loadingMoreBtn: 'લોડ થઈ રહ્યું છે...',
+  quotaCooldownBanner:
+    'સર્વરની દૈનિક ફ્રી લિમિટ (Quota) પૂરી થવા આવી છે — લોકલ કેશમાંથી ડેટા બતાવવામાં આવે છે અને ફેરફારો સુરક્ષિત ક્યુમાં સેવ થયા છે.',
+  offlineModeBanner:
+    'ઇન્ટરનેટ બંધ છે — તમારો ડેટા સ્થાનિક સ્ટોરેજમાં સુરક્ષિત છે અને ઇન્ટરનેટ આવતા જ આપમેળે સિંક થઈ જશે.',
+  pendingSyncSavedNote: 'સ્થાનિક સ્ટોરેજમાં સુરક્ષિત (ઓનલાઇન થતા આપમેળે સિંક થશે)',
 };
 
 const EN: Translations = {
@@ -593,6 +678,49 @@ const EN: Translations = {
   errCodeNotFound: 'This access code is invalid or does not exist.',
   errCodeAlreadyUsed: 'This access code has already been used and cannot be reused.',
   errAlreadyApproved: 'This request has already been processed.',
+
+  loginWithGmailTitle: 'Login with Gmail (Google Drive Backup)',
+  loginWithGmailDesc:
+    'Sign in with Gmail — all unlocked subjects, codes, and quiz progress are saved directly in your own Google Drive so you can restore anytime on any device.',
+  loginWithGmailBtn: 'Continue with Gmail',
+  loginWithGmailLoading: 'Connecting Gmail & Google Drive...',
+  orMobileDivider: 'OR LOGIN WITH MOBILE NUMBER',
+  gmailDriveSyncedBadge: 'Google Drive Synced ✓',
+  gmailDriveSyncingBadge: 'Syncing Drive...',
+  gmailDriveOfflineBadge: 'Offline (Saved Locally)',
+  gmailDriveNeedsReconnectBadge: 'Reconnect Drive',
+  gmailDriveErrorBadge: 'Drive Sync Error',
+  gmailDriveReconnectBtn: 'Reconnect Drive',
+  gmailDriveSyncNowBtn: 'Sync Drive',
+  gmailDriveLastSyncLabel: 'Last Drive Sync:',
+  gmailWelcomeRestored: 'Gmail account & Google Drive data restored!',
+  fieldOptionalLinkedMobile: 'Enter 10-digit Mobile Number for Payment / Code *',
+  errPopupBlocked: 'Popup was blocked by browser. Please allow popups and try again.',
+  errGoogleDriveAuthFailed: 'Could not connect Google Drive. Please try again.',
+  errGoogleEmailMissing: 'No Gmail address was returned from Google Sign-In.',
+
+  syncStatusTitle: 'Smart Live Sync Status',
+  syncInternetLabel: 'Internet Status',
+  syncInternetOnline: 'Online',
+  syncInternetOffline: 'Offline',
+  syncServerLabel: 'Server Connection',
+  syncServerConnected: 'Connected',
+  syncServerDisconnected: 'Disconnected',
+  syncLiveSyncLabel: 'Live Sync',
+  syncLiveActive: 'Active',
+  syncLivePaused: 'Paused',
+  syncLastSyncLabel: 'Last Sync Time',
+  syncPendingLabel: 'Pending Sync Records',
+  syncFailedLabel: 'Failed Sync Records',
+  syncNowBtn: 'Sync Now',
+  syncingNowBtn: 'Syncing...',
+  loadMoreBtn: 'Load More (+25)',
+  loadingMoreBtn: 'Loading...',
+  quotaCooldownBanner:
+    'Server free daily quota reached — serving cached data safely and queueing updates until quota resets.',
+  offlineModeBanner:
+    'Internet is offline — your data is safely stored locally and will sync automatically when online.',
+  pendingSyncSavedNote: 'Saved locally (will auto-sync when online)',
 };
 
 interface LanguageContextValue {

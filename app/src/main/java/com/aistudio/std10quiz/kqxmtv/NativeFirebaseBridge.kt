@@ -3,7 +3,9 @@ package com.aistudio.std10quiz.kqxmtv
 import android.content.Context
 import android.content.pm.PackageManager
 import android.net.ConnectivityManager
+import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.os.Build
 import android.util.Log
 import android.webkit.JavascriptInterface
@@ -169,7 +171,14 @@ class NativeFirebaseBridge(
 
     private fun markQuotaDegradedIfApplicable(err: Throwable?) {
         if (isExplicitQuotaError(err)) {
-            serverQuotaDegradedUntilMs = System.currentTimeMillis() + 3L * 60L * 1000L
+            serverQuotaDegradedUntilMs = System.currentTimeMillis() + 5L * 60L * 1000L
+            emitNativeSyncState(
+                serverConnected = false,
+                liveSyncActive = false,
+                errorKind = "quota",
+                quotaCooldownUntilMs = serverQuotaDegradedUntilMs,
+                lastErrorMessage = err?.localizedMessage.orEmpty()
+            )
         }
     }
 
@@ -327,6 +336,66 @@ class NativeFirebaseBridge(
     private var lastResumeCheckMs: Long = 0L
     @Volatile
     private var lastPaymentIdsJson: String = "[]"
+    @Volatile
+    private var networkCallbackRegistered = false
+
+    private val connectivityCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            emitNetworkAndSyncSnapshot()
+        }
+
+        override fun onLost(network: Network) {
+            emitNetworkAndSyncSnapshot()
+        }
+
+        override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
+            emitNetworkAndSyncSnapshot()
+        }
+    }
+
+    private fun emitNetworkAndSyncSnapshot() {
+        val online = isInternetConnected()
+        emitToJs("window.__onNativeNetworkStateChanged", if (online) "true" else "false")
+        val inQuotaCooldown = System.currentTimeMillis() < serverQuotaDegradedUntilMs
+        emitNativeSyncState(
+            serverConnected = online && !inQuotaCooldown,
+            liveSyncActive = adminListenersActive && online && !inQuotaCooldown,
+            errorKind = when {
+                !online -> "network"
+                inQuotaCooldown -> "quota"
+                else -> "none"
+            },
+            quotaCooldownUntilMs = if (inQuotaCooldown) serverQuotaDegradedUntilMs else 0L
+        )
+    }
+
+    private fun emitNativeSyncState(
+        serverConnected: Boolean,
+        liveSyncActive: Boolean,
+        lastSyncAtMs: Long? = null,
+        errorKind: String? = null,
+        quotaCooldownUntilMs: Long? = null,
+        lastErrorMessage: String? = null
+    ) {
+        val json = JSONObject().apply {
+            put("isOnline", isInternetConnected())
+            put("serverConnected", serverConnected)
+            put("liveSyncState", if (liveSyncActive) "active" else "paused")
+            if (lastSyncAtMs != null && lastSyncAtMs > 0L) {
+                put("lastSyncAtMs", lastSyncAtMs)
+            }
+            if (!errorKind.isNullOrBlank()) {
+                put("errorKind", errorKind)
+            }
+            if (quotaCooldownUntilMs != null) {
+                put("quotaCooldownUntilMs", quotaCooldownUntilMs)
+            }
+            if (lastErrorMessage != null) {
+                put("lastErrorMessage", lastErrorMessage)
+            }
+        }
+        emitToJs("window.__onNativeSyncState", json.toString())
+    }
 
     private val authStateListener = FirebaseAuth.AuthStateListener { firebaseAuth ->
         if (!isAttached) return@AuthStateListener
@@ -343,6 +412,17 @@ class NativeFirebaseBridge(
     fun attach() {
         isAttached = true
         runCatching { activity.lifecycle.addObserver(resumeLifecycleObserver) }
+        runCatching {
+            val cm = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            if (cm != null && !networkCallbackRegistered) {
+                val request = NetworkRequest.Builder()
+                    .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    .build()
+                cm.registerNetworkCallback(request, connectivityCallback)
+                networkCallbackRegistered = true
+            }
+        }
+        emitNetworkAndSyncSnapshot()
         val localAuth = auth ?: return
         if (db == null) return
         runCatching { localAuth.addAuthStateListener(authStateListener) }
@@ -353,6 +433,13 @@ class NativeFirebaseBridge(
     fun detach() {
         isAttached = false
         runCatching { activity.lifecycle.removeObserver(resumeLifecycleObserver) }
+        runCatching {
+            if (networkCallbackRegistered) {
+                val cm = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+                cm?.unregisterNetworkCallback(connectivityCallback)
+                networkCallbackRegistered = false
+            }
+        }
         runCatching { auth?.removeAuthStateListener(authStateListener) }
         stopPublicListeners()
         stopStudentListeners()
@@ -1626,13 +1713,13 @@ class NativeFirebaseBridge(
     private fun emitAdminCachedData(localDb: FirebaseFirestore) {
         val payQuery = localDb.collection("payment_requests")
             .orderBy("createdAt", Query.Direction.DESCENDING)
-            .limit(50)
+            .limit(25)
         val codeQuery = localDb.collection("access_codes")
             .orderBy("createdAt", Query.Direction.DESCENDING)
-            .limit(100)
+            .limit(25)
         val studentsQuery = localDb.collection("students")
             .orderBy("updatedAt", Query.Direction.DESCENDING)
-            .limit(100)
+            .limit(25)
 
         activity.lifecycleScope.launch(Dispatchers.IO) {
             val payCache = runCatching { payQuery.get(Source.CACHE).awaitResult() }.getOrNull()
@@ -1677,6 +1764,13 @@ class NativeFirebaseBridge(
             adminListenersActive = false
             adminListeners.forEach { it.remove() }
             adminListeners.clear()
+            emitNativeSyncState(
+                serverConnected = false,
+                liveSyncActive = false,
+                errorKind = "quota",
+                quotaCooldownUntilMs = serverQuotaDegradedUntilMs,
+                lastErrorMessage = "Firestore quota limit reached"
+            )
         }
     }
 
@@ -1686,6 +1780,87 @@ class NativeFirebaseBridge(
         activity.runOnUiThread {
             adminListenersActive = false
             startAdminListeners()
+        }
+    }
+
+    @JavascriptInterface
+    fun pauseAdminListeners() {
+        activity.runOnUiThread {
+            adminListenersActive = false
+            adminListeners.forEach { it.remove() }
+            adminListeners.clear()
+            val online = isInternetConnected()
+            val inQuota = System.currentTimeMillis() < serverQuotaDegradedUntilMs
+            emitNativeSyncState(
+                serverConnected = online && !inQuota,
+                liveSyncActive = false,
+                errorKind = if (!online) "network" else if (inQuota) "quota" else "none",
+                quotaCooldownUntilMs = if (inQuota) serverQuotaDegradedUntilMs else 0L
+            )
+        }
+    }
+
+    @JavascriptInterface
+    fun resumeAdminListeners() {
+        activity.runOnUiThread {
+            if (isCurrentUserAdmin()) {
+                startAdminListeners()
+            }
+        }
+    }
+
+    @JavascriptInterface
+    fun loadMoreAdminCollection(callId: String, collectionName: String, cursorSeconds: Long) {
+        val localDb = db ?: run {
+            resolveCallSuccess(callId, "[]")
+            return
+        }
+        if (!isInternetConnected() || System.currentTimeMillis() < serverQuotaDegradedUntilMs) {
+            resolveCallSuccess(callId, "[]")
+            return
+        }
+        activity.lifecycleScope.launch(Dispatchers.IO) {
+            if (!isCurrentUserAdmin()) {
+                resolveCallError(callId, "Authentication session not ready.")
+                return@launch
+            }
+            try {
+                val cursorTs = Timestamp(cursorSeconds, 0)
+                val orderField = if (collectionName == "students") "updatedAt" else "createdAt"
+                val snap = withTimeoutOrNull(8_000L) {
+                    localDb.collection(collectionName)
+                        .orderBy(orderField, Query.Direction.DESCENDING)
+                        .startAfter(cursorTs)
+                        .limit(25)
+                        .get()
+                        .awaitResult()
+                }
+                if (snap == null) {
+                    resolveCallSuccess(callId, "[]")
+                    return@launch
+                }
+                val arr = JSONArray()
+                snap.documents.forEach { doc ->
+                    when (collectionName) {
+                        "payment_requests" -> arr.put(serializePayment(doc))
+                        "access_codes" -> arr.put(serializeAccessCode(doc))
+                        "students" -> arr.put(serializeStudent(doc))
+                    }
+                }
+                emitNativeSyncState(
+                    serverConnected = true,
+                    liveSyncActive = adminListenersActive,
+                    lastSyncAtMs = System.currentTimeMillis(),
+                    errorKind = "none",
+                    quotaCooldownUntilMs = 0L,
+                    lastErrorMessage = ""
+                )
+                resolveCallSuccess(callId, arr.toString())
+            } catch (e: Exception) {
+                markQuotaDegradedIfApplicable(e)
+                handleFirestoreError(e, OperationType.LIST, collectionName)
+                resolveCallError(callId, e.localizedMessage ?: "Failed to load more items")
+            }
         }
     }
 
@@ -1708,14 +1883,21 @@ class NativeFirebaseBridge(
 
             if (!isInternetConnected() || System.currentTimeMillis() < serverQuotaDegradedUntilMs) {
                 adminListenersActive = false
+                emitNetworkAndSyncSnapshot()
                 return@runOnUiThread
             }
 
             adminListenersActive = true
+            emitNativeSyncState(
+                serverConnected = true,
+                liveSyncActive = true,
+                errorKind = "none",
+                quotaCooldownUntilMs = 0L
+            )
 
             val payQuery = localDb.collection("payment_requests")
                 .orderBy("createdAt", Query.Direction.DESCENDING)
-                .limit(50)
+                .limit(25)
             val payReg = payQuery
                 .addSnapshotListener { snap, error ->
                     if (error != null) {
@@ -1732,12 +1914,22 @@ class NativeFirebaseBridge(
                     val jsonStr = arr.toString()
                     saveAdminListBackup("all_payments", jsonStr)
                     emitToJs("window.__onNativeAllPayments", jsonStr)
+                    if (snap != null && !snap.metadata.isFromCache) {
+                        emitNativeSyncState(
+                            serverConnected = true,
+                            liveSyncActive = adminListenersActive,
+                            lastSyncAtMs = System.currentTimeMillis(),
+                            errorKind = "none",
+                            quotaCooldownUntilMs = 0L,
+                            lastErrorMessage = ""
+                        )
+                    }
                 }
             adminListeners.add(payReg)
 
             val codeQuery = localDb.collection("access_codes")
                 .orderBy("createdAt", Query.Direction.DESCENDING)
-                .limit(100)
+                .limit(25)
             val codeReg = codeQuery
                 .addSnapshotListener { snap, error ->
                     if (error != null) {
@@ -1754,12 +1946,22 @@ class NativeFirebaseBridge(
                     val jsonStr = arr.toString()
                     saveAdminListBackup("all_codes", jsonStr)
                     emitToJs("window.__onNativeAllCodes", jsonStr)
+                    if (snap != null && !snap.metadata.isFromCache) {
+                        emitNativeSyncState(
+                            serverConnected = true,
+                            liveSyncActive = adminListenersActive,
+                            lastSyncAtMs = System.currentTimeMillis(),
+                            errorKind = "none",
+                            quotaCooldownUntilMs = 0L,
+                            lastErrorMessage = ""
+                        )
+                    }
                 }
             adminListeners.add(codeReg)
 
             val studentsQuery = localDb.collection("students")
                 .orderBy("updatedAt", Query.Direction.DESCENDING)
-                .limit(100)
+                .limit(25)
             val studentsReg = studentsQuery
                 .addSnapshotListener { snap, error ->
                     if (error != null) {
@@ -1776,6 +1978,16 @@ class NativeFirebaseBridge(
                     val jsonStr = arr.toString()
                     saveAdminListBackup("all_students", jsonStr)
                     emitToJs("window.__onNativeAllStudents", jsonStr)
+                    if (snap != null && !snap.metadata.isFromCache) {
+                        emitNativeSyncState(
+                            serverConnected = true,
+                            liveSyncActive = adminListenersActive,
+                            lastSyncAtMs = System.currentTimeMillis(),
+                            errorKind = "none",
+                            quotaCooldownUntilMs = 0L,
+                            lastErrorMessage = ""
+                        )
+                    }
                 }
             adminListeners.add(studentsReg)
 
@@ -1824,6 +2036,14 @@ class NativeFirebaseBridge(
             adminListeners.clear()
             emitToJs("window.__onNativeReleaseConfig", "null")
             emitToJs("window.__onNativeAdminSessionDevice", "\"\"")
+            val online = isInternetConnected()
+            val inQuota = System.currentTimeMillis() < serverQuotaDegradedUntilMs
+            emitNativeSyncState(
+                serverConnected = online && !inQuota,
+                liveSyncActive = false,
+                errorKind = if (!online) "network" else if (inQuota) "quota" else "none",
+                quotaCooldownUntilMs = if (inQuota) serverQuotaDegradedUntilMs else 0L
+            )
         }
     }
 
@@ -1869,7 +2089,7 @@ class NativeFirebaseBridge(
         if (!isAttached) return
         val localDb = db ?: return
         val now = System.currentTimeMillis()
-        if (now - lastResumeCheckMs < 4_000L) return
+        if (now - lastResumeCheckMs < 60_000L) return
         if (!isInternetConnected() || now < serverQuotaDegradedUntilMs) return
         lastResumeCheckMs = now
 
