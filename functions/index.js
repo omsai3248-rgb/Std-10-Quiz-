@@ -420,3 +420,155 @@ exports.onAdminChatMessageCreated = onDocumentCreated(
     }
   }
 );
+
+// 9. App Update Push Broadcaster (notifies ALL registered devices & logs notification history)
+exports.onAppReleaseCreated = onDocumentCreated(
+  {
+    region: REGION,
+    database: FIRESTORE_DATABASE_ID,
+    document: "app_releases/{releaseId}",
+  },
+  async (event) => {
+    const release = event.data?.data();
+    if (!release) return;
+    const releaseId = event.params.releaseId;
+
+    const appName = "ધોરણ 10 ક્વિઝ";
+    const versionName = safeString(release.versionName, 32) || "1.0.1";
+    const versionCode = Number(release.versionCode || 1);
+    const isMandatory = release.isMandatory === true;
+    const updateTitle =
+      safeString(release.updateTitle, 120) ||
+      `${appName} v${versionName} ${isMandatory ? "(જરૂરી અપડેટ)" : "નવું અપડેટ"}`;
+    const body =
+      safeString(release.releaseNotes, 400) ||
+      `નવું વર્ઝન v${versionName} ઉપલબ્ધ છે. એપની અંદરથી તરત અપડેટ કરો.`;
+    const apkDownloadUrl = safeString(release.apkDownloadUrl, 2000);
+    const apkSha256 = safeString(release.apkSha256, 64);
+    const signingCertSha256 = safeString(release.signingCertSha256, 64);
+    const packageName = safeString(release.packageName, 120) || "com.aistudio.std10quiz.kqxmtv";
+
+    const dataPayload = {
+      type: "app_update",
+      releaseId,
+      appName,
+      versionName,
+      versionCode: String(versionCode),
+      title: updateTitle,
+      body,
+      isMandatory: isMandatory ? "true" : "false",
+      apkDownloadUrl,
+      apkSha256,
+      signingCertSha256,
+      packageName,
+      targetRoute: "app_update",
+      referenceId: releaseId,
+      timestampMs: String(Date.now()),
+    };
+
+    let topicSent = false;
+    try {
+      await messaging.send({
+        topic: "app_updates",
+        data: dataPayload,
+        android: {
+          priority: "high",
+          ttl: 86400 * 7 * 1000,
+        },
+        webpush: {
+          headers: { Urgency: "high" },
+          notification: {
+            title: `${appName} • ${updateTitle}`,
+            body,
+          },
+        },
+      });
+      topicSent = true;
+    } catch (err) {
+      logger.warn("Topic app_updates push failed", err);
+    }
+
+    // Also dispatch directly to device tokens not subscribed to topic (or web tokens)
+    let tokenSuccessCount = 0;
+    try {
+      const deviceTokensSnap = await db
+        .collection("device_fcm_tokens")
+        .where("enabled", "==", true)
+        .get();
+
+      const unsubscribedDocs = [];
+      const tokens = [];
+      deviceTokensSnap.forEach((docSnap) => {
+        const d = docSnap.data();
+        if (!d || !d.token) return;
+        if (!topicSent || d.topicSubscribed !== true || d.platform === "web") {
+          unsubscribedDocs.push(docSnap);
+          tokens.push(d.token);
+        }
+      });
+
+      for (let i = 0; i < tokens.length; i += 450) {
+        const chunkTokens = tokens.slice(i, i + 450);
+        const chunkDocs = unsubscribedDocs.slice(i, i + 450);
+        const resp = await messaging.sendEachForMulticast({
+          tokens: chunkTokens,
+          data: dataPayload,
+          android: {
+            priority: "high",
+            ttl: 86400 * 7 * 1000,
+          },
+          webpush: {
+            headers: { Urgency: "high" },
+            notification: {
+              title: `${appName} • ${updateTitle}`,
+              body,
+            },
+          },
+        });
+        tokenSuccessCount += resp.successCount;
+        await pruneFailedTokens(chunkDocs, resp.responses);
+      }
+      if (topicSent) {
+        tokenSuccessCount = Math.max(tokenSuccessCount, deviceTokensSnap.size);
+      }
+    } catch (err) {
+      logger.warn("Direct device token fan-out failed", err);
+    }
+
+    // Store / update deterministic user-facing notification history record
+    const now = FieldValue.serverTimestamp();
+    await db
+      .collection("update_notifications")
+      .doc(releaseId)
+      .set(
+        {
+          releaseId,
+          appName,
+          versionName,
+          versionCode,
+          title: updateTitle,
+          body,
+          isMandatory,
+          apkDownloadUrl,
+          targetRoute: "app_update",
+          pushDispatched: true,
+          recipientCount: tokenSuccessCount,
+          createdAt: now,
+          updatedAt: now,
+        },
+        { merge: true }
+      );
+
+    await createDeterministicNotification(`appupd_${releaseId}`, {
+      category: "data_update",
+      title: `નવું એપ અપડેટ v${versionName} પબ્લિશ થયું`,
+      body: `${updateTitle} (${isMandatory ? "Mandatory" : "Optional"}) — ${tokenSuccessCount} ડિવાઇસને નોટિફિકેશન મોકલાયું.`,
+      actorName: "Admin",
+      actorMobile: "",
+      actorId: safeString(release.publishedByUid, 128),
+      targetRoute: "admin_updates",
+      referenceId: releaseId,
+    });
+  }
+);
+

@@ -18,6 +18,7 @@ import {
   Wallet,
   X,
 } from 'lucide-react';
+import { useAdaptiveDisplay } from '../context/AdaptiveDisplayContext';
 import { useTranslation } from '../i18n/translations';
 import type { DirectMobileCodeResult } from '../services/quizRepository';
 import {
@@ -298,6 +299,7 @@ export const AdminRequestsTab: React.FC<{
   onNotify,
 }) => {
   const { lang, t } = useTranslation();
+  const { isLargeScreen } = useAdaptiveDisplay();
   const [statusFilter, setStatusFilter] = useState<'pending' | 'approved' | 'rejected' | 'all'>('pending');
   const [showQuickCodeGen, setShowQuickCodeGen] = useState(false);
 
@@ -361,7 +363,9 @@ export const AdminRequestsTab: React.FC<{
       {list.length === 0 ? (
         <EmptyStateCard message={t.noRequestsFound} />
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div
+          className={`grid grid-cols-1 lg:grid-cols-2 ${isLargeScreen ? '2xl:grid-cols-3' : ''} gap-4`}
+        >
           {list.map((req) => (
             <PaymentRequestCard
               key={req.id}
@@ -629,6 +633,7 @@ export const AdminAllCodesTab: React.FC<{
   onNotify,
 }) => {
   const { lang, t } = useTranslation();
+  const { isLargeScreen } = useAdaptiveDisplay();
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'unused' | 'used'>('all');
   const [showGenerator, setShowGenerator] = useState(false);
@@ -672,7 +677,9 @@ export const AdminAllCodesTab: React.FC<{
   };
 
   return (
-    <div className="p-3 sm:p-4 space-y-4 max-w-5xl mx-auto">
+    <div
+      className={`p-3 sm:p-4 space-y-4 ${isLargeScreen ? 'max-w-[1600px]' : 'max-w-5xl'} mx-auto`}
+    >
       <DirectMobileCodeCard
         students={students}
         isBusy={isBusy}
@@ -829,7 +836,9 @@ export const AdminAllCodesTab: React.FC<{
       {filteredCodes.length === 0 ? (
         <EmptyStateCard message={t.noCodesFound} />
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div
+          className={`grid grid-cols-1 md:grid-cols-2 ${isLargeScreen ? '2xl:grid-cols-3' : ''} gap-3`}
+        >
           {filteredCodes.map((item) => {
             const isUsed = item.status === 'used' || item.isUsed;
             const resolvedSub = resolveCodeSubjectId(item.code, item.batchName, item.subjectId);
@@ -957,6 +966,7 @@ export const AdminUsedCodesTab: React.FC<{
   onDeleteCode: (item: AccessCode) => void;
 }> = ({ accessCodes, isBusy, onDeleteCode }) => {
   const { lang, t } = useTranslation();
+  const { isLargeScreen } = useAdaptiveDisplay();
 
   const usedCodes = useMemo(() => {
     return accessCodes
@@ -969,7 +979,9 @@ export const AdminUsedCodesTab: React.FC<{
   }, [accessCodes]);
 
   return (
-    <div className="p-3 sm:p-4 space-y-4 max-w-5xl mx-auto">
+    <div
+      className={`p-3 sm:p-4 space-y-4 ${isLargeScreen ? 'max-w-[1600px]' : 'max-w-5xl'} mx-auto`}
+    >
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <UserCheck className="h-5 w-5 text-[#047857] dark:text-[#6EE7B7]" />
@@ -992,7 +1004,9 @@ export const AdminUsedCodesTab: React.FC<{
       {usedCodes.length === 0 ? (
         <EmptyStateCard message={t.noUsedCodesYet} />
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+        <div
+          className={`grid grid-cols-1 md:grid-cols-2 ${isLargeScreen ? '2xl:grid-cols-3' : ''} gap-3.5`}
+        >
           {usedCodes.map((item) => {
             const resolvedSub = resolveCodeSubjectId(item.code, item.batchName, item.subjectId);
             const usedName = item.usedBy?.name || item.usedByName || '-';
@@ -1089,6 +1103,7 @@ export const AdminStudentsTab: React.FC<{
   onDeleteStudent,
 }) => {
   const { lang, t } = useTranslation();
+  const { isLargeScreen } = useAdaptiveDisplay();
   const [searchQuery, setSearchQuery] = useState('');
 
   const filteredStudents = useMemo(() => {
@@ -1103,7 +1118,9 @@ export const AdminStudentsTab: React.FC<{
   }, [students, searchQuery]);
 
   return (
-    <div className="p-3 sm:p-4 space-y-4 max-w-5xl mx-auto">
+    <div
+      className={`p-3 sm:p-4 space-y-4 ${isLargeScreen ? 'max-w-[1600px]' : 'max-w-5xl'} mx-auto`}
+    >
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
         <div className="flex items-center gap-2">
           <UserCheck className="h-5 w-5 text-[#1E3A8A] dark:text-[#93C5FD]" />
@@ -1127,7 +1144,9 @@ export const AdminStudentsTab: React.FC<{
       {filteredStudents.length === 0 ? (
         <EmptyStateCard message={t.noStudentsYet} />
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+        <div
+          className={`grid grid-cols-1 md:grid-cols-2 ${isLargeScreen ? '2xl:grid-cols-3' : ''} gap-3.5`}
+        >
           {filteredStudents.map((st) => {
             const unlockedSet = new Set<string>(
               st.hasQuizAccess

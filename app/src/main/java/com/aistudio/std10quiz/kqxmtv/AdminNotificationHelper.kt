@@ -33,6 +33,7 @@ import java.util.UUID
 object AdminNotificationHelper {
     const val CHANNEL_ADMIN_ALERTS = "admin_alerts_high"
     const val CHANNEL_ADMIN_CHAT = "admin_chat_messages"
+    const val CHANNEL_APP_UPDATES = "app_updates_high"
 
     const val EXTRA_TARGET_ROUTE = "extra_target_route"
     const val EXTRA_CHAT_ID = "extra_chat_id"
@@ -92,8 +93,23 @@ object AdminNotificationHelper {
             lockscreenVisibility = Notification.VISIBILITY_PRIVATE
         }
 
+        val updatesChannel = NotificationChannel(
+            CHANNEL_APP_UPDATES,
+            "App Updates",
+            NotificationManager.IMPORTANCE_HIGH
+        ).apply {
+            description = "Heads-up notifications when a new version of Std 10 Quiz is available"
+            enableLights(true)
+            enableVibration(true)
+            vibrationPattern = VIBRATION_PATTERN
+            setSound(soundUri, audioAttrs)
+            setShowBadge(true)
+            lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+        }
+
         nm.createNotificationChannel(alertsChannel)
         nm.createNotificationChannel(chatChannel)
+        nm.createNotificationChannel(updatesChannel)
     }
 
     fun hasNotificationPermission(context: Context): Boolean {
@@ -299,6 +315,74 @@ object AdminNotificationHelper {
             NotificationManagerCompat.from(context).notify(reqCode, notification)
         }.onFailure { err ->
             Log.w("AdminNotification", "Unable to post activity notification", err)
+        }
+    }
+
+    fun showAppUpdateNotification(
+        context: Context,
+        releaseId: String,
+        appName: String,
+        versionName: String,
+        versionCode: Long,
+        title: String,
+        body: String,
+        isMandatory: Boolean
+    ) {
+        ensureChannels(context)
+        if (!hasNotificationPermission(context)) return
+        val dedupeKey = "appupd_${releaseId.ifBlank { "${versionName}_$versionCode" }}"
+        if (!markDedupeShown(dedupeKey)) return
+
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra(EXTRA_TARGET_ROUTE, "app_update")
+            putExtra(EXTRA_NOTIF_ID, releaseId)
+            putExtra(EXTRA_REFERENCE_ID, releaseId)
+        }
+        val reqCode = ("app_update_${versionCode}_$versionName").hashCode()
+        val pendingIntent = PendingIntent.getActivity(
+            context,
+            reqCode,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val resolvedAppName = appName.ifBlank { context.getString(R.string.app_name) }
+        val resolvedTitle = title.ifBlank {
+            if (isMandatory) {
+                "$resolvedAppName • જરૂરી અપડેટ v$versionName"
+            } else {
+                "$resolvedAppName • નવું અપડેટ v$versionName"
+            }
+        }
+        val resolvedBody = body.ifBlank {
+            "નવું વર્ઝન v$versionName ઉપલબ્ધ છે. અહીં ટચ કરીને એપની અંદરથી તરત અપડેટ કરો."
+        }
+
+        val notification = NotificationCompat.Builder(context, CHANNEL_APP_UPDATES)
+            .setSmallIcon(R.drawable.ic_stat_notification)
+            .setColor(0xFF1E3A8A.toInt())
+            .setSubText(resolvedAppName)
+            .setContentTitle(resolvedTitle)
+            .setContentText(resolvedBody)
+            .setStyle(
+                NotificationCompat.BigTextStyle()
+                    .setBigContentTitle(resolvedTitle)
+                    .bigText(resolvedBody)
+            )
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(NotificationCompat.CATEGORY_RECOMMENDATION)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setDefaults(NotificationCompat.DEFAULT_ALL)
+            .setVibrate(VIBRATION_PATTERN)
+            .setAutoCancel(true)
+            .setContentIntent(pendingIntent)
+            .build()
+
+        runCatching {
+            NotificationManagerCompat.from(context).notify(reqCode, notification)
+        }.onFailure { err ->
+            Log.w("AdminNotification", "Unable to post app update notification", err)
         }
     }
 

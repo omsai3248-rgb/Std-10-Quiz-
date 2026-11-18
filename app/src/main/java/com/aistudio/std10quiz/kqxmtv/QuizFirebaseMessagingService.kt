@@ -1,12 +1,15 @@
 package com.aistudio.std10quiz.kqxmtv
 
+import android.content.Context
 import android.util.Log
+import androidx.core.content.pm.PackageInfoCompat
 import com.google.firebase.Firebase
 import com.google.firebase.FirebaseApp
 import com.google.firebase.auth.auth
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.SetOptions
+import com.google.firebase.messaging.FirebaseMessaging
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 
@@ -15,6 +18,10 @@ class QuizFirebaseMessagingService : FirebaseMessagingService() {
     override fun onNewToken(token: String) {
         super.onNewToken(token)
         AdminNotificationHelper.saveFcmToken(applicationContext, token)
+        runCatching {
+            FirebaseMessaging.getInstance().subscribeToTopic("app_updates")
+        }
+        persistPublicDeviceFcmToken(applicationContext, token, topicSubscribed = true)
         persistRefreshedTokenIfAdminSignedIn(token)
     }
 
@@ -23,7 +30,30 @@ class QuizFirebaseMessagingService : FirebaseMessagingService() {
         val data = message.data
         val type = data["type"].orEmpty()
 
-        // Ensure device still has an active Admin session before displaying Admin notifications
+        // 1. App Update notifications are delivered to ALL registered users (foreground/background/killed)
+        if (type == "app_update") {
+            val releaseId = data["releaseId"].orEmpty().ifBlank { data["referenceId"].orEmpty() }
+            val appName = data["appName"].orEmpty().ifBlank { applicationContext.getString(R.string.app_name) }
+            val versionName = data["versionName"].orEmpty().ifBlank { "1.0.1" }
+            val versionCode = data["versionCode"]?.toLongOrNull() ?: 1L
+            val title = data["title"].orEmpty().ifBlank { message.notification?.title.orEmpty() }
+            val body = data["body"].orEmpty().ifBlank { message.notification?.body.orEmpty() }
+            val isMandatory = data["isMandatory"] == "true"
+
+            AdminNotificationHelper.showAppUpdateNotification(
+                context = applicationContext,
+                releaseId = releaseId,
+                appName = appName,
+                versionName = versionName,
+                versionCode = versionCode,
+                title = title,
+                body = body,
+                isMandatory = isMandatory
+            )
+            return
+        }
+
+        // 2. Ensure device still has an active Admin session before displaying Admin notifications
         if (!AdminNotificationHelper.isAdminSessionActive(applicationContext) && Firebase.auth.currentUser == null) {
             return
         }
@@ -115,6 +145,41 @@ class QuizFirebaseMessagingService : FirebaseMessagingService() {
             }
         }.onFailure { err ->
             Log.w("QuizFcmService", "Failed to update delivered status", err)
+        }
+    }
+
+    private fun persistPublicDeviceFcmToken(context: Context, token: String, topicSubscribed: Boolean) {
+        if (token.length < 20) return
+        runCatching {
+            val db = getNamedFirestore() ?: return
+            val deviceId = AdminNotificationHelper.getOrCreateDeviceId(context)
+            val pkgInfo = runCatching {
+                context.packageManager.getPackageInfo(context.packageName, 0)
+            }.getOrNull()
+            val appVersion = pkgInfo?.versionName.orEmpty().ifBlank { "1.0.0" }.take(32)
+            val versionCode = if (pkgInfo != null) PackageInfoCompat.getLongVersionCode(pkgInfo).coerceAtLeast(1L) else 1L
+
+            val docRef = db.collection("device_fcm_tokens").document(deviceId)
+            docRef.get().addOnSuccessListener { snap ->
+                val payload = hashMapOf<String, Any>(
+                    "deviceId" to deviceId,
+                    "token" to token.take(512),
+                    "platform" to "android",
+                    "appVersion" to appVersion,
+                    "versionCode" to versionCode,
+                    "topicSubscribed" to topicSubscribed,
+                    "enabled" to true,
+                    "updatedAt" to FieldValue.serverTimestamp(),
+                )
+                if (!snap.exists()) {
+                    payload["createdAt"] = FieldValue.serverTimestamp()
+                    docRef.set(payload)
+                } else {
+                    docRef.set(payload, SetOptions.merge())
+                }
+            }
+        }.onFailure { err ->
+            Log.w("QuizFcmService", "Failed to persist public device FCM token", err)
         }
     }
 

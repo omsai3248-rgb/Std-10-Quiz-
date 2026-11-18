@@ -9,9 +9,13 @@ import type {
   AdminNotificationPrefs,
   AdminUser,
   AppReleaseConfig,
+  AppUpdateProgressEvent,
+  InspectedApkMetadata,
+  InstalledAppInfo,
   PaymentRequest,
   QuizAttempt,
   StudentProfile,
+  UpdateNotificationRecord,
 } from '../types/models';
 import {
   applyNativeSyncSnapshot,
@@ -82,6 +86,11 @@ interface AndroidFirebaseBridgeApi {
   stopAdminChatThreadListener?: () => void;
   sendAdminChatMessage?: (callId: string, payloadJson: string) => void;
   markChatMessagesRead?: (callId: string, chatIdRaw: string) => void;
+  getInstalledAppInfo?: () => string;
+  pickAndInspectApkFile?: (callId: string) => void;
+  publishAppUpdate?: (callId: string, payloadJson: string) => void;
+  downloadAndInstallAppUpdate?: (callId: string, payloadJson: string) => void;
+  retryInstallPendingApk?: (callId: string) => void;
 }
 
 declare global {
@@ -90,6 +99,9 @@ declare global {
     __resolveNativeFirebaseCall?: (callId: string, ok: boolean, payload: unknown) => void;
     __onNativeAuthStateChanged?: (user: AppAuthUser | null) => void;
     __onNativeReleaseConfig?: (cfg: AppReleaseConfig | null) => void;
+    __onNativeUpdateNotifications?: (list: UpdateNotificationRecord[]) => void;
+    __onNativeApkUploadProgress?: (evt: AppUpdateProgressEvent) => void;
+    __onNativeAppUpdateProgress?: (evt: AppUpdateProgressEvent) => void;
     __onNativeMyPayments?: (list: PaymentRequest[]) => void;
     __onNativeStudentProfile?: (profile: StudentProfile | null) => void;
     __onNativeMyAttempts?: (list: QuizAttempt[]) => void;
@@ -169,6 +181,9 @@ const pendingCalls = new Map<
 
 const authListeners = new Set<(user: AppAuthUser | null) => void>();
 const releaseListeners = new Set<(cfg: AppReleaseConfig | null) => void>();
+const updateNotificationListeners = new Set<(list: UpdateNotificationRecord[]) => void>();
+const apkUploadProgressListeners = new Set<(evt: AppUpdateProgressEvent) => void>();
+const appUpdateProgressListeners = new Set<(evt: AppUpdateProgressEvent) => void>();
 const myPaymentListeners = new Set<(list: PaymentRequest[]) => void>();
 const studentProfileListeners = new Set<(profile: StudentProfile | null) => void>();
 const myAttemptListeners = new Set<(list: QuizAttempt[]) => void>();
@@ -186,6 +201,7 @@ const adminDeepLinkListeners = new Set<(payload: AdminDeepLinkPayload) => void>(
 
 let latestAuthUser: AppAuthUser | null | undefined;
 let latestReleaseConfig: AppReleaseConfig | null | undefined;
+let latestUpdateNotifications: UpdateNotificationRecord[] | undefined;
 let latestMyPayments: PaymentRequest[] | undefined;
 let latestStudentProfile: StudentProfile | null | undefined;
 let latestMyAttempts: QuizAttempt[] | undefined;
@@ -225,6 +241,23 @@ if (typeof window !== 'undefined') {
   window.__onNativeReleaseConfig = (cfg) => {
     latestReleaseConfig = cfg ?? null;
     releaseListeners.forEach((cb) => cb(latestReleaseConfig ?? null));
+  };
+
+  window.__onNativeUpdateNotifications = (list) => {
+    latestUpdateNotifications = Array.isArray(list) ? list : [];
+    updateNotificationListeners.forEach((cb) => cb(latestUpdateNotifications!));
+  };
+
+  window.__onNativeApkUploadProgress = (evt) => {
+    if (evt && typeof evt === 'object') {
+      apkUploadProgressListeners.forEach((cb) => cb(evt));
+    }
+  };
+
+  window.__onNativeAppUpdateProgress = (evt) => {
+    if (evt && typeof evt === 'object') {
+      appUpdateProgressListeners.forEach((cb) => cb(evt));
+    }
   };
 
   window.__onNativeMyPayments = (list) => {
@@ -354,8 +387,21 @@ export function subscribeNativeAuthState(cb: (user: AppAuthUser | null) => void)
 }
 
 let publicListenersStarted = false;
+let lastPublicPaymentIdsJson = '[]';
 let adminListenersStarted = false;
 let activeStudentId = '';
+
+function ensureNativePublicListenersStarted(paymentIdsJson?: string): void {
+  if (paymentIdsJson !== undefined) {
+    lastPublicPaymentIdsJson = paymentIdsJson;
+  }
+  if (!publicListenersStarted) {
+    publicListenersStarted = true;
+    window.AndroidFirebaseBridge?.startPublicListeners?.(lastPublicPaymentIdsJson);
+  } else if (paymentIdsJson !== undefined) {
+    window.AndroidFirebaseBridge?.updateMyPaymentIds?.(lastPublicPaymentIdsJson);
+  }
+}
 
 function ensureNativeAdminListenersStarted(): void {
   if (adminListenersStarted) return;
@@ -367,8 +413,7 @@ function maybeStopNativeAdminListeners(): void {
   if (
     allPaymentListeners.size === 0 &&
     allCodeListeners.size === 0 &&
-    allStudentListeners.size === 0 &&
-    releaseListeners.size === 0
+    allStudentListeners.size === 0
   ) {
     adminListenersStarted = false;
     setLiveSyncState('paused');
@@ -417,10 +462,38 @@ export function subscribeNativeReleaseConfig(
 ): () => void {
   releaseListeners.add(cb);
   if (latestReleaseConfig !== undefined) cb(latestReleaseConfig);
-  ensureNativeAdminListenersStarted();
+  ensureNativePublicListenersStarted();
   return () => {
     releaseListeners.delete(cb);
-    maybeStopNativeAdminListeners();
+  };
+}
+
+export function subscribeNativeUpdateNotifications(
+  cb: (list: UpdateNotificationRecord[]) => void
+): () => void {
+  updateNotificationListeners.add(cb);
+  if (latestUpdateNotifications !== undefined) cb(latestUpdateNotifications);
+  ensureNativePublicListenersStarted();
+  return () => {
+    updateNotificationListeners.delete(cb);
+  };
+}
+
+export function subscribeNativeApkUploadProgress(
+  cb: (evt: AppUpdateProgressEvent) => void
+): () => void {
+  apkUploadProgressListeners.add(cb);
+  return () => {
+    apkUploadProgressListeners.delete(cb);
+  };
+}
+
+export function subscribeNativeAppUpdateProgress(
+  cb: (evt: AppUpdateProgressEvent) => void
+): () => void {
+  appUpdateProgressListeners.add(cb);
+  return () => {
+    appUpdateProgressListeners.delete(cb);
   };
 }
 
@@ -435,12 +508,7 @@ export function subscribeNativeMyPayments(
   myPaymentListeners.add(cb);
   if (latestMyPayments !== undefined) cb(latestMyPayments);
   const idsJson = JSON.stringify(paymentIds);
-  if (!publicListenersStarted) {
-    publicListenersStarted = true;
-    window.AndroidFirebaseBridge?.startPublicListeners?.(idsJson);
-  } else {
-    window.AndroidFirebaseBridge?.updateMyPaymentIds?.(idsJson);
-  }
+  ensureNativePublicListenersStarted(idsJson);
   return () => {
     myPaymentListeners.delete(cb);
   };
@@ -760,4 +828,67 @@ export async function markNativeChatMessagesRead(chatId: string): Promise<void> 
     window.AndroidFirebaseBridge?.markChatMessagesRead?.(callId, chatId);
   });
 }
+
+// =========================================================================
+// Native In-App App Update Bridge Calls
+// =========================================================================
+
+export function getNativeInstalledAppInfo(): InstalledAppInfo | null {
+  if (!hasNativeFirebaseBridge()) return null;
+  try {
+    const raw = window.AndroidFirebaseBridge?.getInstalledAppInfo?.();
+    if (!raw || raw === '{}') return null;
+    const parsed = JSON.parse(raw) as InstalledAppInfo;
+    return parsed?.packageName ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function pickAndInspectNativeApk(): Promise<InspectedApkMetadata> {
+  return invokeNativeBridgeCall<InspectedApkMetadata>((callId) => {
+    window.AndroidFirebaseBridge?.pickAndInspectApkFile?.(callId);
+  });
+}
+
+export async function publishNativeAppUpdate(payload: {
+  stagedFilePath?: string;
+  versionName: string;
+  versionCode: number;
+  updateTitle: string;
+  releaseNotes: string;
+  isMandatory: boolean;
+  apkDownloadUrl?: string;
+  apkStoragePath?: string;
+  apkFileName?: string;
+  apkSizeBytes?: number;
+  apkSha256?: string;
+  signingCertSha256?: string;
+  packageName?: string;
+  githubOwnerRepo?: string;
+}): Promise<{ releaseId: string; apkDownloadUrl: string; versionName: string; versionCode: number }> {
+  return invokeNativeBridgeCall((callId) => {
+    window.AndroidFirebaseBridge?.publishAppUpdate?.(callId, JSON.stringify(payload));
+  });
+}
+
+export async function downloadAndInstallNativeAppUpdate(payload: {
+  apkDownloadUrl: string;
+  versionName: string;
+  versionCode: number;
+  apkSizeBytes?: number;
+  apkSha256?: string;
+  signingCertSha256?: string;
+}): Promise<{ status: string }> {
+  return invokeNativeBridgeCall((callId) => {
+    window.AndroidFirebaseBridge?.downloadAndInstallAppUpdate?.(callId, JSON.stringify(payload));
+  });
+}
+
+export async function retryNativePendingApkInstall(): Promise<{ status: string }> {
+  return invokeNativeBridgeCall((callId) => {
+    window.AndroidFirebaseBridge?.retryInstallPendingApk?.(callId);
+  });
+}
+
 

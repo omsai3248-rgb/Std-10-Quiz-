@@ -344,14 +344,14 @@ export const AdminChatTab: React.FC<AdminChatTabProps> = ({
       </div>
 
       {/* WhatsApp-Style Split Chat Layout */}
-      <div className="rounded-2xl bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] shadow-sm overflow-hidden grid grid-cols-1 md:grid-cols-[310px_1fr] min-h-[460px]">
+      <div className="rounded-2xl bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] shadow-sm overflow-hidden grid grid-cols-1 md:grid-cols-[310px_1fr] xl:grid-cols-[360px_1fr] min-h-[480px] xl:h-[calc(100vh-260px)]">
         {/* Left: Admin Conversations & Directory */}
         <div
-          className={`border-r border-[#E2E8F0] dark:border-[#334155] flex flex-col ${
+          className={`border-r border-[#E2E8F0] dark:border-[#334155] flex flex-col min-h-0 ${
             isThreadOpen ? 'hidden md:flex' : 'flex'
           }`}
         >
-          <div className="px-3.5 py-2.5 bg-[#F8FAFC] dark:bg-[#0F172A] border-b border-[#E2E8F0] dark:border-[#334155] flex items-center justify-between">
+          <div className="px-3.5 py-2.5 bg-[#F8FAFC] dark:bg-[#0F172A] border-b border-[#E2E8F0] dark:border-[#334155] flex items-center justify-between shrink-0">
             <span className="text-xs font-extrabold text-[#475569] dark:text-[#CBD5E1] flex items-center gap-1.5">
               <Users className="h-3.5 w-3.5" />
               <span>{t.adminDirectoryTitle} ({otherAdmins.length})</span>
@@ -366,7 +366,7 @@ export const AdminChatTab: React.FC<AdminChatTabProps> = ({
               </p>
             </div>
           ) : (
-            <div className="divide-y divide-slate-100 dark:divide-slate-800 overflow-y-auto max-h-[520px]">
+            <div className="divide-y divide-slate-100 dark:divide-slate-800 overflow-y-auto flex-1 max-h-[520px] xl:max-h-none">
               {rosterWithChats.map(({ partner, chatId, thread, unread }) => {
                 const selected = activeChatId === chatId;
                 const isLastMine = thread?.lastMessageSenderUid === currentAdminUid;
@@ -415,7 +415,7 @@ export const AdminChatTab: React.FC<AdminChatTabProps> = ({
 
         {/* Right: 1-to-1 Chat Thread */}
         <div
-          className={`flex flex-col bg-[#EFEAE2] dark:bg-[#0B141A] ${
+          className={`flex flex-col min-h-0 bg-[#EFEAE2] dark:bg-[#0B141A] ${
             isThreadOpen ? 'flex' : 'hidden md:flex'
           }`}
         >
@@ -460,7 +460,7 @@ export const AdminChatTab: React.FC<AdminChatTabProps> = ({
               </div>
 
               {/* Scrollable Messages */}
-              <div className="flex-1 p-3 sm:p-4 space-y-2.5 overflow-y-auto max-h-[420px]">
+              <div className="flex-1 min-h-0 p-3 sm:p-4 space-y-2.5 overflow-y-auto max-h-[420px] xl:max-h-none">
                 {activeMessages.length === 0 ? (
                   <div className="h-full flex items-center justify-center py-10">
                     <p className="rounded-xl bg-white/85 dark:bg-[#1E293B]/90 px-4 py-2 text-xs font-semibold text-[#475569] dark:text-[#CBD5E1] shadow-sm">

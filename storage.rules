@@ -1,8 +1,16 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
+    function isStorageAdmin() {
+      return request.auth != null && (
+        ('phone_number' in request.auth.token && request.auth.token.phone_number == '+919099592283') ||
+        ('email' in request.auth.token && request.auth.token.email == 'admin9099592283@std10quiz.app') ||
+        ('email' in request.auth.token && request.auth.token.email == 'omsai3248@gmail.com' && request.auth.token.email_verified == true)
+      );
+    }
+
     match /payment_screenshots/{userId}/{fileName} {
-      // Signed-in user (including anonymous auth) can upload payment screenshot image up to 5 MB
+      // Signed-in user can upload payment screenshot image up to 5 MB
       allow create: if request.auth != null &&
                        request.auth.uid == userId &&
                        request.resource.size < 5 * 1024 * 1024 &&
@@ -11,12 +19,27 @@ service firebase.storage {
       // Only the submitting user or Admin can read the payment screenshot
       allow read: if request.auth != null && (
         request.auth.uid == userId ||
-        ('phone_number' in request.auth.token && request.auth.token.phone_number == '+919099592283') ||
-        ('email' in request.auth.token && request.auth.token.email == 'admin9099592283@std10quiz.app') ||
-        ('email' in request.auth.token && request.auth.token.email == 'omsai3248@gmail.com' && request.auth.token.email_verified == true)
+        isStorageAdmin()
       );
 
       allow update, delete: if false;
+    }
+
+    match /app_releases/{fileName} {
+      // All users can download verified release APKs inside the app
+      allow read: if true;
+
+      // Only authenticated Admin can upload/replace or delete APK binaries (up to 250 MB)
+      allow create, update: if isStorageAdmin() &&
+                               fileName.matches('^[a-zA-Z0-9._-]+\\.apk$') &&
+                               request.resource.size > 0 &&
+                               request.resource.size < 250 * 1024 * 1024 &&
+                               (
+                                 request.resource.contentType == 'application/vnd.android.package-archive' ||
+                                 request.resource.contentType == 'application/octet-stream'
+                               );
+
+      allow delete: if isStorageAdmin();
     }
   }
 }

@@ -19,6 +19,7 @@ import {
   X,
   XCircle,
 } from 'lucide-react';
+import { useAdaptiveDisplay } from '../context/AdaptiveDisplayContext';
 import { useTranslation } from '../i18n/translations';
 import { extractReadableErrorMessage } from '../services/firestoreErrorHandler';
 import {
@@ -92,6 +93,7 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
   onNotify,
 }) => {
   const { lang, t } = useTranslation();
+  const { useSplitLayout, isTvOrSmartBoard } = useAdaptiveDisplay();
 
   const [activeTab, setActiveTab] = useState<'pay' | 'code'>(initialMode);
   const [selectedPlanSubject, setSelectedPlanSubject] = useState<string>(defaultSubjectId);
@@ -344,13 +346,15 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
     >
       {/* Sticky Full-Screen Header */}
       <header className="sticky top-0 z-10 bg-white/95 dark:bg-[#1E293B]/95 backdrop-blur border-b border-[#E2E8F0] dark:border-[#334155]">
-        <div className="max-w-2xl mx-auto px-3 sm:px-5 py-2.5 flex items-center justify-between gap-2">
+        <div
+          className={`${useSplitLayout ? 'max-w-5xl' : 'max-w-2xl'} mx-auto px-3 sm:px-5 py-2.5 flex items-center justify-between gap-2`}
+        >
           <div className="flex items-center gap-2.5 min-w-0">
             <button
               type="button"
               onClick={onClose}
               aria-label={t.closeBtn}
-              className="h-11 w-11 rounded-xl border border-[#CBD5E1] dark:border-[#334155] flex items-center justify-center hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer shrink-0"
+              className="h-12 w-12 rounded-xl border border-[#CBD5E1] dark:border-[#334155] flex items-center justify-center hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer shrink-0"
             >
               <ArrowLeft className="h-5 w-5" />
             </button>
@@ -371,7 +375,7 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
             type="button"
             onClick={onClose}
             aria-label={t.closeBtn}
-            className="h-11 w-11 rounded-xl border border-[#CBD5E1] dark:border-[#334155] flex items-center justify-center hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer shrink-0"
+            className="h-12 w-12 rounded-xl border border-[#CBD5E1] dark:border-[#334155] flex items-center justify-center hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer shrink-0"
           >
             <X className="h-5 w-5" />
           </button>
@@ -379,9 +383,13 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
       </header>
 
       {/* Full-Width Scrollable Payment & Unlock Body */}
-      <main className="max-w-2xl mx-auto px-3.5 sm:px-5 py-4 pb-24 space-y-4">
+      <main
+        className={`${useSplitLayout ? 'max-w-5xl' : 'max-w-2xl'} mx-auto px-3.5 sm:px-5 py-4 pb-24 space-y-4`}
+      >
         {/* 2-Tab Switcher: UPI Payment vs Code */}
-        <div className="grid grid-cols-2 gap-2 rounded-2xl bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] p-1.5 shadow-sm">
+        <div
+          className={`${useSplitLayout ? 'max-w-xl mx-auto' : ''} grid grid-cols-2 gap-2 rounded-2xl bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] p-1.5 shadow-sm`}
+        >
           <button
             type="button"
             onClick={() => {
@@ -416,7 +424,8 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
         </div>
 
         {activeTab === 'pay' ? (
-          <div className="space-y-4">
+          <div className={useSplitLayout ? 'grid grid-cols-1 lg:grid-cols-12 gap-5 items-start' : 'space-y-4'}>
+            <div className={useSplitLayout ? 'lg:col-span-5 space-y-4' : 'space-y-4'}>
             {/* Fixed Price Plan Selector Card */}
             <section className="rounded-2xl bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] p-4 space-y-2.5 shadow-sm">
               <div className="flex items-center justify-between gap-2">
@@ -602,7 +611,9 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
                 <p className="opacity-85">{t.payUpiQuickTip}</p>
               </div>
             </section>
+            </div>
 
+            <div className={useSplitLayout ? 'lg:col-span-7 space-y-4' : 'space-y-4'}>
             {/* Screenshot Upload Form + Side-by-Side Admin & WhatsApp Buttons */}
             <form
               onSubmit={(e) => void handlePaymentSubmit(e)}
@@ -801,11 +812,12 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
                 })}
               </section>
             )}
+            </div>
           </div>
         ) : (
           <form
             onSubmit={(e) => void handleCodeSubmit(e)}
-            className="rounded-2xl bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] p-4 space-y-4 shadow-sm"
+            className={`${useSplitLayout ? 'max-w-2xl mx-auto' : ''} rounded-2xl bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] p-4 sm:p-5 space-y-4 shadow-sm`}
           >
             <p className="text-xs sm:text-sm text-[#475569] dark:text-[#94A3B8] leading-relaxed">
               {t.useCodeSubtitle}
@@ -874,7 +886,7 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
             <button
               type="submit"
               disabled={isBusy}
-              className="w-full min-h-[52px] rounded-xl bg-[#1E3A8A] hover:bg-[#172554] dark:bg-[#2563EB] text-white text-sm font-extrabold flex items-center justify-center gap-2 transition-colors disabled:opacity-60 cursor-pointer"
+              className={`w-full ${isTvOrSmartBoard ? 'min-h-[56px]' : 'min-h-[52px]'} rounded-xl bg-[#1E3A8A] hover:bg-[#172554] dark:bg-[#2563EB] text-white text-sm font-extrabold flex items-center justify-center gap-2 transition-colors disabled:opacity-60 cursor-pointer`}
             >
               <LockOpen className="h-4 w-4" />
               <span>{isBusy ? t.redeemingBtn : t.redeemNowBtn}</span>

@@ -13,6 +13,7 @@ import {
   Languages,
   LogOut,
   MessageCircle,
+  Monitor,
   Radio,
   RefreshCw,
   Send,
@@ -27,6 +28,7 @@ import {
   WifiOff,
   X,
 } from 'lucide-react';
+import { useAdaptiveDisplay } from '../context/AdaptiveDisplayContext';
 import { useTranslation } from '../i18n/translations';
 import { ADMIN_PASSCODE, type DirectMobileCodeResult } from '../services/quizRepository';
 import {
@@ -47,9 +49,12 @@ import {
   type AdminNotificationRoute,
   type AdminUser,
   type AppReleaseConfig,
+  type InstalledAppInfo,
   type PaymentRequest,
+  type PublishAppUpdateInput,
   type StudentProfile,
   type SubjectId,
+  type UpdateNotificationRecord,
 } from '../types/models';
 import {
   buildPaymentApprovalWhatsAppHref,
@@ -90,8 +95,10 @@ interface AdminPanelScreenProps {
   liveAlerts: AdminLiveAlert[];
   isSoundEnabled: boolean;
   releaseConfig: AppReleaseConfig | null;
-  effectiveGithubRepo: string;
+  installedAppInfo?: InstalledAppInfo | null;
+  updateNotifications?: UpdateNotificationRecord[];
   currentVersionName: string;
+  currentVersionCode?: number;
   isBusy: boolean;
   isCheckingUpdate: boolean;
   syncStatus: SyncStatusSnapshot;
@@ -126,11 +133,15 @@ interface AdminPanelScreenProps {
     subjectId: SubjectId,
     grantAccess: boolean
   ) => void;
-  onSaveGithubRepo: (ownerRepo: string, releaseNotes: string) => void;
+  onPublishAppUpdate: (
+    input: PublishAppUpdateInput
+  ) => Promise<{ releaseId: string; apkDownloadUrl: string; versionName: string; versionCode: number }>;
+  onDeleteReleaseHistory?: (releaseId: string) => Promise<void>;
   onTestUpdateCheck: () => void;
   onDeletePayment: (req: PaymentRequest) => Promise<void> | void;
   onDeleteCode: (code: AccessCode) => Promise<void> | void;
   onDeleteStudent: (student: StudentProfile) => Promise<void> | void;
+  onOpenDisplaySettings?: () => void;
   onNotify?: (message: string, isError?: boolean) => void;
   // Admin Notification Center & Personal Messaging Props
   currentAdminUid?: string;
@@ -176,8 +187,10 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
   liveAlerts,
   isSoundEnabled,
   releaseConfig,
-  effectiveGithubRepo,
+  installedAppInfo = null,
+  updateNotifications = [],
   currentVersionName,
+  currentVersionCode = 1,
   isBusy,
   isCheckingUpdate,
   syncStatus,
@@ -204,11 +217,13 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
   onRejectPayment,
   onToggleStudentAccess,
   onUpdateStudentSubjectAccess,
-  onSaveGithubRepo,
+  onPublishAppUpdate,
+  onDeleteReleaseHistory,
   onTestUpdateCheck,
   onDeletePayment,
   onDeleteCode,
   onDeleteStudent,
+  onOpenDisplaySettings,
   onNotify,
   currentAdminUid = '',
   currentAdminEmail = '',
@@ -235,6 +250,7 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
   onRemoveAdminInvite,
 }) => {
   const { lang, toggleLang, t } = useTranslation();
+  const { useNavigationRail, isLargeScreen, isTvOrSmartBoard } = useAdaptiveDisplay();
   const [internalTab, setInternalTab] = useState<AdminTabId>('requests');
   const selectedTab = controlledTab ?? internalTab;
   const selectTab = (tab: AdminTabId) => {
@@ -320,16 +336,63 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
     }
   };
 
+  const adminTabs = [
+    {
+      id: 'requests' as const,
+      label: `${t.tabRequests} (${pendingCount})`,
+      Icon: Wallet,
+      badge: pendingCount,
+    },
+    {
+      id: 'notifications' as const,
+      label: t.tabNotifications,
+      Icon: Bell,
+      badge: unreadNotificationsCount,
+    },
+    {
+      id: 'chat' as const,
+      label: t.tabAdminChat,
+      Icon: MessageCircle,
+      badge: unreadChatCount,
+    },
+    {
+      id: 'all_codes' as const,
+      label: `${t.tabAllCodes} (${accessCodes.length})`,
+      Icon: FolderKanban,
+      badge: 0,
+    },
+    {
+      id: 'used_codes' as const,
+      label: `${t.tabUsedCodes} (${usedCodeCount})`,
+      Icon: UserCheck,
+      badge: 0,
+    },
+    {
+      id: 'students' as const,
+      label: `${t.tabStudents} (${students.length})`,
+      Icon: Users,
+      badge: 0,
+    },
+    {
+      id: 'updates' as const,
+      label: t.tabUpdates,
+      Icon: Settings,
+      badge: 0,
+    },
+  ];
+
+  const containerMaxWidth = isLargeScreen ? 'max-w-[1600px]' : 'max-w-6xl';
+
   return (
     <div className="min-h-screen bg-[#FAF9F5] dark:bg-[#0B1120] text-[#0F172A] dark:text-[#F8FAFC] flex flex-col">
       {/* Sticky Live Admin Header */}
       <header className="sticky top-0 z-30 bg-white/95 dark:bg-[#1E293B]/95 backdrop-blur border-b border-[#E2E8F0] dark:border-[#334155]">
-        <div className="max-w-6xl mx-auto px-3 h-16 flex items-center justify-between gap-2">
+        <div className={`${containerMaxWidth} mx-auto px-3 sm:px-5 h-16 flex items-center justify-between gap-2`}>
           <div className="flex items-center gap-2 min-w-0">
             <button
               type="button"
               onClick={onBackToPublic}
-              className="p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer shrink-0"
+              className="min-h-[48px] min-w-[48px] p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer shrink-0 flex items-center justify-center"
               aria-label={t.backToPublic}
             >
               <ArrowLeft className="h-5 w-5" />
@@ -364,12 +427,26 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
           </div>
 
           <div className="flex items-center gap-1.5 shrink-0">
+            {onOpenDisplaySettings && (
+              <button
+                type="button"
+                data-testid="admin_display_settings_btn"
+                onClick={onOpenDisplaySettings}
+                title={t.displaySettingsBtn}
+                aria-label={t.displaySettingsBtn}
+                className={`${isTvOrSmartBoard ? 'min-h-[48px] px-3' : 'h-10 px-2.5'} rounded-xl border border-[#CBD5E1] dark:border-[#334155] flex items-center justify-center gap-1.5 text-xs font-bold hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer`}
+              >
+                <Monitor className="h-4 w-4 text-[#1E3A8A] dark:text-[#93C5FD]" />
+                {isLargeScreen && <span className="hidden lg:inline">{t.displaySettingsBtn}</span>}
+              </button>
+            )}
+
             {/* Live Notification Bell */}
             <button
               type="button"
               onClick={() => setShowAlertsDrawer((prev) => !prev)}
               aria-label={t.alertsLabel}
-              className="relative h-9 w-9 rounded-xl border border-[#CBD5E1] dark:border-[#334155] flex items-center justify-center hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+              className={`relative ${isTvOrSmartBoard ? 'min-h-[48px] min-w-[48px]' : 'h-10 w-10'} rounded-xl border border-[#CBD5E1] dark:border-[#334155] flex items-center justify-center hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer`}
             >
               <Bell className="h-4 w-4" />
               {(liveAlerts.length > 0 || pendingCount > 0) && (
@@ -384,7 +461,7 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
               onClick={onToggleSound}
               title={isSoundEnabled ? t.soundOn : t.soundMuted}
               aria-label={isSoundEnabled ? t.soundOn : t.soundMuted}
-              className="h-9 w-9 rounded-xl border border-[#CBD5E1] dark:border-[#334155] flex items-center justify-center hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+              className={`${isTvOrSmartBoard ? 'min-h-[48px] min-w-[48px]' : 'h-10 w-10'} rounded-xl border border-[#CBD5E1] dark:border-[#334155] flex items-center justify-center hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer`}
             >
               {isSoundEnabled ? (
                 <Volume2 className="h-4 w-4 text-[#047857] dark:text-[#6EE7B7]" />
@@ -397,7 +474,7 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
               type="button"
               onClick={toggleLang}
               aria-label="Toggle language"
-              className="h-9 px-2.5 rounded-xl border border-[#CBD5E1] dark:border-[#334155] text-xs font-bold hidden sm:flex items-center gap-1 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+              className={`${isTvOrSmartBoard ? 'min-h-[48px] px-3' : 'h-10 px-2.5'} rounded-xl border border-[#CBD5E1] dark:border-[#334155] text-xs font-bold hidden sm:flex items-center gap-1 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer`}
             >
               <Languages className="h-3.5 w-3.5" />
               <span>{lang === 'gu' ? 'EN' : 'GU'}</span>
@@ -406,7 +483,7 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
             <button
               type="button"
               onClick={onForceSync}
-              className="h-9 px-2.5 rounded-xl border border-[#CBD5E1] dark:border-[#334155] text-xs font-bold flex items-center gap-1 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+              className={`${isTvOrSmartBoard ? 'min-h-[48px] px-3' : 'h-10 px-2.5'} rounded-xl border border-[#CBD5E1] dark:border-[#334155] text-xs font-bold flex items-center gap-1 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer`}
             >
               <RefreshCw className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">{t.syncBtn}</span>
@@ -417,7 +494,7 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
               onClick={onSignOut}
               title={t.signOutBtn}
               aria-label={t.signOutBtn}
-              className="h-9 w-9 rounded-xl border border-red-200 dark:border-red-900 text-red-600 dark:text-red-400 flex items-center justify-center hover:bg-red-50 dark:hover:bg-red-950/40 cursor-pointer"
+              className={`${isTvOrSmartBoard ? 'min-h-[48px] min-w-[48px]' : 'h-10 w-10'} rounded-xl border border-red-200 dark:border-red-900 text-red-600 dark:text-red-400 flex items-center justify-center hover:bg-red-50 dark:hover:bg-red-950/40 cursor-pointer`}
             >
               <LogOut className="h-4 w-4" />
             </button>
@@ -426,7 +503,7 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
 
         {/* Live Alerts Dropdown */}
         {showAlertsDrawer && (
-          <div className="max-w-6xl mx-auto px-3 pb-3">
+          <div className={`${containerMaxWidth} mx-auto px-3 sm:px-5 pb-3`}>
             <div className="rounded-2xl bg-[#EFF4FA] dark:bg-[#0F172A] border border-[#CBD5E1] dark:border-[#334155] p-3 space-y-2 shadow-md">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-extrabold">{t.alertsLabel}</span>
@@ -476,79 +553,73 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
           </div>
         )}
 
-        {/* Admin Tabs */}
-        <div className="max-w-6xl mx-auto px-2 sm:px-3 flex border-t border-slate-100 dark:border-slate-800 overflow-x-auto">
-          {[
-            {
-              id: 'requests' as const,
-              label: `${t.tabRequests} (${pendingCount})`,
-              Icon: Wallet,
-              badge: pendingCount,
-            },
-            {
-              id: 'notifications' as const,
-              label: t.tabNotifications,
-              Icon: Bell,
-              badge: unreadNotificationsCount,
-            },
-            {
-              id: 'chat' as const,
-              label: t.tabAdminChat,
-              Icon: MessageCircle,
-              badge: unreadChatCount,
-            },
-            {
-              id: 'all_codes' as const,
-              label: `${t.tabAllCodes} (${accessCodes.length})`,
-              Icon: FolderKanban,
-              badge: 0,
-            },
-            {
-              id: 'used_codes' as const,
-              label: `${t.tabUsedCodes} (${usedCodeCount})`,
-              Icon: UserCheck,
-              badge: 0,
-            },
-            {
-              id: 'students' as const,
-              label: `${t.tabStudents} (${students.length})`,
-              Icon: Users,
-              badge: 0,
-            },
-            {
-              id: 'updates' as const,
-              label: t.tabUpdates,
-              Icon: Settings,
-              badge: 0,
-            },
-          ].map(({ id, label, Icon, badge }) => {
-            const active = selectedTab === id;
-            return (
-              <button
-                key={id}
-                type="button"
-                data-testid={`admin_tab_${id}`}
-                onClick={() => selectTab(id)}
-                className={`flex-1 min-w-[100px] min-h-[44px] py-2.5 px-3 flex items-center justify-center gap-1.5 text-xs sm:text-sm font-bold border-b-2 transition-colors whitespace-nowrap cursor-pointer ${
-                  active
-                    ? 'border-[#1E3A8A] text-[#1E3A8A] dark:border-[#93C5FD] dark:text-[#93C5FD]'
-                    : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
-                }`}
-              >
-                <Icon className="h-4 w-4 shrink-0" />
-                <span>{label}</span>
-                {badge > 0 && (id === 'notifications' || id === 'chat') && (
-                  <span className="rounded-full bg-[#DC2626] text-white text-[10px] font-extrabold px-1.5 min-w-[18px] h-[18px] flex items-center justify-center tabular-nums">
-                    {badge}
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </div>
+        {/* Horizontal Admin Tabs (compact / portrait screens) */}
+        {!useNavigationRail && (
+          <div className={`${containerMaxWidth} mx-auto px-2 sm:px-3 flex border-t border-slate-100 dark:border-slate-800 overflow-x-auto`}>
+            {adminTabs.map(({ id, label, Icon, badge }) => {
+              const active = selectedTab === id;
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  data-testid={`admin_tab_${id}`}
+                  onClick={() => selectTab(id)}
+                  className={`flex-1 min-w-[100px] min-h-[44px] py-2.5 px-3 flex items-center justify-center gap-1.5 text-xs sm:text-sm font-bold border-b-2 transition-colors whitespace-nowrap cursor-pointer ${
+                    active
+                      ? 'border-[#1E3A8A] text-[#1E3A8A] dark:border-[#93C5FD] dark:text-[#93C5FD]'
+                      : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
+                  }`}
+                >
+                  <Icon className="h-4 w-4 shrink-0" />
+                  <span>{label}</span>
+                  {badge > 0 && (id === 'notifications' || id === 'chat') && (
+                    <span className="rounded-full bg-[#DC2626] text-white text-[10px] font-extrabold px-1.5 min-w-[18px] h-[18px] flex items-center justify-center tabular-nums">
+                      {badge}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </header>
 
-      <main className="flex-1 max-w-6xl w-full mx-auto">
+      <div className={`flex-1 ${containerMaxWidth} w-full mx-auto ${useNavigationRail ? 'flex items-start' : ''}`}>
+        {useNavigationRail && (
+          <aside
+            aria-label={t.adminPanelTitle}
+            className="w-64 shrink-0 sticky top-16 border-r border-[#E2E8F0] dark:border-[#334155] bg-white/75 dark:bg-[#1E293B]/65 p-3 space-y-1.5 min-h-[calc(100vh-4rem)]"
+          >
+            {adminTabs.map(({ id, label, Icon, badge }) => {
+              const active = selectedTab === id;
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  data-testid={`admin_tab_${id}`}
+                  onClick={() => selectTab(id)}
+                  className={`w-full min-h-[50px] px-3.5 py-2.5 rounded-xl flex items-center justify-between gap-2.5 text-left text-xs sm:text-sm font-extrabold transition-colors cursor-pointer ${
+                    active
+                      ? 'bg-[#1E3A8A] text-white shadow-sm'
+                      : 'text-[#334155] dark:text-[#CBD5E1] hover:bg-slate-100 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  <span className="flex items-center gap-2.5 min-w-0">
+                    <Icon className="h-4 w-4 shrink-0" />
+                    <span className="truncate">{label}</span>
+                  </span>
+                  {badge > 0 && (id === 'notifications' || id === 'chat') && (
+                    <span className="rounded-full bg-[#DC2626] text-white text-[10px] font-extrabold px-1.5 min-w-[20px] h-[20px] flex items-center justify-center tabular-nums shrink-0">
+                      {badge}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </aside>
+        )}
+
+        <main className="flex-1 min-w-0 w-full">
         {/* Smart Live Sync Status Card (7 Telemetry Metrics + Sync Now) */}
         <section className="px-3 sm:px-4 pt-3 space-y-2.5">
           {(!syncStatus.isOnline || syncStatus.errorKind === 'quota') && (
@@ -812,15 +883,22 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
         {selectedTab === 'updates' && (
           <AdminUpdateSettingsTab
             releaseConfig={releaseConfig}
-            effectiveGithubRepo={effectiveGithubRepo}
+            installedAppInfo={installedAppInfo}
+            updateNotifications={updateNotifications}
             currentVersionName={currentVersionName}
+            currentVersionCode={currentVersionCode}
             isBusy={isBusy}
             isCheckingUpdate={isCheckingUpdate}
-            onSaveGithubRepo={onSaveGithubRepo}
+            notificationPermissionStatus={notificationPermissionStatus}
+            onPublishAppUpdate={onPublishAppUpdate}
+            onDeleteReleaseHistory={onDeleteReleaseHistory}
             onTestUpdateCheck={onTestUpdateCheck}
+            onRequestNotificationPermission={onRequestNotificationPermission}
+            onNotify={onNotify}
           />
         )}
       </main>
+      </div>
 
       {/* Screenshot Zoom Modal */}
       {zoomedScreenshotUrl && (

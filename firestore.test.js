@@ -991,3 +991,106 @@ test("Admin Personal Messaging: 1-to-1 chat & messages strictly restricted to th
   );
 });
 
+test("App Update system: only Admin can publish releases/configs/notifications; public can read updates & register own device FCM token without listing others", async () => {
+  const unauthDb = testEnv.unauthenticatedContext().firestore();
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const adminDb = testEnv.authenticatedContext(ADMIN_UID, {
+    phone_number: ADMIN_PHONE,
+  }).firestore();
+  const now = new Date();
+
+  const releasePayload = {
+    versionName: "1.0.2",
+    versionCode: 2,
+    updateTitle: "બોર્ડ ક્વિઝ અને સ્પીડ અપડેટ v1.0.2",
+    releaseNotes: "ગણિતના નવા પ્રશ્નો અને ઝડપી પર્ફોર્મન્સ ઉમેરાયા છે.",
+    apkDownloadUrl: "https://firebasestorage.googleapis.com/v0/b/test/o/app_releases%2Fstd10_v1.0.2.apk?alt=media",
+    apkStoragePath: "app_releases/std10_v1.0.2.apk",
+    apkFileName: "std10_v1.0.2.apk",
+    apkSizeBytes: 18450000,
+    apkSha256: "a".repeat(64),
+    signingCertSha256: "b".repeat(64),
+    packageName: "com.aistudio.std10quiz.kqxmtv",
+    isMandatory: false,
+    publishedByUid: ADMIN_UID,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  // Non-admin cannot publish release, update app_config/release, or create update_notifications
+  await assertFails(aliceDb.collection("app_releases").doc("rel_2").set(releasePayload));
+  await assertFails(
+    unauthDb.collection("app_config").doc("release").set({
+      releaseNotes: "Fake update",
+      latestVersionName: "9.9.9",
+      apkDownloadUrl: "https://evil.example.com/fake.apk",
+      updatedAt: now,
+    })
+  );
+
+  // Admin publishes release + app_config/release + update_notifications history
+  await assertSucceeds(adminDb.collection("app_releases").doc("rel_2").set(releasePayload));
+  await assertSucceeds(
+    adminDb.collection("app_config").doc("release").set({
+      githubOwnerRepo: "",
+      releaseNotes: releasePayload.releaseNotes,
+      latestVersionName: "1.0.2",
+      latestVersionCode: 2,
+      updateTitle: releasePayload.updateTitle,
+      apkDownloadUrl: releasePayload.apkDownloadUrl,
+      apkStoragePath: releasePayload.apkStoragePath,
+      apkFileName: releasePayload.apkFileName,
+      apkSizeBytes: releasePayload.apkSizeBytes,
+      apkSha256: releasePayload.apkSha256,
+      signingCertSha256: releasePayload.signingCertSha256,
+      packageName: releasePayload.packageName,
+      isMandatory: false,
+      publishedByUid: ADMIN_UID,
+      publishedAt: now,
+      updatedAt: now,
+    })
+  );
+  await assertSucceeds(
+    adminDb.collection("update_notifications").doc("rel_2").set({
+      releaseId: "rel_2",
+      appName: "ધોરણ 10 ક્વિઝ",
+      versionName: "1.0.2",
+      versionCode: 2,
+      title: releasePayload.updateTitle,
+      body: releasePayload.releaseNotes,
+      isMandatory: false,
+      apkDownloadUrl: releasePayload.apkDownloadUrl,
+      targetRoute: "app_update",
+      pushDispatched: true,
+      recipientCount: 0,
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  // Public user can read release config, release history, and update notification history
+  await assertSucceeds(unauthDb.collection("app_config").doc("release").get());
+  await assertSucceeds(unauthDb.collection("app_releases").get());
+  await assertSucceeds(unauthDb.collection("update_notifications").get());
+
+  // Device FCM token: device can register/update its own token, CANNOT list other devices
+  const devId = "and_device_0123456789";
+  await assertSucceeds(
+    unauthDb.collection("device_fcm_tokens").doc(devId).set({
+      deviceId: devId,
+      token: "fcm_public_device_token_1234567890_xyz",
+      platform: "android",
+      appVersion: "1.0.0",
+      versionCode: 1,
+      topicSubscribed: true,
+      enabled: true,
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+  await assertFails(unauthDb.collection("device_fcm_tokens").get());
+  await assertSucceeds(adminDb.collection("device_fcm_tokens").get());
+  await assertSucceeds(adminDb.collection("device_fcm_tokens").doc(devId).delete());
+});
+
+

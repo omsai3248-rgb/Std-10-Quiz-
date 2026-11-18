@@ -6,11 +6,13 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.net.Uri
 import android.os.Build
 import android.util.Log
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import androidx.activity.ComponentActivity
+import androidx.core.content.pm.PackageInfoCompat
 import androidx.credentials.ClearCredentialStateRequest
 import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
@@ -51,6 +53,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Collections
@@ -66,13 +69,19 @@ private const val EXPECTED_DEBUG_CERT_SHA1 = "7c60102b8ecb85ffd89e24d3c220661506
 class NativeFirebaseBridge(
     private val activity: ComponentActivity,
     private val webView: WebView,
-    private val onRequestPostNotificationsPermission: () -> Unit = {}
+    private val onRequestPostNotificationsPermission: () -> Unit = {},
+    private val onLaunchApkPicker: () -> Unit = {},
+    private val onLaunchUnknownSourcesSettings: () -> Unit = {}
 ) {
     private val appContext = activity.applicationContext
     private val secureRandom = SecureRandom()
     private val verifiedAdminUids: MutableSet<String> = Collections.synchronizedSet(hashSetOf())
     @Volatile
     private var pendingNotificationPermissionCallId: String? = null
+    @Volatile
+    private var pendingApkPickCallId: String? = null
+    @Volatile
+    private var pendingDownloadInstallCallId: String? = null
     @Volatile
     private var adminDirectoryReg: ListenerRegistration? = null
     @Volatile
@@ -415,6 +424,7 @@ class NativeFirebaseBridge(
         if (db == null) return
         runCatching { localAuth.addAuthStateListener(authStateListener) }
         emitAuthState(localAuth.currentUser)
+        syncPublicDeviceFcmRegistration()
         attemptAutoSignInWhenResumed()
     }
 
@@ -1507,10 +1517,32 @@ class NativeFirebaseBridge(
 
     @JavascriptInterface
     fun startPublicListeners(paymentIdsJson: String) {
-        if (db == null) return
+        val localDb = db ?: return
         activity.runOnUiThread {
             stopPublicListeners()
             refreshPaymentListenersInternal(paymentIdsJson)
+
+            val releaseReg = localDb.collection("app_config").document("release")
+                .addSnapshotListener { snap, error ->
+                    if (error != null) return@addSnapshotListener
+                    if (snap != null && snap.exists()) {
+                        emitToJs("window.__onNativeReleaseConfig", serializeReleaseConfig(snap).toString())
+                    } else {
+                        emitToJs("window.__onNativeReleaseConfig", "null")
+                    }
+                }
+            publicListeners.add(releaseReg)
+
+            val updateNotifReg = localDb.collection("update_notifications")
+                .orderBy("createdAt", Query.Direction.DESCENDING)
+                .limit(25)
+                .addSnapshotListener { snap, error ->
+                    if (error != null) return@addSnapshotListener
+                    val arr = JSONArray()
+                    snap?.documents?.forEach { arr.put(serializeUpdateNotification(it)) }
+                    emitToJs("window.__onNativeUpdateNotifications", arr.toString())
+                }
+            publicListeners.add(updateNotifReg)
         }
     }
 
@@ -1893,18 +1925,9 @@ class NativeFirebaseBridge(
 
             val releaseReg = localDb.collection("app_config").document("release")
                 .addSnapshotListener { snap, error ->
-                    if (error != null) {
-                        emitToJs("window.__onNativeReleaseConfig", "null")
-                        return@addSnapshotListener
-                    }
+                    if (error != null) return@addSnapshotListener
                     if (snap != null && snap.exists()) {
-                        val json = JSONObject().apply {
-                            put("id", snap.id)
-                            put("githubOwnerRepo", snap.getString("githubOwnerRepo").orEmpty())
-                            put("releaseNotes", snap.getString("releaseNotes").orEmpty())
-                            put("updatedAt", serializeTimestamp(snap.getTimestamp("updatedAt")))
-                        }.toString()
-                        emitToJs("window.__onNativeReleaseConfig", json)
+                        emitToJs("window.__onNativeReleaseConfig", serializeReleaseConfig(snap).toString())
                     } else {
                         emitToJs("window.__onNativeReleaseConfig", "null")
                     }
@@ -1919,7 +1942,6 @@ class NativeFirebaseBridge(
             adminListenersActive = false
             adminListeners.forEach { it.remove() }
             adminListeners.clear()
-            emitToJs("window.__onNativeReleaseConfig", "null")
             val online = isInternetConnected()
             val inQuota = System.currentTimeMillis() < serverQuotaDegradedUntilMs
             emitNativeSyncState(
@@ -2245,23 +2267,399 @@ class NativeFirebaseBridge(
                 return@launch
             }
             val obj = JSONObject(payloadJson)
-            val repo = obj.getString("githubOwnerRepo").take(120)
-            val notes = obj.getString("releaseNotes").take(300)
+            val repo = obj.optString("githubOwnerRepo", "").take(120)
+            val notes = obj.optString("releaseNotes", "").take(1000)
             val ref = localDb.collection("app_config").document("release")
             try {
-                ref.set(
-                    mapOf(
-                        "githubOwnerRepo" to repo,
-                        "releaseNotes" to notes,
-                        "updatedAt" to FieldValue.serverTimestamp(),
-                    )
-                ).awaitResult()
+                val updates = hashMapOf<String, Any>(
+                    "githubOwnerRepo" to repo,
+                    "releaseNotes" to notes,
+                    "updatedAt" to FieldValue.serverTimestamp(),
+                )
+                ref.set(updates, SetOptions.merge()).awaitResult()
                 resolveCallSuccess(callId, "true")
             } catch (e: Exception) {
                 handleFirestoreError(e, OperationType.WRITE, ref.path)
                 resolveCallError(callId, e.localizedMessage ?: "Save failed")
             }
         }
+    }
+
+    // =========================================================================
+    // In-App App Update Manager (Admin APK Publish + User In-App Download/Install)
+    // =========================================================================
+
+    private fun syncPublicDeviceFcmRegistration() {
+        val localDb = db ?: return
+        activity.lifecycleScope.launch(Dispatchers.IO) {
+            runCatching {
+                var topicOk = false
+                withTimeoutOrNull(4_000L) {
+                    FirebaseMessaging.getInstance().subscribeToTopic("app_updates").awaitResult()
+                    topicOk = true
+                }
+                val token = withTimeoutOrNull(4_500L) {
+                    FirebaseMessaging.getInstance().token.awaitResult()
+                }.orEmpty()
+                if (token.length >= 20) {
+                    AdminNotificationHelper.saveFcmToken(appContext, token)
+                    val deviceId = AdminNotificationHelper.getOrCreateDeviceId(appContext)
+                    val pkgInfo = runCatching {
+                        appContext.packageManager.getPackageInfo(appContext.packageName, 0)
+                    }.getOrNull()
+                    val appVersion = pkgInfo?.versionName.orEmpty().ifBlank { "1.0.0" }.take(32)
+                    val versionCode = if (pkgInfo != null) {
+                        PackageInfoCompat.getLongVersionCode(pkgInfo).coerceAtLeast(1L)
+                    } else 1L
+
+                    val docRef = localDb.collection("device_fcm_tokens").document(deviceId)
+                    val existing = runCatching {
+                        withTimeoutOrNull(2_500L) { docRef.get().awaitResult() }
+                    }.getOrNull()
+                    val payload = hashMapOf<String, Any>(
+                        "deviceId" to deviceId,
+                        "token" to token.take(512),
+                        "platform" to "android",
+                        "appVersion" to appVersion,
+                        "versionCode" to versionCode,
+                        "topicSubscribed" to topicOk,
+                        "enabled" to true,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                    if (existing == null || !existing.exists()) {
+                        payload["createdAt"] = FieldValue.serverTimestamp()
+                        docRef.set(payload).awaitResult()
+                    } else {
+                        docRef.set(payload, SetOptions.merge()).awaitResult()
+                    }
+                }
+            }.onFailure { err ->
+                Log.w("NativeFirebase", "Public device FCM sync deferred", err)
+            }
+        }
+    }
+
+    @JavascriptInterface
+    fun getInstalledAppInfo(): String {
+        return runCatching { AppUpdateManager.getInstalledAppInfo(appContext).toString() }
+            .getOrDefault("{}")
+    }
+
+    @JavascriptInterface
+    fun pickAndInspectApkFile(callId: String) {
+        pendingApkPickCallId = callId
+        activity.runOnUiThread {
+            onLaunchApkPicker()
+        }
+    }
+
+    fun onApkFilePickedResult(uri: Uri?) {
+        val callId = pendingApkPickCallId ?: return
+        pendingApkPickCallId = null
+        if (uri == null) {
+            resolveCallError(callId, "PICK_CANCELLED")
+            return
+        }
+        activity.lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val inspected = AppUpdateManager.inspectPickedApkUri(appContext, uri)
+                resolveCallSuccess(callId, inspected.toJson().toString())
+            } catch (e: Exception) {
+                resolveCallError(callId, e.localizedMessage ?: "Failed to inspect selected APK")
+            }
+        }
+    }
+
+    @JavascriptInterface
+    fun publishAppUpdate(callId: String, payloadJson: String) {
+        val localDb = db ?: run {
+            resolveCallError(callId, "Native Firebase is not initialized.")
+            return
+        }
+        val user = auth?.currentUser ?: run {
+            resolveCallError(callId, "Admin Google login required.")
+            return
+        }
+        activity.lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                if (!verifyAuthorizedAdminSuspended(user)) {
+                    resolveCallError(callId, "ONLY_ADMIN_GOOGLE_EMAIL")
+                    return@launch
+                }
+                val obj = JSONObject(payloadJson)
+                val stagedFilePath = obj.optString("stagedFilePath", "").trim()
+                val versionName = obj.optString("versionName", "1.0.1").trim().ifBlank { "1.0.1" }.take(32)
+                val versionCode = obj.optLong("versionCode", 2L).coerceIn(1L, 1_000_000L)
+                val updateTitle = obj.optString("updateTitle", "").trim()
+                    .ifBlank { "ધોરણ 10 ક્વિઝ v$versionName" }
+                    .take(120)
+                val releaseNotes = obj.optString("releaseNotes", "").trim().take(1000)
+                val isMandatory = obj.optBoolean("isMandatory", false)
+                val githubOwnerRepo = obj.optString("githubOwnerRepo", "").trim().take(120)
+
+                var apkDownloadUrl = obj.optString("apkDownloadUrl", "").trim().take(2000)
+                var apkStoragePath = obj.optString("apkStoragePath", "").trim().take(300)
+                var apkFileName = obj.optString("apkFileName", "").trim().take(160)
+                var apkSizeBytes = obj.optLong("apkSizeBytes", 0L).coerceIn(0L, 262_144_000L)
+                var apkSha256 = obj.optString("apkSha256", "").trim().take(64)
+                var signingCertSha256 = obj.optString("signingCertSha256", "").trim().take(64)
+                var packageName = obj.optString("packageName", appContext.packageName).trim().take(120)
+
+                if (stagedFilePath.isNotBlank()) {
+                    val inspected = AppUpdateManager.inspectLocalApkFile(appContext, File(stagedFilePath), apkFileName.ifBlank { null })
+                    if (!inspected.packageMatches) {
+                        resolveCallError(
+                            callId,
+                            "APK package name (${inspected.packageName}) must match ${appContext.packageName}."
+                        )
+                        return@launch
+                    }
+                    if (!inspected.signatureMatches) {
+                        resolveCallError(
+                            callId,
+                            "APK signing certificate does not match the installed app certificate."
+                        )
+                        return@launch
+                    }
+                    val targetStorageName = "std10quiz_v${versionName.replace(Regex("[^a-zA-Z0-9._-]"), "_")}_c${versionCode}_${System.currentTimeMillis()}.apk"
+                    val (uploadedUrl, uploadedPath) = AppUpdateManager.uploadStagedApkToFirebaseStorage(
+                        context = appContext,
+                        stagedFilePath = stagedFilePath,
+                        storageFileName = targetStorageName
+                    ) { pct, transferred, total ->
+                        val evt = JSONObject().apply {
+                            put("status", "uploading")
+                            put("progressPercent", pct)
+                            put("bytesTransferred", transferred)
+                            put("totalBytes", total)
+                        }
+                        emitToJs("window.__onNativeApkUploadProgress", evt.toString())
+                    }
+                    apkDownloadUrl = uploadedUrl
+                    apkStoragePath = uploadedPath
+                    apkFileName = inspected.fileName
+                    apkSizeBytes = inspected.fileSizeBytes
+                    apkSha256 = inspected.apkSha256
+                    signingCertSha256 = inspected.signingCertSha256
+                    packageName = inspected.packageName
+                }
+
+                if (!apkDownloadUrl.startsWith("https://", ignoreCase = true) || apkSizeBytes <= 0L) {
+                    resolveCallError(callId, "Please select and upload a valid APK file first.")
+                    return@launch
+                }
+
+                val releaseId = "rel_${versionCode}_${System.currentTimeMillis()}"
+                val now = FieldValue.serverTimestamp()
+
+                val releaseDoc = hashMapOf<String, Any>(
+                    "versionName" to versionName,
+                    "versionCode" to versionCode,
+                    "updateTitle" to updateTitle,
+                    "releaseNotes" to releaseNotes.ifBlank { "નવું વર્ઝન v$versionName ઉપલબ્ધ છે." },
+                    "apkDownloadUrl" to apkDownloadUrl,
+                    "apkStoragePath" to apkStoragePath.ifBlank { "app_releases/$apkFileName" },
+                    "apkFileName" to apkFileName.ifBlank { "std10quiz_v$versionName.apk" },
+                    "apkSizeBytes" to apkSizeBytes,
+                    "apkSha256" to apkSha256,
+                    "signingCertSha256" to signingCertSha256,
+                    "packageName" to packageName.ifBlank { appContext.packageName },
+                    "isMandatory" to isMandatory,
+                    "publishedByUid" to user.uid,
+                    "createdAt" to now,
+                    "updatedAt" to now
+                )
+
+                val configDoc = hashMapOf<String, Any>(
+                    "githubOwnerRepo" to githubOwnerRepo,
+                    "releaseNotes" to releaseNotes.ifBlank { "નવું વર્ઝન v$versionName ઉપલબ્ધ છે." },
+                    "latestVersionName" to versionName,
+                    "latestVersionCode" to versionCode,
+                    "updateTitle" to updateTitle,
+                    "apkDownloadUrl" to apkDownloadUrl,
+                    "apkStoragePath" to apkStoragePath.ifBlank { "app_releases/$apkFileName" },
+                    "apkFileName" to apkFileName.ifBlank { "std10quiz_v$versionName.apk" },
+                    "apkSizeBytes" to apkSizeBytes,
+                    "apkSha256" to apkSha256,
+                    "signingCertSha256" to signingCertSha256,
+                    "packageName" to packageName.ifBlank { appContext.packageName },
+                    "isMandatory" to isMandatory,
+                    "publishedByUid" to user.uid,
+                    "publishedAt" to now,
+                    "updatedAt" to now
+                )
+
+                val notifDoc = hashMapOf<String, Any>(
+                    "releaseId" to releaseId,
+                    "appName" to appContext.getString(R.string.app_name).take(80),
+                    "versionName" to versionName,
+                    "versionCode" to versionCode,
+                    "title" to updateTitle,
+                    "body" to releaseNotes.ifBlank { "નવું વર્ઝન v$versionName ઉપલબ્ધ છે. એપની અંદરથી તરત અપડેટ કરો." },
+                    "isMandatory" to isMandatory,
+                    "apkDownloadUrl" to apkDownloadUrl,
+                    "targetRoute" to "app_update",
+                    "pushDispatched" to false,
+                    "recipientCount" to 0,
+                    "createdAt" to now,
+                    "updatedAt" to now
+                )
+
+                val batch = localDb.batch()
+                batch.set(localDb.collection("app_releases").document(releaseId), releaseDoc)
+                batch.set(localDb.collection("app_config").document("release"), configDoc)
+                batch.set(localDb.collection("update_notifications").document(releaseId), notifDoc)
+                batch.commit().awaitResult()
+
+                val res = JSONObject().apply {
+                    put("releaseId", releaseId)
+                    put("apkDownloadUrl", apkDownloadUrl)
+                    put("versionName", versionName)
+                    put("versionCode", versionCode)
+                }
+                resolveCallSuccess(callId, res.toString())
+            } catch (e: Exception) {
+                handleFirestoreError(e, OperationType.WRITE, "app_releases")
+                resolveCallError(callId, e.localizedMessage ?: "Failed to publish update")
+            }
+        }
+    }
+
+    @JavascriptInterface
+    fun downloadAndInstallAppUpdate(callId: String, payloadJson: String) {
+        pendingDownloadInstallCallId = callId
+        activity.lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val obj = JSONObject(payloadJson)
+                val downloadUrl = obj.getString("apkDownloadUrl").trim()
+                val versionName = obj.optString("versionName", "1.0.1").trim()
+                val versionCode = obj.optLong("versionCode", 1L)
+                val expectedSha256 = obj.optString("apkSha256", "").trim()
+                val expectedCertSha256 = obj.optString("signingCertSha256", "").trim()
+
+                emitUpdateProgress("downloading", 0, 0L, obj.optLong("apkSizeBytes", 0L), "")
+                val apkFile = AppUpdateManager.downloadAndVerifyUpdateApk(
+                    context = appContext,
+                    downloadUrl = downloadUrl,
+                    versionName = versionName,
+                    versionCode = versionCode,
+                    expectedSha256 = expectedSha256,
+                    expectedCertSha256 = expectedCertSha256
+                ) { pct, downloaded, total ->
+                    val status = if (pct >= 100) "verifying" else "downloading"
+                    emitUpdateProgress(status, pct, downloaded, total, "")
+                }
+
+                AppUpdateManager.savePendingInstallApkPath(appContext, apkFile.absolutePath)
+                if (!AppUpdateManager.canRequestPackageInstalls(appContext)) {
+                    emitUpdateProgress(
+                        "permission_required",
+                        100,
+                        apkFile.length(),
+                        apkFile.length(),
+                        "Please allow 'Install unknown apps' to install this update."
+                    )
+                    activity.runOnUiThread {
+                        onLaunchUnknownSourcesSettings()
+                    }
+                    return@launch
+                }
+
+                AppUpdateManager.consumePendingInstallApkPath(appContext)
+                emitUpdateProgress("installing", 100, apkFile.length(), apkFile.length(), "")
+                withContext(Dispatchers.Main) {
+                    AppUpdateManager.launchSystemInstaller(activity, apkFile)
+                }
+                pendingDownloadInstallCallId = null
+                resolveCallSuccess(callId, JSONObject().apply { put("status", "installing") }.toString())
+            } catch (e: Exception) {
+                pendingDownloadInstallCallId = null
+                val msg = e.localizedMessage ?: "Update download failed"
+                emitUpdateProgress("error", 0, 0L, 0L, msg)
+                resolveCallError(callId, msg)
+            }
+        }
+    }
+
+    @JavascriptInterface
+    fun retryInstallPendingApk(callId: String) {
+        val pendingPath = AppUpdateManager.consumePendingInstallApkPath(appContext)
+        if (pendingPath.isBlank()) {
+            resolveCallError(callId, "NO_PENDING_APK")
+            return
+        }
+        val file = File(pendingPath)
+        if (!file.exists() || file.length() <= 0L) {
+            resolveCallError(callId, "NO_PENDING_APK")
+            return
+        }
+        AppUpdateManager.savePendingInstallApkPath(appContext, pendingPath)
+        if (!AppUpdateManager.canRequestPackageInstalls(appContext)) {
+            pendingDownloadInstallCallId = callId
+            emitUpdateProgress("permission_required", 100, file.length(), file.length(), "")
+            activity.runOnUiThread { onLaunchUnknownSourcesSettings() }
+            return
+        }
+        AppUpdateManager.consumePendingInstallApkPath(appContext)
+        activity.runOnUiThread {
+            runCatching {
+                AppUpdateManager.launchSystemInstaller(activity, file)
+                emitUpdateProgress("installing", 100, file.length(), file.length(), "")
+                resolveCallSuccess(callId, JSONObject().apply { put("status", "installing") }.toString())
+            }.onFailure { err ->
+                resolveCallError(callId, err.localizedMessage ?: "Installer launch failed")
+            }
+        }
+    }
+
+    fun onUnknownSourcesSettingsReturned() {
+        val callId = pendingDownloadInstallCallId
+        pendingDownloadInstallCallId = null
+        val path = AppUpdateManager.consumePendingInstallApkPath(appContext)
+        if (path.isBlank()) {
+            if (callId != null) resolveCallError(callId, "NO_PENDING_APK")
+            return
+        }
+        val file = File(path)
+        if (!file.exists()) {
+            if (callId != null) resolveCallError(callId, "APK_MISSING")
+            return
+        }
+        if (AppUpdateManager.canRequestPackageInstalls(appContext)) {
+            runCatching {
+                AppUpdateManager.launchSystemInstaller(activity, file)
+                emitUpdateProgress("installing", 100, file.length(), file.length(), "")
+                if (callId != null) {
+                    resolveCallSuccess(callId, JSONObject().apply { put("status", "installing") }.toString())
+                }
+            }.onFailure { err ->
+                val msg = err.localizedMessage ?: "Unable to launch installer"
+                emitUpdateProgress("error", 0, 0L, 0L, msg)
+                if (callId != null) resolveCallError(callId, msg)
+            }
+        } else {
+            AppUpdateManager.savePendingInstallApkPath(appContext, path)
+            val msg = "Install permission not granted. Allow 'Install unknown apps' and tap Update Now again."
+            emitUpdateProgress("permission_denied", 100, file.length(), file.length(), msg)
+            if (callId != null) resolveCallError(callId, msg)
+        }
+    }
+
+    private fun emitUpdateProgress(
+        status: String,
+        progressPercent: Int,
+        bytesDownloaded: Long,
+        totalBytes: Long,
+        message: String
+    ) {
+        val evt = JSONObject().apply {
+            put("status", status)
+            put("progressPercent", progressPercent)
+            put("bytesDownloaded", bytesDownloaded)
+            put("totalBytes", totalBytes)
+            put("message", message)
+        }
+        emitToJs("window.__onNativeAppUpdateProgress", evt.toString())
     }
 
     @JavascriptInterface
@@ -2524,6 +2922,9 @@ class NativeFirebaseBridge(
         pendingNotificationPermissionCallId?.let { callId ->
             pendingNotificationPermissionCallId = null
             resolveCallSuccess(callId, JSONObject.quote(status))
+        }
+        if (granted) {
+            syncPublicDeviceFcmRegistration()
         }
         emitToJs("window.__onNativeNotificationPermissionChanged", JSONObject.quote(status))
     }
@@ -3387,6 +3788,43 @@ class NativeFirebaseBridge(
             put("createdAt", serializeTimestamp(doc.getTimestamp("createdAt")))
             put("updatedAt", serializeTimestamp(doc.getTimestamp("updatedAt")))
         }
+    }
+
+    private fun serializeReleaseConfig(doc: DocumentSnapshot): JSONObject = JSONObject().apply {
+        put("id", doc.id)
+        put("githubOwnerRepo", doc.getString("githubOwnerRepo").orEmpty())
+        put("releaseNotes", doc.getString("releaseNotes").orEmpty())
+        put("latestVersionName", doc.getString("latestVersionName").orEmpty())
+        put("latestVersionCode", (doc.getLong("latestVersionCode") ?: 0L).toInt())
+        put("updateTitle", doc.getString("updateTitle").orEmpty())
+        put("apkDownloadUrl", doc.getString("apkDownloadUrl").orEmpty())
+        put("apkStoragePath", doc.getString("apkStoragePath").orEmpty())
+        put("apkFileName", doc.getString("apkFileName").orEmpty())
+        put("apkSizeBytes", doc.getLong("apkSizeBytes") ?: 0L)
+        put("apkSha256", doc.getString("apkSha256").orEmpty())
+        put("signingCertSha256", doc.getString("signingCertSha256").orEmpty())
+        put("packageName", doc.getString("packageName").orEmpty())
+        put("isMandatory", doc.getBoolean("isMandatory") == true)
+        put("publishedByUid", doc.getString("publishedByUid").orEmpty())
+        put("publishedAt", serializeTimestamp(doc.getTimestamp("publishedAt")))
+        put("updatedAt", serializeTimestamp(doc.getTimestamp("updatedAt")))
+    }
+
+    private fun serializeUpdateNotification(doc: DocumentSnapshot): JSONObject = JSONObject().apply {
+        put("id", doc.id)
+        put("releaseId", doc.getString("releaseId") ?: doc.id)
+        put("appName", doc.getString("appName").orEmpty())
+        put("versionName", doc.getString("versionName").orEmpty())
+        put("versionCode", (doc.getLong("versionCode") ?: 0L).toInt())
+        put("title", doc.getString("title").orEmpty())
+        put("body", doc.getString("body").orEmpty())
+        put("isMandatory", doc.getBoolean("isMandatory") == true)
+        put("apkDownloadUrl", doc.getString("apkDownloadUrl").orEmpty())
+        put("targetRoute", doc.getString("targetRoute") ?: "app_update")
+        put("pushDispatched", doc.getBoolean("pushDispatched") == true)
+        put("recipientCount", (doc.getLong("recipientCount") ?: 0L).toInt())
+        put("createdAt", serializeTimestamp(doc.getTimestamp("createdAt")))
+        put("updatedAt", serializeTimestamp(doc.getTimestamp("updatedAt")))
     }
 
     private fun generate8CharCode(): String = buildString(8) {

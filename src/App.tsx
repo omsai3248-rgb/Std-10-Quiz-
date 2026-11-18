@@ -7,14 +7,18 @@ import {
 } from './data/curriculum/std10Curriculum';
 import { TopNavHeader, type PublicTabId } from './components/TopNavHeader';
 import { UpdateAvailableModal } from './components/AppUpdateComponents';
+import { DisplaySettingsModal } from './components/DisplaySettingsModal';
+import { AdaptiveDisplayProvider } from './context/AdaptiveDisplayContext';
 import { useTranslation } from './i18n/translations';
 import { StudentMobileLoginScreen } from './screens/StudentMobileLoginScreen';
 import { UseCodeScreen } from './screens/UseCodeScreen';
 import type { AdminLiveAlert, AdminTabId } from './screens/AdminPanelScreen';
+import { useTvRemoteNavigation } from './utils/tvNavigation';
 import { quizAudioPlayer } from './services/audioPlayer';
 import { extractReadableErrorMessage } from './services/firestoreErrorHandler';
 import {
   consumeNativePendingDeepLink,
+  getNativeInstalledAppInfo,
   subscribeNativeAdminDeepLink,
   subscribeNativeNotificationPermission,
 } from './services/nativeFirebaseBridge';
@@ -23,6 +27,7 @@ import {
   approvePaymentAndAssignCode,
   deleteAccessCodeAdmin,
   deleteAdminNotificationItem,
+  deleteAppReleaseRecord,
   deletePaymentRequestAdmin,
   deleteStudentAdmin,
   flushPendingSyncOperations,
@@ -59,7 +64,9 @@ import {
   observePaymentRequestsByIds,
   observeReleaseConfig,
   observeStudentProfile,
+  observeUpdateNotifications,
   pauseNativeAdminListeners,
+  publishFirebaseAppUpdate,
   recordQuizAttempt,
   redeemAccessCodePublic,
   rejectPaymentRequest,
@@ -67,7 +74,6 @@ import {
   requestAppNotificationPermission,
   resumeNativeAdminListeners,
   saveMyPaymentRequestId,
-  saveReleaseConfig,
   sendAdminChatMessage,
   setNativeActiveStudentMobile,
   signOutAdminSession,
@@ -94,6 +100,7 @@ import {
 import {
   APP_VERSION_NAME,
   fetchLatestRelease,
+  isNewerVersion,
   sanitizeOwnerRepo,
 } from './services/githubUpdateChecker';
 import {
@@ -112,11 +119,14 @@ import {
   type AdminUser,
   type AppReleaseConfig,
   type GitHubReleaseInfo,
+  type InstalledAppInfo,
   type PaymentRequest,
+  type PublishAppUpdateInput,
   type QuizAttempt,
   type QuizSubject,
   type StudentProfile,
   type SubjectId,
+  type UpdateNotificationRecord,
 } from './types/models';
 import {
   buildPaymentApprovalWhatsAppHref,
@@ -249,8 +259,10 @@ function loadInitialStudentSession(): {
   };
 }
 
-export const App: React.FC = () => {
+const AppContent: React.FC = () => {
   const { lang, t } = useTranslation();
+  useTvRemoteNavigation(true);
+  const [showDisplaySettings, setShowDisplaySettings] = useState(false);
 
   const [initialSession] = useState(loadInitialStudentSession);
   const [authUser, setAuthUser] = useState<AppAuthUser | null>(null);
@@ -296,6 +308,10 @@ export const App: React.FC = () => {
   const [approvedConfirmation, setApprovedConfirmation] = useState<PaymentRequest | null>(null);
 
   const [availableUpdate, setAvailableUpdate] = useState<GitHubReleaseInfo | null>(null);
+  const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
+  const [dismissedOptionalVersionKey, setDismissedOptionalVersionKey] = useState<string>('');
+  const [updateNotifications, setUpdateNotifications] = useState<UpdateNotificationRecord[]>([]);
+  const [installedAppInfo] = useState<InstalledAppInfo | null>(() => getNativeInstalledAppInfo());
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
 
   // Admin Notifications Center, Push Permission & 1-to-1 Messaging
@@ -517,6 +533,31 @@ export const App: React.FC = () => {
     [authUser?.uid]
   );
 
+  // Observe public App Release Config & Update Notification History for ALL users
+  useEffect(() => {
+    const unsubConfig = observeReleaseConfig(setReleaseConfig);
+    const unsubNotifs = observeUpdateNotifications(setUpdateNotifications);
+    return () => {
+      unsubConfig();
+      unsubNotifs();
+    };
+  }, []);
+
+  // Request Android 13+ notification permission cleanly on logged-in student devices too
+  useEffect(() => {
+    if (
+      isStudentLoggedIn &&
+      hasNativeFirebaseBridge() &&
+      getNotificationPermissionState() !== 'granted' &&
+      !hasAutoRequestedPushRef.current
+    ) {
+      hasAutoRequestedPushRef.current = true;
+      void requestAppNotificationPermission()
+        .then((status) => setNotificationPermissionStatus(status))
+        .catch(() => {});
+    }
+  }, [isStudentLoggedIn]);
+
   // Sync Admin Profile + FCM Token, Notification Center, Multi-Admin Directory & 1-to-1 Chat Listeners
   useEffect(() => {
     if (!hasNativeFirebaseBridge()) return undefined;
@@ -524,6 +565,10 @@ export const App: React.FC = () => {
       setNotificationPermissionStatus(status);
     });
     const unsubDeepLink = subscribeNativeAdminDeepLink((payload) => {
+      if (payload.targetRoute === 'app_update') {
+        setIsUpdateModalOpen(true);
+        return;
+      }
       if (isFirebaseAdmin) {
         applyAdminDeepLink(payload);
       } else {
@@ -532,7 +577,11 @@ export const App: React.FC = () => {
     });
     const initialDeepLink = consumeNativePendingDeepLink();
     if (initialDeepLink) {
-      pendingDeepLinkRef.current = initialDeepLink;
+      if (initialDeepLink.targetRoute === 'app_update') {
+        setIsUpdateModalOpen(true);
+      } else {
+        pendingDeepLinkRef.current = initialDeepLink;
+      }
     }
     return () => {
       unsubPerm();
@@ -841,8 +890,6 @@ export const App: React.FC = () => {
       setAllPayments([]);
       setAllCodes([]);
       setAllStudents([]);
-      setReleaseConfig(null);
-      setAvailableUpdate(null);
       setLiveSyncState('paused');
       return;
     }
@@ -878,7 +925,6 @@ export const App: React.FC = () => {
     };
 
     const unsubs = [
-      observeReleaseConfig(setReleaseConfig),
       observeAllStudents((list) => {
         setAllStudents(list);
         setHasMoreStudents(list.length >= ADMIN_PAGE_SIZE);
@@ -1034,10 +1080,54 @@ export const App: React.FC = () => {
     return () => window.clearTimeout(timer);
   }, [banner, isAdmin]);
 
+  const currentVersionName = installedAppInfo?.versionName || APP_VERSION_NAME;
+  const currentVersionCode = installedAppInfo?.versionCode || 1;
+
   const effectiveGithubRepo = useMemo(
     () => sanitizeOwnerRepo(releaseConfig?.githubOwnerRepo ?? ''),
     [releaseConfig]
   );
+
+  const firebaseAvailableUpdate = useMemo<GitHubReleaseInfo | null>(() => {
+    const apkUrl = releaseConfig?.apkDownloadUrl?.trim() ?? '';
+    const remoteVerName = releaseConfig?.latestVersionName?.trim() ?? '';
+    const remoteVerCode = Number(releaseConfig?.latestVersionCode ?? 0);
+    if (!apkUrl.startsWith('https://') || !remoteVerName) return null;
+
+    const isUpdateNewer =
+      remoteVerCode > currentVersionCode ||
+      (remoteVerCode === currentVersionCode && isNewerVersion(remoteVerName, currentVersionName));
+    if (!isUpdateNewer) return null;
+
+    return {
+      tagName: `v${remoteVerName}`,
+      versionName: remoteVerName,
+      versionCode: remoteVerCode || currentVersionCode + 1,
+      releaseTitle: releaseConfig?.updateTitle?.trim() || `ધોરણ 10 ક્વિઝ v${remoteVerName}`,
+      releaseNotes: releaseConfig?.releaseNotes?.trim() || '',
+      apkDownloadUrl: apkUrl,
+      htmlUrl: '',
+      apkSizeBytes: Number(releaseConfig?.apkSizeBytes ?? 0),
+      apkSha256: releaseConfig?.apkSha256 ?? '',
+      signingCertSha256: releaseConfig?.signingCertSha256 ?? '',
+      packageName: releaseConfig?.packageName ?? installedAppInfo?.packageName ?? '',
+      isMandatory: Boolean(releaseConfig?.isMandatory),
+      source: 'firebase',
+      isUpdateAvailable: true,
+    };
+  }, [currentVersionCode, currentVersionName, installedAppInfo?.packageName, releaseConfig]);
+
+  useEffect(() => {
+    if (!firebaseAvailableUpdate) return;
+    setAvailableUpdate(firebaseAvailableUpdate);
+    const key = `${firebaseAvailableUpdate.versionName}_${firebaseAvailableUpdate.versionCode ?? 0}`;
+    if (firebaseAvailableUpdate.isMandatory) {
+      setIsUpdateModalOpen(true);
+    } else if (dismissedOptionalVersionKey !== key) {
+      setIsUpdateModalOpen(true);
+    }
+  }, [dismissedOptionalVersionKey, firebaseAvailableUpdate]);
+
   const releaseConfigKey = useMemo(
     () => `${effectiveGithubRepo}|${releaseConfig?.updatedAt?.seconds ?? 0}`,
     [effectiveGithubRepo, releaseConfig?.updatedAt?.seconds]
@@ -1045,19 +1135,37 @@ export const App: React.FC = () => {
 
   const checkForUpdates = useCallback(
     async (manual = false) => {
-      if (!isAdmin || !effectiveGithubRepo) return;
+      if (firebaseAvailableUpdate) {
+        setAvailableUpdate(firebaseAvailableUpdate);
+        if (manual) {
+          setIsUpdateModalOpen(true);
+        }
+        return;
+      }
+
+      if (!effectiveGithubRepo) {
+        if (manual) {
+          setBanner({
+            isError: false,
+            message: `${t.appUpdateUpToDateMsg} (v${currentVersionName})`,
+          });
+        }
+        return;
+      }
+
       if (!manual && lastCheckedConfigKeyRef.current === releaseConfigKey) return;
       lastCheckedConfigKeyRef.current = releaseConfigKey;
 
       setIsCheckingUpdate(true);
       try {
-        const release = await fetchLatestRelease(effectiveGithubRepo, APP_VERSION_NAME);
+        const release = await fetchLatestRelease(effectiveGithubRepo, currentVersionName);
         if (release.isUpdateAvailable) {
-          setAvailableUpdate(release);
+          setAvailableUpdate({ ...release, source: 'github' });
+          setIsUpdateModalOpen(true);
         } else if (manual) {
           setBanner({
             isError: false,
-            message: `App is up to date (v${APP_VERSION_NAME}).`,
+            message: `${t.appUpdateUpToDateMsg} (v${currentVersionName})`,
           });
         }
       } catch (err) {
@@ -1071,15 +1179,20 @@ export const App: React.FC = () => {
         setIsCheckingUpdate(false);
       }
     },
-    [effectiveGithubRepo, isAdmin, releaseConfigKey]
+    [
+      currentVersionName,
+      effectiveGithubRepo,
+      firebaseAvailableUpdate,
+      releaseConfigKey,
+      t.appUpdateUpToDateMsg,
+    ]
   );
 
-  // Live update notification & automatic check is strictly for Admin only
   useEffect(() => {
-    if (isAdmin && effectiveGithubRepo) {
+    if (!firebaseAvailableUpdate && effectiveGithubRepo) {
       void checkForUpdates(false);
     }
-  }, [isAdmin, effectiveGithubRepo, checkForUpdates]);
+  }, [checkForUpdates, effectiveGithubRepo, firebaseAvailableUpdate]);
 
   const persistUserMeta = useCallback((name: string, mobile: string) => {
     const cleanMobile = normalizeIndianMobileInput(mobile);
@@ -1374,20 +1487,34 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleSaveGithubRepo = async (repo: string, notes: string) => {
+  const handlePublishAppUpdate = async (input: PublishAppUpdateInput) => {
     setIsBusy(true);
+    setBanner(null);
     try {
-      await saveReleaseConfig(repo, notes);
+      const result = await publishFirebaseAppUpdate(input);
       setBanner({
         isError: false,
-        message:
-          lang === 'en' ? 'Update settings saved.' : 'અપડેટ સેટિંગ્સ સેવ થઈ ગયા છે.',
+        message: t.adminUpdatePublishedSuccess,
       });
+      return result;
     } catch (err) {
       setBanner({
         isError: true,
-        message: formatAppError(err, 'Save failed'),
+        message: formatAppError(err, 'Publish failed'),
       });
+      throw err;
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const handleDeleteReleaseHistory = async (releaseId: string) => {
+    setIsBusy(true);
+    try {
+      await deleteAppReleaseRecord(releaseId);
+      setBanner({ isError: false, message: t.deleteSuccessMsg });
+    } catch (err) {
+      setBanner({ isError: true, message: formatAppError(err, 'Delete failed') });
     } finally {
       setIsBusy(false);
     }
@@ -1581,8 +1708,10 @@ export const App: React.FC = () => {
           liveAlerts={liveAlerts}
           isSoundEnabled={isSoundEnabled}
           releaseConfig={releaseConfig}
-          effectiveGithubRepo={effectiveGithubRepo}
-          currentVersionName={APP_VERSION_NAME}
+          installedAppInfo={installedAppInfo}
+          updateNotifications={updateNotifications}
+          currentVersionName={currentVersionName}
+          currentVersionCode={currentVersionCode}
           isBusy={isBusy}
           isCheckingUpdate={isCheckingUpdate}
           syncStatus={syncStatus}
@@ -1617,11 +1746,13 @@ export const App: React.FC = () => {
           onUpdateStudentSubjectAccess={(st, subId, grant) =>
             void handleUpdateStudentSubjectAccess(st, subId, grant)
           }
-          onSaveGithubRepo={(repo, notes) => void handleSaveGithubRepo(repo, notes)}
+          onPublishAppUpdate={handlePublishAppUpdate}
+          onDeleteReleaseHistory={handleDeleteReleaseHistory}
           onTestUpdateCheck={() => void checkForUpdates(true)}
           onDeletePayment={handleDeletePayment}
           onDeleteCode={handleDeleteCode}
           onDeleteStudent={handleDeleteStudent}
+          onOpenDisplaySettings={() => setShowDisplaySettings(true)}
           onNotify={(msg, isErr) => setBanner({ isError: Boolean(isErr), message: msg })}
           currentAdminUid={authUser?.uid ?? ''}
           currentAdminEmail={authUser?.email ?? ''}
@@ -1780,6 +1911,7 @@ export const App: React.FC = () => {
           onSelectTab={(tab) => setRoute({ name: 'public', tab })}
           onStudentLogout={handleStudentLogout}
           onToggleTheme={() => setIsDarkTheme((prev) => !prev)}
+          onOpenDisplaySettings={() => setShowDisplaySettings(true)}
         />
 
         <main className="flex-1 pb-14">
@@ -1803,7 +1935,21 @@ export const App: React.FC = () => {
               onSubmitPayment={handleSubmitPayment}
               onRedeemCode={handleRedeemCode}
               onOpenSubject={(subjectId) => setRoute({ name: 'subject', subjectId })}
+              onOpenDisplaySettings={() => setShowDisplaySettings(true)}
               onNotify={(msg, isErr) => setBanner({ isError: Boolean(isErr), message: msg })}
+              currentVersionName={currentVersionName}
+              currentVersionCode={currentVersionCode}
+              isCheckingUpdate={isCheckingUpdate}
+              hasAvailableUpdate={Boolean(availableUpdate?.isUpdateAvailable)}
+              latestVersionName={availableUpdate?.versionName ?? ''}
+              onCheckUpdateClick={() => void checkForUpdates(true)}
+              onOpenUpdateModal={() => {
+                if (availableUpdate) {
+                  setIsUpdateModalOpen(true);
+                } else {
+                  void checkForUpdates(true);
+                }
+              }}
             />
           )}
         </main>
@@ -1929,15 +2075,36 @@ export const App: React.FC = () => {
         </div>
       )}
 
-      {isAdmin && availableUpdate && (
+      {isUpdateModalOpen && availableUpdate && (
         <UpdateAvailableModal
           release={availableUpdate}
-          currentVersionName={APP_VERSION_NAME}
-          onDismiss={() => setAvailableUpdate(null)}
+          currentVersionName={currentVersionName}
+          currentVersionCode={currentVersionCode}
+          updateHistory={updateNotifications}
+          onNotify={(msg, isErr) => setBanner({ isError: Boolean(isErr), message: msg })}
+          onDismiss={() => {
+            if (!availableUpdate.isMandatory) {
+              setDismissedOptionalVersionKey(
+                `${availableUpdate.versionName}_${availableUpdate.versionCode ?? 0}`
+              );
+              setIsUpdateModalOpen(false);
+            }
+          }}
         />
       )}
+
+      <DisplaySettingsModal
+        isOpen={showDisplaySettings}
+        onClose={() => setShowDisplaySettings(false)}
+      />
     </>
   );
 };
+
+export const App: React.FC = () => (
+  <AdaptiveDisplayProvider>
+    <AppContent />
+  </AdaptiveDisplayProvider>
+);
 
 export default App;

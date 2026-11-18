@@ -21,7 +21,7 @@ import {
   type FieldValue,
   type Unsubscribe,
 } from 'firebase/firestore';
-import { getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage';
+import { getDownloadURL, ref as storageRef, uploadBytes, uploadBytesResumable } from 'firebase/storage';
 import {
   onAuthStateChanged,
   signInWithPopup,
@@ -45,6 +45,7 @@ import {
   markNativeChatMessagesRead,
   notifyNativeAuthUser,
   pauseNativeAdminListeners,
+  publishNativeAppUpdate,
   removeNativeAdminInvite,
   requestNativeNotificationPermission,
   resumeNativeAdminListeners,
@@ -58,11 +59,13 @@ import {
   subscribeNativeAllCodes,
   subscribeNativeAllPayments,
   subscribeNativeAllStudents,
+  subscribeNativeApkUploadProgress,
   subscribeNativeAuthState,
   subscribeNativeMyAttempts,
   subscribeNativeMyPayments,
   subscribeNativeReleaseConfig,
   subscribeNativeStudentProfile,
+  subscribeNativeUpdateNotifications,
   syncNativeAdminProfileAndFcmToken,
   triggerNativeActiveSessionCheck,
   updateNativeAdminNotificationPrefs,
@@ -107,11 +110,14 @@ import {
   type AdminNotificationRoute,
   type AdminUser,
   type AppReleaseConfig,
+  type AppReleaseRecord,
   type ChatMessageStatus,
   type PaymentRequest,
+  type PublishAppUpdateInput,
   type QuizAttempt,
   type StudentProfile,
   type SubjectId,
+  type UpdateNotificationRecord,
 } from '../types/models';
 import { getDeviceBrowserInfo } from '../utils/imageUtils';
 import { handleFirestoreError, OperationType } from './firestoreErrorHandler';
@@ -123,6 +129,8 @@ export const COLLECTION_PAYMENT_REQUESTS = 'payment_requests';
 export const COLLECTION_UTR_LOCKS = 'utr_locks';
 export const COLLECTION_APP_CONFIG = 'app_config';
 export const DOC_RELEASE_CONFIG = 'release';
+export const COLLECTION_APP_RELEASES = 'app_releases';
+export const COLLECTION_UPDATE_NOTIFICATIONS = 'update_notifications';
 
 export const ADMIN_UPI_ID = '9099592283@upi';
 export const ADMIN_UPI_NAME = 'KATRIYA KIRANKUMAR RAMESHBHAI';
@@ -2567,6 +2575,19 @@ export function observeReleaseConfig(onData: (cfg: AppReleaseConfig | null) => v
         id: snap.id,
         githubOwnerRepo: String(d.githubOwnerRepo ?? ''),
         releaseNotes: String(d.releaseNotes ?? ''),
+        latestVersionName: String(d.latestVersionName ?? ''),
+        latestVersionCode: Number(d.latestVersionCode ?? 0),
+        updateTitle: String(d.updateTitle ?? ''),
+        apkDownloadUrl: String(d.apkDownloadUrl ?? ''),
+        apkStoragePath: String(d.apkStoragePath ?? ''),
+        apkFileName: String(d.apkFileName ?? ''),
+        apkSizeBytes: Number(d.apkSizeBytes ?? 0),
+        apkSha256: String(d.apkSha256 ?? ''),
+        signingCertSha256: String(d.signingCertSha256 ?? ''),
+        packageName: String(d.packageName ?? ''),
+        isMandatory: Boolean(d.isMandatory),
+        publishedByUid: String(d.publishedByUid ?? ''),
+        publishedAt: d.publishedAt ?? null,
         updatedAt: d.updatedAt ?? null,
       });
     },
@@ -2581,7 +2602,7 @@ export async function saveReleaseConfig(
   releaseNotes: string
 ): Promise<void> {
   const cleanRepo = githubOwnerRepo.trim().slice(0, 120);
-  const cleanNotes = releaseNotes.trim().slice(0, 300);
+  const cleanNotes = releaseNotes.trim().slice(0, 1000);
   if (hasNativeFirebaseBridge()) {
     await invokeNativeBridgeCall((callId) => {
       window.AndroidFirebaseBridge?.saveReleaseConfig?.(
@@ -2604,11 +2625,15 @@ export async function saveReleaseConfig(
   }
   const ref = doc(db, COLLECTION_APP_CONFIG, DOC_RELEASE_CONFIG);
   try {
-    await setDoc(ref, {
-      githubOwnerRepo: cleanRepo,
-      releaseNotes: cleanNotes,
-      updatedAt: serverTimestamp(),
-    });
+    await setDoc(
+      ref,
+      {
+        githubOwnerRepo: cleanRepo,
+        releaseNotes: cleanNotes,
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
     markServerSyncSuccess();
   } catch (error) {
     const kind = markServerSyncError(error);
@@ -2620,6 +2645,289 @@ export async function saveReleaseConfig(
     }
     handleFirestoreError(error, OperationType.WRITE, ref.path);
   }
+}
+
+export function observeUpdateNotifications(
+  onData: (list: UpdateNotificationRecord[]) => void
+): Unsubscribe {
+  if (hasNativeFirebaseBridge()) {
+    return subscribeNativeUpdateNotifications(onData);
+  }
+  if (!canHitServer()) {
+    return () => {};
+  }
+  const q = query(
+    collection(db, COLLECTION_UPDATE_NOTIFICATIONS),
+    orderBy('createdAt', 'desc'),
+    limit(25)
+  );
+  return onSnapshot(
+    q,
+    (snap) => {
+      onData(
+        snap.docs.map((d) => {
+          const data = d.data();
+          return {
+            id: d.id,
+            releaseId: String(data.releaseId ?? d.id),
+            appName: String(data.appName ?? 'ધોરણ 10 ક્વિઝ'),
+            versionName: String(data.versionName ?? ''),
+            versionCode: Number(data.versionCode ?? 1),
+            title: String(data.title ?? ''),
+            body: String(data.body ?? ''),
+            isMandatory: Boolean(data.isMandatory),
+            apkDownloadUrl: String(data.apkDownloadUrl ?? ''),
+            targetRoute: 'app_update',
+            pushDispatched: Boolean(data.pushDispatched),
+            recipientCount: Number(data.recipientCount ?? 0),
+            createdAt: data.createdAt ?? null,
+            updatedAt: data.updatedAt ?? null,
+          };
+        })
+      );
+    },
+    () => {
+      onData([]);
+    }
+  );
+}
+
+export function observeAppReleases(onData: (list: AppReleaseRecord[]) => void): Unsubscribe {
+  if (!canHitServer()) return () => {};
+  const q = query(
+    collection(db, COLLECTION_APP_RELEASES),
+    orderBy('createdAt', 'desc'),
+    limit(15)
+  );
+  return onSnapshot(
+    q,
+    (snap) => {
+      onData(
+        snap.docs.map((d) => {
+          const data = d.data();
+          return {
+            id: d.id,
+            versionName: String(data.versionName ?? ''),
+            versionCode: Number(data.versionCode ?? 1),
+            updateTitle: String(data.updateTitle ?? ''),
+            releaseNotes: String(data.releaseNotes ?? ''),
+            apkDownloadUrl: String(data.apkDownloadUrl ?? ''),
+            apkStoragePath: String(data.apkStoragePath ?? ''),
+            apkFileName: String(data.apkFileName ?? ''),
+            apkSizeBytes: Number(data.apkSizeBytes ?? 0),
+            apkSha256: String(data.apkSha256 ?? ''),
+            signingCertSha256: String(data.signingCertSha256 ?? ''),
+            packageName: String(data.packageName ?? ''),
+            isMandatory: Boolean(data.isMandatory),
+            publishedByUid: String(data.publishedByUid ?? ''),
+            createdAt: data.createdAt ?? null,
+            updatedAt: data.updatedAt ?? null,
+          };
+        })
+      );
+    },
+    () => {
+      onData([]);
+    }
+  );
+}
+
+async function computeWebFileSha256Hex(file: File): Promise<string> {
+  if (typeof crypto === 'undefined' || !crypto.subtle) return '';
+  try {
+    const buffer = await file.arrayBuffer();
+    const digest = await crypto.subtle.digest('SHA-256', buffer);
+    return Array.from(new Uint8Array(digest))
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
+  } catch {
+    return '';
+  }
+}
+
+export async function publishFirebaseAppUpdate(
+  input: PublishAppUpdateInput
+): Promise<{ releaseId: string; apkDownloadUrl: string; versionName: string; versionCode: number }> {
+  const cleanVersionName = input.versionName.trim().slice(0, 32);
+  const cleanVersionCode = Math.max(1, Math.min(1_000_000, Math.floor(input.versionCode)));
+  const cleanTitle = (input.updateTitle.trim() || `ધોરણ 10 ક્વિઝ v${cleanVersionName}`).slice(0, 120);
+  const cleanNotes = (input.releaseNotes.trim() || `નવું વર્ઝન v${cleanVersionName} ઉપલબ્ધ છે.`).slice(
+    0,
+    1000
+  );
+
+  if (!cleanVersionName) {
+    throw new Error('Version number is required.');
+  }
+
+  if (hasNativeFirebaseBridge() && input.stagedFilePath) {
+    const unsubProgress = input.onUploadProgress
+      ? subscribeNativeApkUploadProgress((evt) => {
+          input.onUploadProgress?.(
+            evt.progressPercent ?? 0,
+            evt.bytesTransferred ?? 0,
+            evt.totalBytes ?? 0
+          );
+        })
+      : () => {};
+    try {
+      return await publishNativeAppUpdate({
+        stagedFilePath: input.stagedFilePath,
+        versionName: cleanVersionName,
+        versionCode: cleanVersionCode,
+        updateTitle: cleanTitle,
+        releaseNotes: cleanNotes,
+        isMandatory: input.isMandatory,
+        apkDownloadUrl: input.apkDownloadUrl,
+        apkStoragePath: input.apkStoragePath,
+        apkFileName: input.apkFileName,
+        apkSizeBytes: input.apkSizeBytes,
+        apkSha256: input.apkSha256,
+        signingCertSha256: input.signingCertSha256,
+        packageName: input.packageName,
+        githubOwnerRepo: input.githubOwnerRepo,
+      });
+    } finally {
+      unsubProgress();
+    }
+  }
+
+  const user = auth.currentUser;
+  if (!user) throw new Error('Admin sign-in is required to publish updates.');
+
+  let apkDownloadUrl = (input.apkDownloadUrl ?? '').trim().slice(0, 2000);
+  let apkStoragePath = (input.apkStoragePath ?? '').trim().slice(0, 300);
+  let apkFileName = (input.apkFileName ?? '').trim().slice(0, 160);
+  let apkSizeBytes = Number(input.apkSizeBytes ?? 0);
+  let apkSha256 = (input.apkSha256 ?? '').trim().slice(0, 64);
+  const signingCertSha256 = (input.signingCertSha256 ?? '').trim().slice(0, 64);
+  const packageName = (input.packageName?.trim() || 'com.aistudio.std10quiz.kqxmtv').slice(0, 120);
+
+  if (input.file) {
+    const file = input.file;
+    if (!file.name.toLowerCase().endsWith('.apk')) {
+      throw new Error('Please choose a valid .apk file.');
+    }
+    if (file.size <= 0 || file.size >= 250 * 1024 * 1024) {
+      throw new Error('APK size must be between 1 byte and 250 MB.');
+    }
+    const safeVersionSlug = cleanVersionName.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const storageFileName = `std10quiz_v${safeVersionSlug}_c${cleanVersionCode}_${Date.now()}.apk`;
+    apkStoragePath = `app_releases/${storageFileName}`;
+    apkFileName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 150);
+    apkSizeBytes = file.size;
+    apkSha256 = await computeWebFileSha256Hex(file);
+
+    const ref = storageRef(storage, apkStoragePath);
+    const task = uploadBytesResumable(ref, file, {
+      contentType: 'application/vnd.android.package-archive',
+    });
+
+    apkDownloadUrl = await new Promise<string>((resolve, reject) => {
+      task.on(
+        'state_changed',
+        (snap) => {
+          const total = snap.totalBytes > 0 ? snap.totalBytes : file.size;
+          const pct = total > 0 ? Math.min(99, Math.round((snap.bytesTransferred * 100) / total)) : 0;
+          input.onUploadProgress?.(pct, snap.bytesTransferred, total);
+        },
+        (err) => reject(err),
+        async () => {
+          try {
+            const url = await getDownloadURL(task.snapshot.ref);
+            input.onUploadProgress?.(100, file.size, file.size);
+            resolve(url);
+          } catch (e) {
+            reject(e);
+          }
+        }
+      );
+    });
+  }
+
+  if (!apkDownloadUrl.startsWith('https://') || apkSizeBytes <= 0) {
+    throw new Error('Please upload an APK file first.');
+  }
+
+  const releaseId = `rel_${cleanVersionCode}_${Date.now()}`;
+  const now = serverTimestamp();
+  const batch = writeBatch(db);
+
+  batch.set(doc(db, COLLECTION_APP_RELEASES, releaseId), {
+    versionName: cleanVersionName,
+    versionCode: cleanVersionCode,
+    updateTitle: cleanTitle,
+    releaseNotes: cleanNotes,
+    apkDownloadUrl,
+    apkStoragePath: apkStoragePath || `app_releases/${apkFileName}`,
+    apkFileName: apkFileName || `std10quiz_v${cleanVersionName}.apk`,
+    apkSizeBytes,
+    apkSha256,
+    signingCertSha256,
+    packageName,
+    isMandatory: Boolean(input.isMandatory),
+    publishedByUid: user.uid,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  batch.set(
+    doc(db, COLLECTION_APP_CONFIG, DOC_RELEASE_CONFIG),
+    {
+      githubOwnerRepo: (input.githubOwnerRepo ?? '').trim().slice(0, 120),
+      releaseNotes: cleanNotes,
+      latestVersionName: cleanVersionName,
+      latestVersionCode: cleanVersionCode,
+      updateTitle: cleanTitle,
+      apkDownloadUrl,
+      apkStoragePath: apkStoragePath || `app_releases/${apkFileName}`,
+      apkFileName: apkFileName || `std10quiz_v${cleanVersionName}.apk`,
+      apkSizeBytes,
+      apkSha256,
+      signingCertSha256,
+      packageName,
+      isMandatory: Boolean(input.isMandatory),
+      publishedByUid: user.uid,
+      publishedAt: now,
+      updatedAt: now,
+    },
+    { merge: true }
+  );
+
+  batch.set(doc(db, COLLECTION_UPDATE_NOTIFICATIONS, releaseId), {
+    releaseId,
+    appName: 'ધોરણ 10 ક્વિઝ',
+    versionName: cleanVersionName,
+    versionCode: cleanVersionCode,
+    title: cleanTitle,
+    body: cleanNotes,
+    isMandatory: Boolean(input.isMandatory),
+    apkDownloadUrl,
+    targetRoute: 'app_update',
+    pushDispatched: false,
+    recipientCount: 0,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  await batch.commit();
+  markServerSyncSuccess();
+  return {
+    releaseId,
+    apkDownloadUrl,
+    versionName: cleanVersionName,
+    versionCode: cleanVersionCode,
+  };
+}
+
+export async function deleteAppReleaseRecord(releaseId: string): Promise<void> {
+  const cleanId = releaseId.trim();
+  if (!cleanId) return;
+  if (!hasNativeFirebaseBridge()) {
+    requireUserId();
+  }
+  await deleteDoc(doc(db, COLLECTION_APP_RELEASES, cleanId)).catch(() => {});
+  await deleteDoc(doc(db, COLLECTION_UPDATE_NOTIFICATIONS, cleanId)).catch(() => {});
 }
 
 export async function deletePaymentRequestAdmin(req: PaymentRequest): Promise<void> {

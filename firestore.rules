@@ -679,10 +679,28 @@ service cloud.firestore {
     }
 
     function isValidAppConfig(data) {
-      return data.keys().hasAll(['githubOwnerRepo', 'releaseNotes', 'updatedAt']) &&
-             data.keys().hasOnly(['githubOwnerRepo', 'releaseNotes', 'updatedAt']) &&
-             data.githubOwnerRepo is string && data.githubOwnerRepo.size() <= 120 &&
-             data.releaseNotes is string && data.releaseNotes.size() <= 300 &&
+      return data.keys().hasAll(['releaseNotes', 'updatedAt']) &&
+             data.keys().hasOnly([
+               'githubOwnerRepo', 'releaseNotes', 'latestVersionName', 'latestVersionCode',
+               'updateTitle', 'apkDownloadUrl', 'apkStoragePath', 'apkFileName',
+               'apkSizeBytes', 'apkSha256', 'signingCertSha256', 'packageName',
+               'isMandatory', 'publishedByUid', 'publishedAt', 'updatedAt'
+             ]) &&
+             (!('githubOwnerRepo' in data) || (data.githubOwnerRepo is string && data.githubOwnerRepo.size() <= 120)) &&
+             data.releaseNotes is string && data.releaseNotes.size() <= 1000 &&
+             (!('latestVersionName' in data) || (data.latestVersionName is string && data.latestVersionName.size() <= 32)) &&
+             (!('latestVersionCode' in data) || (data.latestVersionCode is int && data.latestVersionCode >= 0 && data.latestVersionCode <= 1000000)) &&
+             (!('updateTitle' in data) || (data.updateTitle is string && data.updateTitle.size() <= 120)) &&
+             (!('apkDownloadUrl' in data) || (data.apkDownloadUrl is string && data.apkDownloadUrl.size() <= 2000)) &&
+             (!('apkStoragePath' in data) || (data.apkStoragePath is string && data.apkStoragePath.size() <= 300)) &&
+             (!('apkFileName' in data) || (data.apkFileName is string && data.apkFileName.size() <= 160)) &&
+             (!('apkSizeBytes' in data) || (data.apkSizeBytes is int && data.apkSizeBytes >= 0 && data.apkSizeBytes <= 262144000)) &&
+             (!('apkSha256' in data) || (data.apkSha256 is string && data.apkSha256.size() <= 64)) &&
+             (!('signingCertSha256' in data) || (data.signingCertSha256 is string && data.signingCertSha256.size() <= 64)) &&
+             (!('packageName' in data) || (data.packageName is string && data.packageName.size() <= 120)) &&
+             (!('isMandatory' in data) || data.isMandatory is bool) &&
+             (!('publishedByUid' in data) || (data.publishedByUid is string && data.publishedByUid.size() <= 128)) &&
+             (!('publishedAt' in data) || data.publishedAt == null || (data.publishedAt is timestamp && data.publishedAt <= request.time)) &&
              data.updatedAt is timestamp && data.updatedAt <= request.time;
     }
 
@@ -691,6 +709,114 @@ service cloud.firestore {
       allow list: if isAdmin();
       allow create, update: if isAdmin() && isValidId(configId) && isValidAppConfig(incoming());
       allow delete: if false;
+    }
+
+    function isValidAppRelease(data) {
+      return data.keys().hasAll([
+               'versionName', 'versionCode', 'updateTitle', 'releaseNotes',
+               'apkDownloadUrl', 'apkStoragePath', 'apkFileName', 'apkSizeBytes',
+               'apkSha256', 'signingCertSha256', 'packageName', 'isMandatory',
+               'publishedByUid', 'createdAt', 'updatedAt'
+             ]) &&
+             data.keys().hasOnly([
+               'versionName', 'versionCode', 'updateTitle', 'releaseNotes',
+               'apkDownloadUrl', 'apkStoragePath', 'apkFileName', 'apkSizeBytes',
+               'apkSha256', 'signingCertSha256', 'packageName', 'isMandatory',
+               'publishedByUid', 'createdAt', 'updatedAt'
+             ]) &&
+             data.versionName is string && data.versionName.size() >= 1 && data.versionName.size() <= 32 &&
+             data.versionCode is int && data.versionCode >= 1 && data.versionCode <= 1000000 &&
+             data.updateTitle is string && data.updateTitle.size() >= 1 && data.updateTitle.size() <= 120 &&
+             data.releaseNotes is string && data.releaseNotes.size() <= 1000 &&
+             data.apkDownloadUrl is string && data.apkDownloadUrl.size() >= 10 && data.apkDownloadUrl.size() <= 2000 &&
+             data.apkDownloadUrl.matches('^https://.*') &&
+             data.apkStoragePath is string && data.apkStoragePath.size() >= 5 && data.apkStoragePath.size() <= 300 &&
+             data.apkFileName is string && data.apkFileName.size() >= 5 && data.apkFileName.size() <= 160 &&
+             data.apkSizeBytes is int && data.apkSizeBytes >= 1 && data.apkSizeBytes <= 262144000 &&
+             data.apkSha256 is string && data.apkSha256.size() <= 64 &&
+             data.signingCertSha256 is string && data.signingCertSha256.size() <= 64 &&
+             data.packageName is string && data.packageName.size() >= 3 && data.packageName.size() <= 120 &&
+             data.isMandatory is bool &&
+             data.publishedByUid is string && data.publishedByUid.size() >= 1 && data.publishedByUid.size() <= 128 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    match /app_releases/{releaseId} {
+      allow get, list: if true;
+      allow create, update: if isAdmin() && isValidId(releaseId) && isValidAppRelease(incoming());
+      allow delete: if isAdmin() && isValidId(releaseId);
+    }
+
+    function isValidUpdateNotification(data) {
+      return data.keys().hasAll([
+               'releaseId', 'appName', 'versionName', 'versionCode', 'title', 'body',
+               'isMandatory', 'apkDownloadUrl', 'targetRoute', 'pushDispatched',
+               'recipientCount', 'createdAt', 'updatedAt'
+             ]) &&
+             data.keys().hasOnly([
+               'releaseId', 'appName', 'versionName', 'versionCode', 'title', 'body',
+               'isMandatory', 'apkDownloadUrl', 'targetRoute', 'pushDispatched',
+               'recipientCount', 'createdAt', 'updatedAt'
+             ]) &&
+             isValidId(data.releaseId) &&
+             data.appName is string && data.appName.size() >= 1 && data.appName.size() <= 80 &&
+             data.versionName is string && data.versionName.size() >= 1 && data.versionName.size() <= 32 &&
+             data.versionCode is int && data.versionCode >= 1 && data.versionCode <= 1000000 &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
+             data.body is string && data.body.size() >= 1 && data.body.size() <= 1000 &&
+             data.isMandatory is bool &&
+             data.apkDownloadUrl is string && data.apkDownloadUrl.size() <= 2000 &&
+             data.targetRoute == 'app_update' &&
+             data.pushDispatched is bool &&
+             data.recipientCount is int && data.recipientCount >= 0 && data.recipientCount <= 1000000 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    match /update_notifications/{notifId} {
+      allow get, list: if true;
+      allow create, update: if isAdmin() && isValidId(notifId) && isValidUpdateNotification(incoming());
+      allow delete: if isAdmin() && isValidId(notifId);
+    }
+
+    function isValidDeviceTokenDocId(deviceId) {
+      return deviceId is string && deviceId.size() >= 8 && deviceId.size() <= 128 && deviceId.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidDeviceFcmToken(data) {
+      return data.keys().hasAll([
+               'deviceId', 'token', 'platform', 'appVersion', 'versionCode',
+               'topicSubscribed', 'enabled', 'createdAt', 'updatedAt'
+             ]) &&
+             data.keys().hasOnly([
+               'deviceId', 'token', 'platform', 'appVersion', 'versionCode',
+               'topicSubscribed', 'enabled', 'createdAt', 'updatedAt'
+             ]) &&
+             isValidDeviceTokenDocId(data.deviceId) &&
+             data.token is string && data.token.size() >= 20 && data.token.size() <= 512 &&
+             data.platform in ['android', 'web'] &&
+             data.appVersion is string && data.appVersion.size() >= 1 && data.appVersion.size() <= 32 &&
+             data.versionCode is int && data.versionCode >= 1 && data.versionCode <= 1000000 &&
+             data.topicSubscribed is bool &&
+             data.enabled is bool &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    match /device_fcm_tokens/{deviceId} {
+      allow get: if isAdmin() || isValidDeviceTokenDocId(deviceId);
+      allow list: if isAdmin();
+      allow create: if isValidDeviceTokenDocId(deviceId) &&
+                       isValidDeviceFcmToken(incoming()) &&
+                       incoming().deviceId == deviceId;
+      allow update: if isValidDeviceTokenDocId(deviceId) &&
+                       isValidDeviceFcmToken(incoming()) &&
+                       incoming().deviceId == deviceId &&
+                       incoming().deviceId == existing().deviceId &&
+                       incoming().platform == existing().platform &&
+                       incoming().createdAt == existing().createdAt;
+      allow delete: if isAdmin() && isValidDeviceTokenDocId(deviceId);
     }
 
     function isValidAdminSession(data) {

@@ -133,18 +133,133 @@ export interface AppReleaseConfig {
   id: string;
   githubOwnerRepo: string;
   releaseNotes: string;
+  latestVersionName?: string;
+  latestVersionCode?: number;
+  updateTitle?: string;
+  apkDownloadUrl?: string;
+  apkStoragePath?: string;
+  apkFileName?: string;
+  apkSizeBytes?: number;
+  apkSha256?: string;
+  signingCertSha256?: string;
+  packageName?: string;
+  isMandatory?: boolean;
+  publishedByUid?: string;
+  publishedAt?: Timestamp | null;
   updatedAt: Timestamp | null;
 }
 
 export interface GitHubReleaseInfo {
   tagName: string;
   versionName: string;
+  versionCode?: number;
   releaseTitle: string;
   releaseNotes: string;
   apkDownloadUrl: string;
   htmlUrl: string;
   apkSizeBytes: number;
+  apkSha256?: string;
+  signingCertSha256?: string;
+  packageName?: string;
+  isMandatory?: boolean;
+  source?: 'firebase' | 'github';
   isUpdateAvailable: boolean;
+}
+
+export interface AppReleaseRecord {
+  id: string;
+  versionName: string;
+  versionCode: number;
+  updateTitle: string;
+  releaseNotes: string;
+  apkDownloadUrl: string;
+  apkStoragePath: string;
+  apkFileName: string;
+  apkSizeBytes: number;
+  apkSha256: string;
+  signingCertSha256: string;
+  packageName: string;
+  isMandatory: boolean;
+  publishedByUid: string;
+  createdAt: Timestamp | null;
+  updatedAt: Timestamp | null;
+}
+
+export interface UpdateNotificationRecord {
+  id: string;
+  releaseId: string;
+  appName: string;
+  versionName: string;
+  versionCode: number;
+  title: string;
+  body: string;
+  isMandatory: boolean;
+  apkDownloadUrl: string;
+  targetRoute: 'app_update';
+  pushDispatched: boolean;
+  recipientCount: number;
+  createdAt: Timestamp | null;
+  updatedAt: Timestamp | null;
+}
+
+export interface InstalledAppInfo {
+  packageName: string;
+  versionName: string;
+  versionCode: number;
+  signingCertSha256: string;
+  signingCertSha1: string;
+  canRequestPackageInstalls: boolean;
+}
+
+export interface InspectedApkMetadata {
+  fileName: string;
+  stagedFilePath: string;
+  fileSizeBytes: number;
+  packageName: string;
+  versionName: string;
+  versionCode: number;
+  apkSha256: string;
+  signingCertSha256: string;
+  signingCertSha1: string;
+  packageMatches: boolean;
+  signatureMatches: boolean;
+  isUpgradeOverInstalled: boolean;
+}
+
+export interface AppUpdateProgressEvent {
+  status:
+    | 'idle'
+    | 'uploading'
+    | 'downloading'
+    | 'verifying'
+    | 'permission_required'
+    | 'permission_denied'
+    | 'installing'
+    | 'error';
+  progressPercent: number;
+  bytesTransferred?: number;
+  bytesDownloaded?: number;
+  totalBytes: number;
+  message?: string;
+}
+
+export interface PublishAppUpdateInput {
+  stagedFilePath?: string;
+  file?: File | null;
+  versionName: string;
+  versionCode: number;
+  updateTitle: string;
+  releaseNotes: string;
+  isMandatory: boolean;
+  apkDownloadUrl?: string;
+  apkStoragePath?: string;
+  apkFileName?: string;
+  apkSizeBytes?: number;
+  apkSha256?: string;
+  signingCertSha256?: string;
+  packageName?: string;
+  githubOwnerRepo?: string;
+  onUploadProgress?: (pct: number, transferred: number, total: number) => void;
 }
 
 export interface ActionBanner {
@@ -299,7 +414,7 @@ export type AdminNotificationRoute =
   | 'admin_updates'
   | 'admin_notifications';
 
-export type AdminDeepLinkRoute = AdminNotificationRoute | 'admin_chat';
+export type AdminDeepLinkRoute = AdminNotificationRoute | 'admin_chat' | 'app_update';
 
 export interface AdminNotificationPrefs {
   registrations: boolean;

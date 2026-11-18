@@ -8,6 +8,7 @@ import {
   LockOpen,
   Play,
 } from 'lucide-react';
+import { useAdaptiveDisplay } from '../context/AdaptiveDisplayContext';
 import { SubjectPaymentModal } from '../components/SubjectPaymentModal';
 import { useTranslation } from '../i18n/translations';
 import {
@@ -59,19 +60,21 @@ export const SubjectChaptersScreen: React.FC<SubjectChaptersScreenProps> = ({
   onNotify,
 }) => {
   const { lang, t } = useTranslation();
+  const { useSplitLayout, isLargeScreen, isTvOrSmartBoard, gridColumns } = useAdaptiveDisplay();
   const [modalMode, setModalMode] = useState<'pay' | 'code' | null>(null);
 
   const totalQuestions = subject.chapters.reduce((sum, ch) => sum + ch.questions.length, 0);
+  const containerMaxCls = isLargeScreen ? 'max-w-[1480px] px-4 sm:px-6' : 'max-w-[720px] px-3 sm:px-4';
 
   return (
     <div className="min-h-screen bg-[#FAF9F5] dark:bg-[#0B1120] text-[#0F172A] dark:text-[#F8FAFC]">
       {/* Top Bar */}
       <header className="sticky top-0 z-20 bg-white/95 dark:bg-[#1E293B]/95 backdrop-blur border-b border-[#E2E8F0] dark:border-[#334155]">
-        <div className="max-w-[720px] mx-auto px-3 h-16 flex items-center gap-2">
+        <div className={`${containerMaxCls} mx-auto h-16 flex items-center gap-2`}>
           <button
             type="button"
             onClick={onBack}
-            className="p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+            className="min-h-[48px] min-w-[48px] flex items-center justify-center rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
             aria-label="પાછા જાઓ"
           >
             <ArrowLeft className="h-5 w-5" />
@@ -85,60 +88,74 @@ export const SubjectChaptersScreen: React.FC<SubjectChaptersScreenProps> = ({
         </div>
       </header>
 
-      <main className="max-w-[720px] mx-auto px-4 py-5 space-y-3.5">
-        {/* Subject Hero Banner */}
-        <div className="relative h-36 sm:h-40 rounded-2xl overflow-hidden shadow-sm">
-          <img
-            src={subject.imageUrl}
-            alt={subject.title}
-            className="w-full h-full object-cover"
-          />
-          <div
-            className="absolute inset-0"
-            style={{
-              background: `linear-gradient(90deg, ${subject.accentHex}E6 0%, ${subject.accentHex}59 100%)`,
-            }}
-          />
-          <div className="absolute inset-0 p-5 flex flex-col justify-center gap-1.5">
-            <h2 className="text-xl sm:text-2xl font-bold text-white">{subject.title} ફોલ્ડર</h2>
-            <p className="text-xs sm:text-sm text-white/90 max-w-md">{subject.description}</p>
-            <span className="self-start rounded-md bg-white/20 backdrop-blur-sm text-white text-xs font-bold px-2.5 py-1 tabular-nums">
-              કુલ {subject.chapters.length} પ્રશ્ન વિભાગ • {totalQuestions} પ્રશ્નો
-            </span>
-          </div>
-        </div>
-
-        {/* In-Subject Unlock Banner (Single ₹24 / All ₹49 via UPI) */}
-        {!hasQuizAccess && (
-          <div className="rounded-2xl bg-[#FEF3C7] dark:bg-[#451A03] border border-[#F59E0B]/35 p-4 text-[#92400E] dark:text-[#FDE68A] space-y-2.5">
-            <p className="text-xs sm:text-sm font-extrabold">
-              {lang === 'en'
-                ? `Unlock ${subject.englishSubtitle} (₹${PRICE_SINGLE_SUBJECT} Fix) or All Subjects (₹${PRICE_ALL_SUBJECTS} Fix)`
-                : `${subject.title} અનલૉક કરો ફક્ત ₹${PRICE_SINGLE_SUBJECT} (Fix) અથવા બધા વિષયો ₹${PRICE_ALL_SUBJECTS} (Fix)`}
-            </p>
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => setModalMode('pay')}
-                className="h-9 px-3.5 rounded-xl bg-[#1E3A8A] hover:bg-[#172554] text-white text-xs font-extrabold inline-flex items-center gap-1.5 cursor-pointer"
-              >
-                <IndianRupee className="h-3.5 w-3.5" />
-                <span>{t.payTabLabel}</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setModalMode('code')}
-                className="h-9 px-3.5 rounded-xl bg-white/85 dark:bg-black/30 hover:bg-white text-xs font-extrabold inline-flex items-center gap-1.5 cursor-pointer"
-              >
-                <KeyRound className="h-3.5 w-3.5" />
-                <span>{t.codeTabLabel}</span>
-              </button>
+      <main
+        className={`${containerMaxCls} mx-auto py-5 ${
+          useSplitLayout
+            ? 'grid grid-cols-1 lg:grid-cols-12 gap-5 items-start'
+            : 'space-y-3.5'
+        }`}
+      >
+        <div className={useSplitLayout ? 'lg:col-span-4 lg:sticky lg:top-20 space-y-3.5' : 'space-y-3.5'}>
+          {/* Subject Hero Banner */}
+          <div className={`relative ${useSplitLayout ? 'h-48 sm:h-56' : 'h-36 sm:h-40'} rounded-2xl overflow-hidden shadow-sm`}>
+            <img
+              src={subject.imageUrl}
+              alt={subject.title}
+              className="w-full h-full object-cover"
+            />
+            <div
+              className="absolute inset-0"
+              style={{
+                background: `linear-gradient(90deg, ${subject.accentHex}E6 0%, ${subject.accentHex}59 100%)`,
+              }}
+            />
+            <div className="absolute inset-0 p-5 flex flex-col justify-center gap-1.5">
+              <h2 className="text-xl sm:text-2xl font-bold text-white">{subject.title} ફોલ્ડર</h2>
+              <p className="text-xs sm:text-sm text-white/90 max-w-md">{subject.description}</p>
+              <span className="self-start rounded-md bg-white/20 backdrop-blur-sm text-white text-xs font-bold px-2.5 py-1 tabular-nums">
+                કુલ {subject.chapters.length} પ્રશ્ન વિભાગ • {totalQuestions} પ્રશ્નો
+              </span>
             </div>
           </div>
-        )}
 
-        {/* Chapters List */}
-        <div className="space-y-3">
+          {/* In-Subject Unlock Banner (Single ₹24 / All ₹49 via UPI) */}
+          {!hasQuizAccess && (
+            <div className="rounded-2xl bg-[#FEF3C7] dark:bg-[#451A03] border border-[#F59E0B]/35 p-4 text-[#92400E] dark:text-[#FDE68A] space-y-2.5">
+              <p className="text-xs sm:text-sm font-extrabold">
+                {lang === 'en'
+                  ? `Unlock ${subject.englishSubtitle} (₹${PRICE_SINGLE_SUBJECT} Fix) or All Subjects (₹${PRICE_ALL_SUBJECTS} Fix)`
+                  : `${subject.title} અનલૉક કરો ફક્ત ₹${PRICE_SINGLE_SUBJECT} (Fix) અથવા બધા વિષયો ₹${PRICE_ALL_SUBJECTS} (Fix)`}
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setModalMode('pay')}
+                  className="min-h-[44px] px-3.5 rounded-xl bg-[#1E3A8A] hover:bg-[#172554] text-white text-xs font-extrabold inline-flex items-center gap-1.5 cursor-pointer"
+                >
+                  <IndianRupee className="h-3.5 w-3.5" />
+                  <span>{t.payTabLabel}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setModalMode('code')}
+                  className="min-h-[44px] px-3.5 rounded-xl bg-white/85 dark:bg-black/30 hover:bg-white text-xs font-extrabold inline-flex items-center gap-1.5 cursor-pointer"
+                >
+                  <KeyRound className="h-3.5 w-3.5" />
+                  <span>{t.codeTabLabel}</span>
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Chapters Responsive Grid */}
+        <div
+          className={`${useSplitLayout ? 'lg:col-span-8' : ''} ${
+            gridColumns >= 2
+              ? 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-2 2xl:grid-cols-3 gap-3.5'
+              : 'space-y-3'
+          }`}
+        >
           {subject.chapters.map((chapter) => {
             const isChapterUnlocked = hasQuizAccess || Boolean(chapter.isFreeUnlocked);
             return (
@@ -152,7 +169,9 @@ export const SubjectChaptersScreen: React.FC<SubjectChaptersScreenProps> = ({
                     setModalMode('pay');
                   }
                 }}
-                className="w-full text-left rounded-2xl bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] shadow-sm hover:shadow-md transition-shadow p-4 flex items-center gap-3.5 cursor-pointer"
+                className={`w-full h-full text-left rounded-2xl bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] shadow-sm hover:shadow-md transition-all ${
+                  isTvOrSmartBoard ? 'p-4.5 gap-4' : 'p-4 gap-3.5'
+                } flex items-center cursor-pointer`}
               >
                 <div
                   className="h-12 w-12 rounded-xl flex items-center justify-center shrink-0"
@@ -176,7 +195,9 @@ export const SubjectChaptersScreen: React.FC<SubjectChaptersScreenProps> = ({
                   <h3 className="text-sm sm:text-base font-bold text-[#0F172A] dark:text-[#F8FAFC]">
                     {chapter.title}
                   </h3>
-                  <p className="text-xs text-[#475569] dark:text-[#94A3B8]">{chapter.subtitle}</p>
+                  <p className="text-xs text-[#475569] dark:text-[#94A3B8] line-clamp-2">
+                    {chapter.subtitle}
+                  </p>
                   <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
                     <span className="rounded-md bg-[#EFF4FA] dark:bg-[#0F172A] text-[#475569] dark:text-[#94A3B8] px-2 py-0.5 text-[11px] font-semibold tabular-nums">
                       {chapter.questions.length} પ્રશ્નો • {chapter.questionTypeLabel}

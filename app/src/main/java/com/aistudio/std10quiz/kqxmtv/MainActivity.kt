@@ -6,13 +6,16 @@ import android.content.ContentValues
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
+import android.content.res.Configuration
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.provider.MediaStore
+import android.provider.Settings
 import android.util.Base64
 import android.util.Log
+import android.view.KeyEvent
 import android.webkit.JavascriptInterface
 import android.webkit.MimeTypeMap
 import android.webkit.URLUtil
@@ -31,27 +34,33 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSizeClassApi
+import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.constraintlayout.compose.ConstraintLayout
+import androidx.constraintlayout.compose.Dimension
 import androidx.core.content.FileProvider
+import androidx.window.layout.WindowInfoTracker
+import androidx.window.layout.WindowLayoutInfo
 import com.aistudio.std10quiz.kqxmtv.ui.theme.Std10QuizTheme
 import java.io.File
 import java.io.IOException
@@ -61,10 +70,16 @@ private const val START_URL = "https://$APP_HOST/index.html"
 
 class MainActivity : ComponentActivity() {
     private var activeBridgeRef: NativeFirebaseBridge? = null
+    private var activeWebViewRef: WebView? = null
+    private var latestLayoutInfoRef: WindowLayoutInfo? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        val initialSettings = AdaptiveDisplayManager.loadSettings(this)
+        val initialTelemetry = AdaptiveDisplayManager.collectTelemetry(this, null, initialSettings)
+        AdaptiveDisplayManager.applyActivityDisplaySettings(this, initialSettings, initialTelemetry)
+
         AdminNotificationHelper.ensureChannels(this)
         AdminNotificationHelper.extractDeepLinkFromIntent(intent)?.let { deepLink ->
             AdminNotificationHelper.savePendingDeepLink(this, deepLink)
@@ -74,8 +89,33 @@ class MainActivity : ComponentActivity() {
                 PortalWebContainer(
                     onBridgeChanged = { bridge ->
                         activeBridgeRef = bridge
+                    },
+                    onWebViewChanged = { wv ->
+                        activeWebViewRef = wv
+                    },
+                    onLayoutInfoChanged = { info ->
+                        latestLayoutInfoRef = info
                     }
                 )
+            }
+        }
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        val settings = AdaptiveDisplayManager.loadSettings(this)
+        val telemetry = AdaptiveDisplayManager.collectTelemetry(this, latestLayoutInfoRef, settings)
+        AdaptiveDisplayManager.applyActivityDisplaySettings(this, settings, telemetry)
+        AdaptiveDisplayManager.pushTelemetryToWebView(activeWebViewRef, telemetry)
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) {
+            val settings = AdaptiveDisplayManager.loadSettings(this)
+            if (settings.isFullScreen) {
+                val telemetry = AdaptiveDisplayManager.collectTelemetry(this, latestLayoutInfoRef, settings)
+                AdaptiveDisplayManager.applyActivityDisplaySettings(this, settings, telemetry)
             }
         }
     }
@@ -378,20 +418,43 @@ private tailrec fun Context.findComponentActivity(): ComponentActivity? = when (
     else -> null
 }
 
+@OptIn(ExperimentalMaterial3WindowSizeClassApi::class)
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 private fun PortalWebContainer(
-    onBridgeChanged: (NativeFirebaseBridge?) -> Unit = {}
+    onBridgeChanged: (NativeFirebaseBridge?) -> Unit = {},
+    onWebViewChanged: (WebView?) -> Unit = {},
+    onLayoutInfoChanged: (WindowLayoutInfo?) -> Unit = {}
 ) {
     val context = LocalContext.current
     val activity = remember(context) { context.findComponentActivity() }
     if (activity == null) return
 
+    val configuration = LocalConfiguration.current
+    val windowSizeClass = calculateWindowSizeClass(activity)
+    val layoutInfoFlow = remember(activity) {
+        WindowInfoTracker.getOrCreate(activity).windowLayoutInfo(activity)
+    }
+    val layoutInfo by layoutInfoFlow.collectAsState(initial = null)
+
+    var displaySettings by remember {
+        mutableStateOf(AdaptiveDisplayManager.loadSettings(activity))
+    }
     var loadProgress by remember { mutableIntStateOf(0) }
     var canGoBack by remember { mutableStateOf(false) }
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
     var firebaseBridgeRef by remember { mutableStateOf<NativeFirebaseBridge?>(null) }
     var pendingFileCallback by remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
+
+    LaunchedEffect(layoutInfo) {
+        onLayoutInfoChanged(layoutInfo)
+    }
+
+    LaunchedEffect(configuration, layoutInfo, windowSizeClass, displaySettings, webViewRef) {
+        val telemetry = AdaptiveDisplayManager.collectTelemetry(activity, layoutInfo, displaySettings)
+        AdaptiveDisplayManager.applyActivityDisplaySettings(activity, displaySettings, telemetry)
+        AdaptiveDisplayManager.pushTelemetryToWebView(webViewRef, telemetry)
+    }
 
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -406,6 +469,25 @@ private fun PortalWebContainer(
         pendingFileCallback = null
     }
 
+    val webDocumentPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        pendingFileCallback?.onReceiveValue(if (uri != null) arrayOf(uri) else null)
+        pendingFileCallback = null
+    }
+
+    val adminApkPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        firebaseBridgeRef?.onApkFilePickedResult(uri)
+    }
+
+    val unknownSourcesLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) {
+        firebaseBridgeRef?.onUnknownSourcesSettingsReturned()
+    }
+
     BackHandler(enabled = canGoBack) {
         webViewRef?.goBack()
     }
@@ -417,6 +499,7 @@ private fun PortalWebContainer(
             firebaseBridgeRef?.detach()
             firebaseBridgeRef = null
             onBridgeChanged(null)
+            onWebViewChanged(null)
             webViewRef?.destroy()
             webViewRef = null
         }
@@ -424,18 +507,34 @@ private fun PortalWebContainer(
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
-        contentWindowInsets = WindowInsets.safeDrawing
+        contentWindowInsets = if (displaySettings.isFullScreen) {
+            WindowInsets(0)
+        } else {
+            WindowInsets.safeDrawing
+        }
     ) { innerPadding ->
-        Box(
+        ConstraintLayout(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
+            val (webContainerRef, progressBarRef) = createRefs()
+
             AndroidView(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.constrainAs(webContainerRef) {
+                    top.linkTo(parent.top)
+                    bottom.linkTo(parent.bottom)
+                    start.linkTo(parent.start)
+                    end.linkTo(parent.end)
+                    width = Dimension.fillToConstraints
+                    height = Dimension.fillToConstraints
+                },
                 factory = { ctx ->
                     WebView(ctx).apply {
                         webViewRef = this
+                        onWebViewChanged(this)
+                        isFocusable = true
+                        isFocusableInTouchMode = true
                         setBackgroundColor(android.graphics.Color.TRANSPARENT)
                         settings.apply {
                             javaScriptEnabled = true
@@ -446,9 +545,22 @@ private fun PortalWebContainer(
                             mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
                             useWideViewPort = true
                             loadWithOverviewMode = true
+                            textZoom = 100
                         }
 
                         addJavascriptInterface(AndroidExportBridge(activity), "AndroidBridge")
+                        addJavascriptInterface(
+                            AndroidDisplayBridge(
+                                activity = activity,
+                                getLayoutInfo = { layoutInfo },
+                                onSettingsApplied = { nextSettings, telemetry ->
+                                    displaySettings = nextSettings
+                                    AdaptiveDisplayManager.pushTelemetryToWebView(this, telemetry)
+                                }
+                            ),
+                            "AndroidDisplayBridge"
+                        )
+
                         runCatching {
                             val firebaseBridge = NativeFirebaseBridge(
                                 activity = activity,
@@ -459,6 +571,26 @@ private fun PortalWebContainer(
                                     } else {
                                         firebaseBridgeRef?.onNotificationPermissionResult(true)
                                     }
+                                },
+                                onLaunchApkPicker = {
+                                    adminApkPickerLauncher.launch(
+                                        arrayOf(
+                                            "application/vnd.android.package-archive",
+                                            "application/octet-stream",
+                                            "*/*"
+                                        )
+                                    )
+                                },
+                                onLaunchUnknownSourcesSettings = {
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                        val intent = Intent(
+                                            Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                            Uri.parse("package:${activity.packageName}")
+                                        )
+                                        unknownSourcesLauncher.launch(intent)
+                                    } else {
+                                        firebaseBridgeRef?.onUnknownSourcesSettingsReturned()
+                                    }
                                 }
                             )
                             firebaseBridgeRef = firebaseBridge
@@ -467,6 +599,29 @@ private fun PortalWebContainer(
                             firebaseBridge.attach()
                         }.onFailure { err ->
                             Log.e("MainActivity", "NativeFirebaseBridge init failed", err)
+                        }
+
+                        setOnKeyListener { v, keyCode, event ->
+                            if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_BACK) {
+                                if (canGoBack) {
+                                    goBack()
+                                    return@setOnKeyListener true
+                                }
+                            }
+                            if (event.action == KeyEvent.ACTION_DOWN &&
+                                keyCode in setOf(
+                                    KeyEvent.KEYCODE_DPAD_UP,
+                                    KeyEvent.KEYCODE_DPAD_DOWN,
+                                    KeyEvent.KEYCODE_DPAD_LEFT,
+                                    KeyEvent.KEYCODE_DPAD_RIGHT,
+                                    KeyEvent.KEYCODE_DPAD_CENTER
+                                )
+                            ) {
+                                if (!v.hasFocus()) {
+                                    v.requestFocus()
+                                }
+                            }
+                            false
                         }
 
                         webViewClient = object : WebViewClient() {
@@ -552,6 +707,12 @@ private fun PortalWebContainer(
                             override fun onPageFinished(view: WebView?, url: String?) {
                                 super.onPageFinished(view, url)
                                 canGoBack = view?.canGoBack() == true
+                                val telemetry = AdaptiveDisplayManager.collectTelemetry(
+                                    activity,
+                                    layoutInfo,
+                                    displaySettings
+                                )
+                                AdaptiveDisplayManager.pushTelemetryToWebView(view, telemetry)
                             }
                         }
 
@@ -568,12 +729,29 @@ private fun PortalWebContainer(
                             ): Boolean {
                                 pendingFileCallback?.onReceiveValue(null)
                                 pendingFileCallback = filePathCallback
+                                val acceptTypes = fileChooserParams?.acceptTypes
+                                    ?.joinToString(",")
+                                    ?.lowercase()
+                                    .orEmpty()
+                                val wantsNonImage = acceptTypes.contains("apk") ||
+                                    acceptTypes.contains("application/") ||
+                                    acceptTypes.contains("*/*")
                                 return try {
-                                    photoPickerLauncher.launch(
-                                        PickVisualMediaRequest(
-                                            ActivityResultContracts.PickVisualMedia.ImageOnly
+                                    if (wantsNonImage) {
+                                        webDocumentPickerLauncher.launch(
+                                            arrayOf(
+                                                "application/vnd.android.package-archive",
+                                                "application/octet-stream",
+                                                "*/*"
+                                            )
                                         )
-                                    )
+                                    } else {
+                                        photoPickerLauncher.launch(
+                                            PickVisualMediaRequest(
+                                                ActivityResultContracts.PickVisualMedia.ImageOnly
+                                            )
+                                        )
+                                    }
                                     true
                                 } catch (_: Exception) {
                                     pendingFileCallback?.onReceiveValue(null)
@@ -627,9 +805,12 @@ private fun PortalWebContainer(
             if (loadProgress in 1..99) {
                 LinearProgressIndicator(
                     progress = { loadProgress / 100f },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .align(Alignment.TopCenter),
+                    modifier = Modifier.constrainAs(progressBarRef) {
+                        top.linkTo(parent.top)
+                        start.linkTo(parent.start)
+                        end.linkTo(parent.end)
+                        width = Dimension.fillToConstraints
+                    },
                     color = MaterialTheme.colorScheme.primary
                 )
             }

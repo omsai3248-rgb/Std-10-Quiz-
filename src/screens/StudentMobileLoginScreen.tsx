@@ -1,15 +1,19 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ArrowRight,
+  Award,
   BookOpen,
   CheckCircle2,
   Eye,
   EyeOff,
   Lock,
+  Monitor,
   ShieldCheck,
   Smartphone,
   User,
 } from 'lucide-react';
+import { useAdaptiveDisplay } from '../context/AdaptiveDisplayContext';
+import { std10SubjectMetas } from '../data/curriculum/std10Curriculum';
 import { useTranslation } from '../i18n/translations';
 import { extractReadableErrorMessage } from '../services/firestoreErrorHandler';
 import {
@@ -35,6 +39,7 @@ export const StudentMobileLoginScreen: React.FC<StudentMobileLoginScreenProps> =
   onAdminAuthenticated,
 }) => {
   const { lang, t } = useTranslation();
+  const { useSplitLayout, isTvOrSmartBoard, screenProfileLabel } = useAdaptiveDisplay();
   const [nameInput, setNameInput] = useState(initialName);
   const [mobileInput, setMobileInput] = useState(initialMobile);
   const [passwordInput, setPasswordInput] = useState('');
@@ -166,9 +171,60 @@ export const StudentMobileLoginScreen: React.FC<StudentMobileLoginScreenProps> =
   };
 
   return (
-    <div className="max-w-md mx-auto px-4 py-8">
+    <div
+      className={`${
+        useSplitLayout
+          ? 'max-w-6xl mx-auto px-4 sm:px-6 py-6 sm:py-10 grid grid-cols-1 lg:grid-cols-12 gap-6 items-center'
+          : 'max-w-md mx-auto px-4 py-8'
+      }`}
+    >
+      {useSplitLayout && (
+        <aside className="lg:col-span-6 rounded-3xl bg-gradient-to-br from-[#1E3A8A] via-[#1D4ED8] to-[#0F766E] text-white p-6 sm:p-8 shadow-lg space-y-5">
+          <div className="inline-flex items-center gap-2 rounded-full bg-white/15 px-3 py-1 text-xs font-bold">
+            <Monitor className="h-3.5 w-3.5" />
+            <span>{screenProfileLabel}</span>
+          </div>
+          <div className="space-y-2">
+            <h2 className="text-2xl sm:text-3xl font-extrabold leading-tight">
+              {t.appName}
+            </h2>
+            <p className="text-sm text-white/90 leading-relaxed">
+              {t.unlockedContentSubtitle}
+            </p>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-1 gap-2.5">
+            {std10SubjectMetas.map((sub) => (
+              <div
+                key={sub.id}
+                className="rounded-2xl bg-white/12 backdrop-blur-sm px-4 py-3 flex items-center justify-between gap-2"
+              >
+                <div className="min-w-0">
+                  <p className="text-sm font-extrabold truncate">
+                    {lang === 'en' ? sub.englishSubtitle : sub.title}
+                  </p>
+                  <p className="text-xs text-white/80 truncate">{sub.description}</p>
+                </div>
+                <span className="rounded-lg bg-white/20 px-2.5 py-1 text-xs font-bold shrink-0 tabular-nums">
+                  {sub.chapterCount} Ch
+                </span>
+              </div>
+            ))}
+          </div>
+          <div className="flex items-center gap-2 text-xs text-white/85 font-semibold pt-1">
+            <Award className="h-4 w-4 text-[#FCD34D] shrink-0" />
+            <span>{t.unlockAllBannerTitle}</span>
+          </div>
+        </aside>
+      )}
+
       {/* Mobile / Admin Login Card */}
-      <div className="rounded-3xl bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] shadow-sm p-6 space-y-5">
+      <div
+        className={`${
+          useSplitLayout ? 'lg:col-span-6' : ''
+        } rounded-3xl bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] shadow-sm ${
+          isTvOrSmartBoard ? 'p-7 space-y-6' : 'p-6 space-y-5'
+        }`}
+      >
         <div className="flex items-center gap-3">
           <div className="h-12 w-12 rounded-2xl bg-[#DBEAFE] dark:bg-[#1E3A5F] flex items-center justify-center text-[#1E3A8A] dark:text-[#93C5FD] shrink-0">
             <BookOpen className="h-6 w-6" />
@@ -322,7 +378,9 @@ export const StudentMobileLoginScreen: React.FC<StudentMobileLoginScreenProps> =
             <button
               type="submit"
               disabled={isLoading}
-              className="w-full h-12 rounded-xl bg-[#047857] hover:bg-[#065F46] text-white text-sm font-extrabold flex items-center justify-center gap-2 transition-colors disabled:opacity-60 cursor-pointer"
+              className={`w-full ${
+                isTvOrSmartBoard ? 'h-14 text-base' : 'h-12 text-sm'
+              } rounded-xl bg-[#047857] hover:bg-[#065F46] text-white font-extrabold flex items-center justify-center gap-2 transition-colors disabled:opacity-60 cursor-pointer`}
             >
               <ShieldCheck className="h-4 w-4" />
               <span>{isLoading ? t.loggingInBtn : t.adminLoginBtn}</span>
@@ -331,7 +389,9 @@ export const StudentMobileLoginScreen: React.FC<StudentMobileLoginScreenProps> =
             <button
               type="submit"
               disabled={isLoading}
-              className="w-full h-12 rounded-xl bg-[#1E3A8A] hover:bg-[#172554] dark:bg-[#2563EB] text-white text-sm font-extrabold flex items-center justify-center gap-2 transition-colors disabled:opacity-60 cursor-pointer"
+              className={`w-full ${
+                isTvOrSmartBoard ? 'h-14 text-base' : 'h-12 text-sm'
+              } rounded-xl bg-[#1E3A8A] hover:bg-[#172554] dark:bg-[#2563EB] text-white font-extrabold flex items-center justify-center gap-2 transition-colors disabled:opacity-60 cursor-pointer`}
             >
               <span>{isLoading ? t.loggingInBtn : t.loginBtn}</span>
               <ArrowRight className="h-4 w-4" />

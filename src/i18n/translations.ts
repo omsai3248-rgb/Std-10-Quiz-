@@ -254,6 +254,77 @@ export interface Translations {
   chatStatusDelivered: string;
   chatStatusRead: string;
   openNotifAction: string;
+
+  // Display Settings & Adaptive UI
+  displaySettingsBtn: string;
+  displaySettingsTitle: string;
+  displaySettingsSubtitle: string;
+  displayModeAutoTitle: string;
+  displayModeAutoDesc: string;
+  displayModePortraitTitle: string;
+  displayModePortraitDesc: string;
+  displayModeLandscapeTitle: string;
+  displayModeLandscapeDesc: string;
+  displayModeFullScreenTitle: string;
+  displayModeFullScreenDesc: string;
+  displayDetectedDeviceLabel: string;
+  displayWindowClassLabel: string;
+  displayOrientationLabel: string;
+  displayResolutionLabel: string;
+  displayResetDefaultBtn: string;
+  orientationPortraitLabel: string;
+  orientationLandscapeLabel: string;
+  deviceTypeMobile: string;
+  deviceTypeTablet: string;
+  deviceTypeSmartBoard: string;
+  deviceTypeAndroidTv: string;
+  deviceTypeLargeTouchscreen: string;
+  deviceTypeLandscapeMonitor: string;
+  deviceTypeFoldable: string;
+
+  // In-App App Updates & Push Notifications
+  appUpdateAvailableTitle: string;
+  appUpdateMandatoryTitle: string;
+  appUpdateMandatoryDesc: string;
+  appUpdateOptionalBadge: string;
+  appUpdateMandatoryBadge: string;
+  appUpdateCurrentVersionLabel: string;
+  appUpdateNewVersionLabel: string;
+  appUpdateNowBtn: string;
+  appUpdateDownloadingBtn: string;
+  appUpdateVerifyingLabel: string;
+  appUpdateInstallingLabel: string;
+  appUpdateLaterBtn: string;
+  appUpdateRetryBtn: string;
+  appUpdatePermissionRequiredDesc: string;
+  appUpdateGrantInstallPermBtn: string;
+  appUpdateUpToDateMsg: string;
+  appUpdateCheckNowBtn: string;
+  appUpdateCheckingBtn: string;
+  appUpdateHistoryTitle: string;
+  appUpdateNoHistory: string;
+  adminUpdateControlTitle: string;
+  adminUpdateUploadApkBtn: string;
+  adminUpdateChangeApkBtn: string;
+  adminUpdateInspectingApk: string;
+  adminUpdateVerifiedPkg: string;
+  adminUpdateVerifiedSig: string;
+  adminUpdateMismatchPkg: string;
+  adminUpdateMismatchSig: string;
+  adminUpdateVersionNameLabel: string;
+  adminUpdateVersionCodeLabel: string;
+  adminUpdateTitleLabel: string;
+  adminUpdateNotesLabel: string;
+  adminUpdateTypeLabel: string;
+  adminUpdateOptionalOption: string;
+  adminUpdateMandatoryOption: string;
+  adminUpdatePublishBtn: string;
+  adminUpdatePublishingBtn: string;
+  adminUpdatePublishedSuccess: string;
+  adminUpdateUploadingProgress: string;
+  adminUpdateActiveReleaseTitle: string;
+  adminUpdateNoActiveRelease: string;
+  adminUpdatePushSentCount: string;
 }
 
 const GU: Translations = {
@@ -507,6 +578,75 @@ const GU: Translations = {
   chatStatusDelivered: 'પહોંચ્યું',
   chatStatusRead: 'વંચાયું',
   openNotifAction: 'વિગત ખોલો',
+
+  displaySettingsBtn: 'ડિસ્પ્લે',
+  displaySettingsTitle: 'ડિસ્પ્લે અને સ્ક્રીન સેટિંગ્સ',
+  displaySettingsSubtitle: 'મોબાઇલ, ટેબ્લેટ, Smart TV અને Smart Board મુજબ આપમેળે UI સેટ કરો.',
+  displayModeAutoTitle: '૧. Auto Adaptive Mode (ડિફોલ્ટ)',
+  displayModeAutoDesc: 'ડિવાઇસના કદ અને દિશા મુજબ આપમેળે સેટ થાય (TV/Smart Board પર આપમેળે Landscape).',
+  displayModePortraitTitle: '૨. Portrait Mode',
+  displayModePortraitDesc: 'ઊભી સ્ક્રીન (Vertical / Handheld) લેઆઉટ લોક રાખો.',
+  displayModeLandscapeTitle: '૩. Landscape Mode',
+  displayModeLandscapeDesc: 'આડી વાઇડ સ્ક્રીન (Split-Pane & Navigation Rail) લેઆઉટ રાખો.',
+  displayModeFullScreenTitle: '૪. Full Screen Mode',
+  displayModeFullScreenDesc: 'સ્ટેટસ બાર અને નેવિગેશન બાર છુપાવીને સંપૂર્ણ ફુલ સ્ક્રીન મોડ ચાલુ કરો.',
+  displayDetectedDeviceLabel: 'ઓળખાયેલ ડિવાઇસ',
+  displayWindowClassLabel: 'વિન્ડો સાઇઝ',
+  displayOrientationLabel: 'દિશા (Orientation)',
+  displayResolutionLabel: 'સ્ક્રીન માપ',
+  displayResetDefaultBtn: 'ડિફોલ્ટ Auto મોડ પર જાઓ',
+  orientationPortraitLabel: 'Portrait (ઊભું)',
+  orientationLandscapeLabel: 'Landscape (આડું)',
+  deviceTypeMobile: 'Android મોબાઇલ',
+  deviceTypeTablet: 'Android ટેબ્લેટ',
+  deviceTypeSmartBoard: 'ઇન્ટરેક્ટિવ Smart Board',
+  deviceTypeAndroidTv: 'Android Smart TV',
+  deviceTypeLargeTouchscreen: 'મોટી ટચસ્ક્રીન ડિસ્પ્લે',
+  deviceTypeLandscapeMonitor: 'લેન્ડસ્કેપ મોનિટર',
+  deviceTypeFoldable: 'ફોલ્ડેબલ ડિવાઇસ',
+
+  appUpdateAvailableTitle: 'નવું એપ અપડેટ ઉપલબ્ધ છે!',
+  appUpdateMandatoryTitle: 'જરૂરી એપ અપડેટ ઉપલબ્ધ છે',
+  appUpdateMandatoryDesc: 'આગળ વધવા માટે આ અપડેટ ઇન્સ્ટોલ કરવું જરૂરી છે. તમારો બધો ડેટા અને લૉગિન સુરક્ષિત રહેશે.',
+  appUpdateOptionalBadge: 'વૈકલ્પિક અપડેટ',
+  appUpdateMandatoryBadge: 'જરૂરી (Mandatory)',
+  appUpdateCurrentVersionLabel: 'હાલનું વર્ઝન',
+  appUpdateNewVersionLabel: 'નવું વર્ઝન',
+  appUpdateNowBtn: 'હમણાં અપડેટ કરો (Update Now)',
+  appUpdateDownloadingBtn: 'ડાઉનલોડ થઈ રહ્યું છે...',
+  appUpdateVerifyingLabel: 'APK સુરક્ષા ચકાસણી થઈ રહી છે...',
+  appUpdateInstallingLabel: 'Android ઇન્સ્ટોલર ખુલી રહ્યું છે...',
+  appUpdateLaterBtn: 'પછીથી',
+  appUpdateRetryBtn: 'ફરી પ્રયાસ કરો (Retry)',
+  appUpdatePermissionRequiredDesc: 'સીધું એપ અપડેટ ઇન્સ્ટોલ કરવા માટે "Install unknown apps" પરવાનગી ચાલુ કરો. પરવાનગી પછી તરત ઇન્સ્ટોલ થશે.',
+  appUpdateGrantInstallPermBtn: 'પરવાનગી આપી ઇન્સ્ટોલ કરો',
+  appUpdateUpToDateMsg: 'તમારી એપ સંપૂર્ણપણે અપ-ટુ-ડેટ છે.',
+  appUpdateCheckNowBtn: 'અપડેટ ચેક કરો',
+  appUpdateCheckingBtn: 'ચેક થાય છે...',
+  appUpdateHistoryTitle: 'તાજેતરના એપ અપડેટ નોટિફિકેશન્સ',
+  appUpdateNoHistory: 'હજી કોઈ એપ અપડેટ પબ્લિશ થયું નથી.',
+  adminUpdateControlTitle: 'Firebase એપ અપડેટ અને Push નિયંત્રણ',
+  adminUpdateUploadApkBtn: 'નવું APK અપલોડ કરો (.apk)',
+  adminUpdateChangeApkBtn: 'બીજું APK પસંદ કરો',
+  adminUpdateInspectingApk: 'APK પેકેજ અને સર્ટિફિકેટ ચકાસણી થાય છે...',
+  adminUpdateVerifiedPkg: 'પેકેજ નામ મેચ થયું',
+  adminUpdateVerifiedSig: 'સાઇનિંગ સર્ટિફિકેટ મેચ થયું (જૂનો ડેટા સુરક્ષિત રહેશે)',
+  adminUpdateMismatchPkg: 'ચેતવણી: APK પેકેજ નામ આ એપ સાથે મેચ થતું નથી!',
+  adminUpdateMismatchSig: 'ચેતવણી: સાઇનિંગ સર્ટિફિકેટ મેચ થતું નથી — એપ અપડેટ થશે નહીં.',
+  adminUpdateVersionNameLabel: 'વર્ઝન નંબર (દા.ત. 1.0.2) *',
+  adminUpdateVersionCodeLabel: 'વર્ઝન કોડ (પૂર્ણાંક) *',
+  adminUpdateTitleLabel: 'અપડેટ શીર્ષક (Title) *',
+  adminUpdateNotesLabel: 'અપડેટ વિગત / વર્ણન (Release Description) *',
+  adminUpdateTypeLabel: 'અપડેટ પ્રકાર (Update Type)',
+  adminUpdateOptionalOption: 'વૈકલ્પિક (Optional)',
+  adminUpdateMandatoryOption: 'જરૂરી (Mandatory)',
+  adminUpdatePublishBtn: 'અપડેટ પબ્લિશ કરો અને બધાને Push મોકલો',
+  adminUpdatePublishingBtn: 'APK અપલોડ અને પબ્લિશ થાય છે...',
+  adminUpdatePublishedSuccess: 'નવું અપડેટ પબ્લિશ થયું અને બધા ડિવાઇસ પર Push નોટિફિકેશન મોકલાયું!',
+  adminUpdateUploadingProgress: 'Firebase Storage માં APK અપલોડ થઈ રહ્યું છે...',
+  adminUpdateActiveReleaseTitle: 'હાલનું લાઇવ Firebase અપડેટ',
+  adminUpdateNoActiveRelease: 'હજી સુધી કોઈ Firebase APK અપડેટ પબ્લિશ કરવામાં આવ્યું નથી.',
+  adminUpdatePushSentCount: 'પબ્લિશ અને Push નોટિફિકેશન મોકલાયું',
 };
 
 const EN: Translations = {
@@ -761,6 +901,75 @@ const EN: Translations = {
   chatStatusDelivered: 'Delivered',
   chatStatusRead: 'Read',
   openNotifAction: 'Open',
+
+  displaySettingsBtn: 'Display',
+  displaySettingsTitle: 'Display & Adaptive Screen Settings',
+  displaySettingsSubtitle: 'Automatically adapts layout across Phones, Tablets, Smart TVs & Smart Boards.',
+  displayModeAutoTitle: '1. Auto Adaptive Mode (Default)',
+  displayModeAutoDesc: 'Automatically adapts to screen size & rotation (auto Landscape on TV & Smart Board).',
+  displayModePortraitTitle: '2. Portrait Mode',
+  displayModePortraitDesc: 'Lock layout to vertical portrait screen orientation.',
+  displayModeLandscapeTitle: '3. Landscape Mode',
+  displayModeLandscapeDesc: 'Lock layout to wide landscape split-pane orientation.',
+  displayModeFullScreenTitle: '4. Full Screen Mode',
+  displayModeFullScreenDesc: 'Hide system bars for an immersive edge-to-edge classroom & quiz view.',
+  displayDetectedDeviceLabel: 'Detected Device',
+  displayWindowClassLabel: 'Window Class',
+  displayOrientationLabel: 'Orientation',
+  displayResolutionLabel: 'Screen Size',
+  displayResetDefaultBtn: 'Reset to Auto Default',
+  orientationPortraitLabel: 'Portrait',
+  orientationLandscapeLabel: 'Landscape',
+  deviceTypeMobile: 'Android Mobile Phone',
+  deviceTypeTablet: 'Android Tablet',
+  deviceTypeSmartBoard: 'Interactive Smart Board',
+  deviceTypeAndroidTv: 'Android Smart TV',
+  deviceTypeLargeTouchscreen: 'Large Touchscreen Display',
+  deviceTypeLandscapeMonitor: 'Landscape Monitor',
+  deviceTypeFoldable: 'Foldable Device',
+
+  appUpdateAvailableTitle: 'New App Update Available!',
+  appUpdateMandatoryTitle: 'Mandatory App Update Available',
+  appUpdateMandatoryDesc: 'This update is required to continue using the app. All your data, unlocks, and login sessions remain safe.',
+  appUpdateOptionalBadge: 'Optional Update',
+  appUpdateMandatoryBadge: 'Mandatory Update',
+  appUpdateCurrentVersionLabel: 'Installed Version',
+  appUpdateNewVersionLabel: 'New Version',
+  appUpdateNowBtn: 'Update Now',
+  appUpdateDownloadingBtn: 'Downloading Update...',
+  appUpdateVerifyingLabel: 'Verifying APK security & signature...',
+  appUpdateInstallingLabel: 'Launching Android System Installer...',
+  appUpdateLaterBtn: 'Later',
+  appUpdateRetryBtn: 'Retry Download',
+  appUpdatePermissionRequiredDesc: 'Please enable "Install unknown apps" permission for this app so the update can install directly.',
+  appUpdateGrantInstallPermBtn: 'Grant Permission & Install',
+  appUpdateUpToDateMsg: 'Your app is up to date.',
+  appUpdateCheckNowBtn: 'Check for Updates',
+  appUpdateCheckingBtn: 'Checking...',
+  appUpdateHistoryTitle: 'App Update Notification History',
+  appUpdateNoHistory: 'No app updates published yet.',
+  adminUpdateControlTitle: 'Firebase App Update & Push Control',
+  adminUpdateUploadApkBtn: 'Upload New APK (.apk)',
+  adminUpdateChangeApkBtn: 'Select Another APK',
+  adminUpdateInspectingApk: 'Verifying APK package and signing certificate...',
+  adminUpdateVerifiedPkg: 'Package name verified',
+  adminUpdateVerifiedSig: 'Signing certificate matched (existing user data preserved)',
+  adminUpdateMismatchPkg: 'Error: APK package name does not match this app!',
+  adminUpdateMismatchSig: 'Error: Signing certificate mismatch — cannot install over current app.',
+  adminUpdateVersionNameLabel: 'Version Number (e.g. 1.0.2) *',
+  adminUpdateVersionCodeLabel: 'Version Code (integer) *',
+  adminUpdateTitleLabel: 'Update Title *',
+  adminUpdateNotesLabel: 'Update Description / Release Notes *',
+  adminUpdateTypeLabel: 'Update Mode',
+  adminUpdateOptionalOption: 'Optional Update',
+  adminUpdateMandatoryOption: 'Mandatory Update',
+  adminUpdatePublishBtn: 'Publish Update & Notify All Devices',
+  adminUpdatePublishingBtn: 'Uploading APK & Publishing...',
+  adminUpdatePublishedSuccess: 'App update published and push notifications dispatched to all devices!',
+  adminUpdateUploadingProgress: 'Uploading APK to Firebase Storage...',
+  adminUpdateActiveReleaseTitle: 'Active Firebase Release',
+  adminUpdateNoActiveRelease: 'No Firebase APK release has been published yet.',
+  adminUpdatePushSentCount: 'Published & Push Dispatched',
 };
 
 interface LanguageContextValue {

@@ -211,7 +211,7 @@ export const AdminNotificationsTab: React.FC<AdminNotificationsTabProps> = ({
         </button>
 
         {showPrefs && (
-          <div className="px-4 pb-4 pt-2 border-t border-slate-100 dark:border-slate-800 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+          <div className="px-4 pb-4 pt-2 border-t border-slate-100 dark:border-slate-800 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2.5">
             {prefEntries.map(({ key, label }) => {
               const enabled = effectivePrefs[key];
               return (
@@ -295,7 +295,7 @@ export const AdminNotificationsTab: React.FC<AdminNotificationsTabProps> = ({
           </p>
         </div>
       ) : (
-        <div className="space-y-2.5">
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
           {filteredList.map((item) => {
             const read = isItemRead(item);
             return (

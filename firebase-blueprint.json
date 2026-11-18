@@ -221,6 +221,103 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["chatId", "senderUid", "senderName", "senderPhotoUrl", "recipientUid", "participantUids", "text", "status", "createdAt", "updatedAt"]
+    },
+    "AppReleaseConfig": {
+      "title": "AppReleaseConfig",
+      "description": "Active app update configuration storing latest published APK version metadata, download URL, signing verification hashes, and optional legacy repo.",
+      "type": "object",
+      "properties": {
+        "githubOwnerRepo": { "type": "string" },
+        "releaseNotes": { "type": "string" },
+        "latestVersionName": { "type": "string" },
+        "latestVersionCode": { "type": "integer" },
+        "updateTitle": { "type": "string" },
+        "apkDownloadUrl": { "type": "string" },
+        "apkStoragePath": { "type": "string" },
+        "apkFileName": { "type": "string" },
+        "apkSizeBytes": { "type": "integer" },
+        "apkSha256": { "type": "string" },
+        "signingCertSha256": { "type": "string" },
+        "packageName": { "type": "string" },
+        "isMandatory": { "type": "boolean" },
+        "publishedByUid": { "type": "string" },
+        "publishedAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["releaseNotes", "updatedAt"]
+    },
+    "AppRelease": {
+      "title": "AppRelease",
+      "description": "Published Android APK release record stored in Firestore backed by Firebase Storage hosting and verified signing certificate metadata.",
+      "type": "object",
+      "properties": {
+        "versionName": { "type": "string" },
+        "versionCode": { "type": "integer" },
+        "updateTitle": { "type": "string" },
+        "releaseNotes": { "type": "string" },
+        "apkDownloadUrl": { "type": "string" },
+        "apkStoragePath": { "type": "string" },
+        "apkFileName": { "type": "string" },
+        "apkSizeBytes": { "type": "integer" },
+        "apkSha256": { "type": "string" },
+        "signingCertSha256": { "type": "string" },
+        "packageName": { "type": "string" },
+        "isMandatory": { "type": "boolean" },
+        "publishedByUid": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "versionName", "versionCode", "updateTitle", "releaseNotes",
+        "apkDownloadUrl", "apkStoragePath", "apkFileName", "apkSizeBytes",
+        "apkSha256", "signingCertSha256", "packageName", "isMandatory",
+        "publishedByUid", "createdAt", "updatedAt"
+      ]
+    },
+    "UpdateNotification": {
+      "title": "UpdateNotification",
+      "description": "Public push notification history entry recorded whenever an Admin publishes a new app update.",
+      "type": "object",
+      "properties": {
+        "releaseId": { "type": "string" },
+        "appName": { "type": "string" },
+        "versionName": { "type": "string" },
+        "versionCode": { "type": "integer" },
+        "title": { "type": "string" },
+        "body": { "type": "string" },
+        "isMandatory": { "type": "boolean" },
+        "apkDownloadUrl": { "type": "string" },
+        "targetRoute": { "type": "string" },
+        "pushDispatched": { "type": "boolean" },
+        "recipientCount": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "releaseId", "appName", "versionName", "versionCode", "title", "body",
+        "isMandatory", "apkDownloadUrl", "targetRoute", "pushDispatched",
+        "recipientCount", "createdAt", "updatedAt"
+      ]
+    },
+    "DeviceFcmToken": {
+      "title": "DeviceFcmToken",
+      "description": "Device-level FCM registration token (no PII) for delivering app update push notifications to all registered app users.",
+      "type": "object",
+      "properties": {
+        "deviceId": { "type": "string" },
+        "token": { "type": "string" },
+        "platform": { "type": "string", "enum": ["android", "web"] },
+        "appVersion": { "type": "string" },
+        "versionCode": { "type": "integer" },
+        "topicSubscribed": { "type": "boolean" },
+        "enabled": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "deviceId", "token", "platform", "appVersion", "versionCode",
+        "topicSubscribed", "enabled", "createdAt", "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -263,6 +360,22 @@
     "/admin_chats/{chatId}/messages/{messageId}": {
       "schema": { "$ref": "#/entities/AdminChatMessage" },
       "description": "One-to-one Admin personal chat messages with sent/delivered/read status."
+    },
+    "/app_config/{configId}": {
+      "schema": { "$ref": "#/entities/AppReleaseConfig" },
+      "description": "Active release & app configuration document read publicly on app startup."
+    },
+    "/app_releases/{releaseId}": {
+      "schema": { "$ref": "#/entities/AppRelease" },
+      "description": "Published APK release history and Cloud Function push notification trigger."
+    },
+    "/update_notifications/{notifId}": {
+      "schema": { "$ref": "#/entities/UpdateNotification" },
+      "description": "App update notification history visible inside the Update screen."
+    },
+    "/device_fcm_tokens/{deviceId}": {
+      "schema": { "$ref": "#/entities/DeviceFcmToken" },
+      "description": "Registered user device FCM tokens for reliable app update notifications."
     }
   }
 }
