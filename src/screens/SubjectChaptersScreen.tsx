@@ -89,7 +89,7 @@ export const SubjectChaptersScreen: React.FC<SubjectChaptersScreenProps> = ({
   return (
     <div className="min-h-screen bg-[#FAF9F5] dark:bg-[#0B1120] text-[#0F172A] dark:text-[#F8FAFC]">
       {/* Top Bar */}
-      <header className="sticky top-0 z-20 bg-white/95 dark:bg-[#1E293B]/95 backdrop-blur border-b border-[#E2E8F0] dark:border-[#334155]">
+      <header className="sticky top-0 z-20 pt-[env(safe-area-inset-top)] bg-white/95 dark:bg-[#1E293B]/95 backdrop-blur border-b border-[#E2E8F0] dark:border-[#334155]">
         <div className={`${containerMaxCls} mx-auto h-16 flex items-center gap-2`}>
           <button
             type="button"

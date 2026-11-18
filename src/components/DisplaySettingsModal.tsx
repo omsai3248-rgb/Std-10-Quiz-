@@ -112,7 +112,7 @@ export const DisplaySettingsModal: React.FC<DisplaySettingsModalProps> = ({ isOp
       data-testid="display_settings_fullscreen_view"
     >
       {/* Full-Screen Top Bar */}
-      <header className="shrink-0 w-full bg-white/95 dark:bg-[#1E293B]/95 backdrop-blur border-b border-[#E2E8F0] dark:border-[#334155]">
+      <header className="shrink-0 w-full pt-[env(safe-area-inset-top)] bg-white/95 dark:bg-[#1E293B]/95 backdrop-blur border-b border-[#E2E8F0] dark:border-[#334155]">
         <div className="max-w-5xl mx-auto w-full px-3 sm:px-6 h-16 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2.5 min-w-0">
             <button

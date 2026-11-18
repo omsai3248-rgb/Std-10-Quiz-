@@ -345,7 +345,7 @@ export const SubjectPaymentModal: React.FC<SubjectPaymentModalProps> = ({
       aria-modal="true"
     >
       {/* Sticky Full-Screen Header */}
-      <header className="sticky top-0 z-10 bg-white/95 dark:bg-[#1E293B]/95 backdrop-blur border-b border-[#E2E8F0] dark:border-[#334155]">
+      <header className="sticky top-0 z-10 pt-[env(safe-area-inset-top)] bg-white/95 dark:bg-[#1E293B]/95 backdrop-blur border-b border-[#E2E8F0] dark:border-[#334155]">
         <div
           className={`${useSplitLayout ? 'max-w-5xl' : 'max-w-2xl'} mx-auto px-3 sm:px-5 py-2.5 flex items-center justify-between gap-2`}
         >

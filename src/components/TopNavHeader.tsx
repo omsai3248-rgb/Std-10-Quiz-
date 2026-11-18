@@ -54,7 +54,7 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
   const controlHeightCls = isTvOrSmartBoard ? 'min-h-[48px] px-3.5 text-sm' : 'min-h-[42px] px-2.5 text-xs';
 
   return (
-    <header className="sticky top-0 z-30 bg-white/95 dark:bg-[#1E293B]/95 backdrop-blur border-b border-[#E2E8F0] dark:border-[#334155]">
+    <header className="sticky top-0 z-30 pt-[env(safe-area-inset-top)] bg-white/95 dark:bg-[#1E293B]/95 backdrop-blur border-b border-[#E2E8F0] dark:border-[#334155]">
       <div
         className={`${containerWidthCls} mx-auto ${
           isTvOrSmartBoard ? 'h-18' : 'h-15'

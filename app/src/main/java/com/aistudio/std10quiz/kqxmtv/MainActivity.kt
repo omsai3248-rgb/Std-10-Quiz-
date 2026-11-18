@@ -45,7 +45,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -111,7 +110,7 @@ class MainActivity : ComponentActivity() {
         ViewCompat.setOnApplyWindowInsetsListener(window.decorView) { view, insets ->
             val imeVisible = insets.isVisible(WindowInsetsCompat.Type.ime())
             val settings = AdaptiveDisplayManager.loadSettings(this)
-            if (settings.isFullScreen && !imeVisible && (wasImeVisible || insets.isVisible(WindowInsetsCompat.Type.systemBars()))) {
+            if (settings.isFullScreen && !imeVisible && wasImeVisible) {
                 view.post {
                     if (AdaptiveDisplayManager.loadSettings(this).isFullScreen) {
                         WindowCompat.getInsetsController(window, window.decorView)
@@ -496,7 +495,6 @@ private fun PortalWebContainer(
     var canGoBack by remember { mutableStateOf(false) }
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
     var firebaseBridgeRef by remember { mutableStateOf<NativeFirebaseBridge?>(null) }
-    var ttsBridgeRef by remember { mutableStateOf<AndroidTtsBridge?>(null) }
     var pendingFileCallback by remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
 
     LaunchedEffect(Unit) {
@@ -554,8 +552,6 @@ private fun PortalWebContainer(
         onDispose {
             pendingFileCallback?.onReceiveValue(null)
             pendingFileCallback = null
-            ttsBridgeRef?.shutdown()
-            ttsBridgeRef = null
             firebaseBridgeRef?.detach()
             firebaseBridgeRef = null
             onBridgeChanged(null)
@@ -568,11 +564,8 @@ private fun PortalWebContainer(
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
             modifier = Modifier.fillMaxSize(),
-            contentWindowInsets = if (displaySettings.isFullScreen) {
-                WindowInsets.ime
-            } else {
-                WindowInsets.safeDrawing
-            }
+            containerColor = MaterialTheme.colorScheme.background,
+            contentWindowInsets = WindowInsets.safeDrawing
         ) { innerPadding ->
             ConstraintLayout(
                 modifier = Modifier
@@ -610,13 +603,6 @@ private fun PortalWebContainer(
                         }
 
                         addJavascriptInterface(AndroidExportBridge(activity), "AndroidBridge")
-                        runCatching {
-                            val ttsBridge = AndroidTtsBridge(activity, this)
-                            ttsBridgeRef = ttsBridge
-                            addJavascriptInterface(ttsBridge, "AndroidTtsBridge")
-                        }.onFailure { err ->
-                            Log.w("MainActivity", "AndroidTtsBridge init failed", err)
-                        }
                         addJavascriptInterface(
                             AndroidDisplayBridge(
                                 activity = activity,

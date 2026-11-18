@@ -2,13 +2,11 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
-  AudioLines,
   CheckCircle2,
   LayoutGrid,
   Lightbulb,
   Timer,
   Trophy,
-  User,
   Volume2,
   VolumeX,
   XCircle,
@@ -17,12 +15,7 @@ import { useAdaptiveDisplay } from '../context/AdaptiveDisplayContext';
 import { MathRichText } from '../components/MathRichText';
 import { MatchingTableCard, parseMatchingPairQuestion } from '../components/MatchingTableCard';
 import { PolynomialGraphCard } from '../components/PolynomialGraphCard';
-import { useTranslation } from '../i18n/translations';
 import { quizAudioPlayer } from '../services/audioPlayer';
-import {
-  gujaratiVoicePlayer,
-  type VoicePlayerSnapshot,
-} from '../services/gujaratiVoicePlayer';
 import type { QuizChapter, QuizQuestion, QuizSubject } from '../types/models';
 
 const LETTER_PREFIX_REGEX = /^\([A-D]\)\s+/;
@@ -93,33 +86,21 @@ export const QuizPlayScreen: React.FC<QuizPlayScreenProps> = ({
 }) => {
   const { useSplitQuizCockpit, hingePosture, isLargeScreen, isTvOrSmartBoard } =
     useAdaptiveDisplay();
-  const { t, lang } = useTranslation();
   const [shuffleSeed, setShuffleSeed] = useState(0);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [selectedAnswers, setSelectedAnswers] = useState<Record<number, number>>({});
-  const [feedbackPhrases, setFeedbackPhrases] = useState<Record<number, string>>({});
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [isFinished, setIsFinished] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
-  const [voiceSnap, setVoiceSnap] = useState<VoicePlayerSnapshot>(() =>
-    gujaratiVoicePlayer.getSnapshot()
-  );
   const [showNavigatorDialog, setShowNavigatorDialog] = useState(false);
   const contentScrollRef = useRef<HTMLDivElement | null>(null);
   const hasConsumedFreeMockRef = useRef(false);
 
   useEffect(() => {
-    return gujaratiVoicePlayer.subscribe(setVoiceSnap);
-  }, []);
-
-  useEffect(() => {
     hasConsumedFreeMockRef.current = false;
-    gujaratiVoicePlayer.stop();
-    gujaratiVoicePlayer.warmupFeedbackVoices();
     setShuffleSeed((prev) => prev + 1);
     setCurrentIndex(0);
     setSelectedAnswers({});
-    setFeedbackPhrases({});
     setElapsedSeconds(0);
     setIsFinished(false);
     setShowNavigatorDialog(false);
@@ -134,7 +115,6 @@ export const QuizPlayScreen: React.FC<QuizPlayScreenProps> = ({
   useEffect(() => {
     return () => {
       quizAudioPlayer.stopCurrent();
-      gujaratiVoicePlayer.stop();
     };
   }, []);
 
@@ -185,14 +165,10 @@ export const QuizPlayScreen: React.FC<QuizPlayScreenProps> = ({
         quizAudioPlayer.playWrongSiren();
       }
     }
-    const startDelayMs = isMuted ? 0 : isCorrect ? 320 : 880;
-    const spokenFeedback = gujaratiVoicePlayer.playAnswerFeedback(isCorrect, startDelayMs);
-    setFeedbackPhrases((prev) => ({ ...prev, [currentIndex]: spokenFeedback }));
   };
 
   const handleNextOrFinish = () => {
     quizAudioPlayer.stopCurrent();
-    gujaratiVoicePlayer.stop();
     if (currentIndex < questions.length - 1) {
       setCurrentIndex((prev) => prev + 1);
     } else {
@@ -206,13 +182,11 @@ export const QuizPlayScreen: React.FC<QuizPlayScreenProps> = ({
 
   const handleReplay = () => {
     quizAudioPlayer.stopCurrent();
-    gujaratiVoicePlayer.stop();
     if (chapter.isMockTest && onRebuildMockTest) {
       onRebuildMockTest();
     }
     setShuffleSeed((prev) => prev + 1);
     setSelectedAnswers({});
-    setFeedbackPhrases({});
     setCurrentIndex(0);
     setElapsedSeconds(0);
     setIsFinished(false);
@@ -273,12 +247,10 @@ export const QuizPlayScreen: React.FC<QuizPlayScreenProps> = ({
     question.options.length === 4 &&
     question.options.every((opt) => opt.length <= 42);
 
-  const currentFeedbackPhrase = feedbackPhrases[currentIndex] ?? '';
-
   return (
     <div className="min-h-[100dvh] bg-[#FAF9F5] dark:bg-[#0B1120] text-[#0F172A] dark:text-[#F8FAFC] flex flex-col">
       {/* Top Bar */}
-      <header className="sticky top-0 z-20 bg-white/95 dark:bg-[#1E293B]/95 backdrop-blur border-b border-[#E2E8F0] dark:border-[#334155]">
+      <header className="sticky top-0 z-20 pt-[env(safe-area-inset-top)] bg-white/95 dark:bg-[#1E293B]/95 backdrop-blur border-b border-[#E2E8F0] dark:border-[#334155]">
         <div
           className={`${useSplitQuizCockpit ? 'max-w-[1520px]' : 'max-w-[720px]'} mx-auto px-3 sm:px-5 h-16 flex items-center justify-between gap-2`}
         >
@@ -287,7 +259,6 @@ export const QuizPlayScreen: React.FC<QuizPlayScreenProps> = ({
               type="button"
               onClick={() => {
                 quizAudioPlayer.stopCurrent();
-                gujaratiVoicePlayer.stop();
                 onExit();
               }}
               className="min-h-[48px] min-w-[48px] p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors shrink-0 cursor-pointer flex items-center justify-center"
@@ -303,7 +274,7 @@ export const QuizPlayScreen: React.FC<QuizPlayScreenProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             <span className="rounded-lg bg-[#DCFCE7] dark:bg-[#14532D] text-[#14532D] dark:text-[#DCFCE7] px-2 sm:px-2.5 py-1 text-xs font-bold tabular-nums">
               ✓{liveCorrectCount} ✕{liveWrongCount}
             </span>
@@ -313,51 +284,7 @@ export const QuizPlayScreen: React.FC<QuizPlayScreenProps> = ({
             </span>
             <button
               type="button"
-              data-testid="gujarati_voice_gender_btn"
-              onClick={() =>
-                gujaratiVoicePlayer.setVoiceGender(
-                  voiceSnap.voiceGender === 'female' ? 'male' : 'female'
-                )
-              }
-              aria-label={
-                voiceSnap.voiceGender === 'female' ? t.voiceGenderFemale : t.voiceGenderMale
-              }
-              title={voiceSnap.voiceGender === 'female' ? t.voiceGenderFemale : t.voiceGenderMale}
-              className="min-h-[48px] px-2 sm:px-2.5 rounded-xl border border-[#CBD5E1] dark:border-[#334155] bg-[#FAF9F5] dark:bg-[#0F172A] text-[#0F172A] dark:text-[#E2E8F0] text-xs font-bold flex items-center gap-1 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
-            >
-              <User className="h-3.5 w-3.5 shrink-0 text-[#1E3A8A] dark:text-[#93C5FD]" />
-              <span className="hidden md:inline">
-                {voiceSnap.voiceGender === 'female' ? t.voiceGenderFemale : t.voiceGenderMale}
-              </span>
-              <span className="md:hidden text-[11px]">
-                {voiceSnap.voiceGender === 'female'
-                  ? lang === 'gu'
-                    ? 'સ્ત્રી'
-                    : 'F'
-                  : lang === 'gu'
-                    ? 'પુરુષ'
-                    : 'M'}
-              </span>
-            </button>
-            <button
-              type="button"
-              data-testid="gujarati_voice_toggle_btn"
-              onClick={() => gujaratiVoicePlayer.setVoiceEnabled(!voiceSnap.voiceEnabled)}
-              aria-label={voiceSnap.voiceEnabled ? t.voiceOnLabel : t.voiceOffLabel}
-              title={voiceSnap.voiceEnabled ? t.voiceOnLabel : t.voiceOffLabel}
-              className={`min-h-[48px] px-2.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer ${
-                voiceSnap.voiceEnabled
-                  ? 'border-[#1E3A8A]/40 bg-[#DBEAFE] dark:bg-[#1E3A5F] text-[#1E3A8A] dark:text-[#93C5FD]'
-                  : 'border-[#CBD5E1] dark:border-[#334155] bg-[#FAF9F5] dark:bg-[#0F172A] text-[#64748B]'
-              }`}
-            >
-              <AudioLines className="h-4 w-4 shrink-0" />
-              <span className="hidden sm:inline">
-                {voiceSnap.voiceEnabled ? t.voiceOnLabel : t.voiceOffLabel}
-              </span>
-            </button>
-            <button
-              type="button"
+              data-testid="quiz_sound_toggle_btn"
               onClick={() => {
                 const nextMuted = !isMuted;
                 setIsMuted(nextMuted);
@@ -499,7 +426,7 @@ export const QuizPlayScreen: React.FC<QuizPlayScreenProps> = ({
                     })}
                   </div>
 
-                  {/* Step-by-step Explanation (text only; voice plays strictly for right/wrong answer feedback) */}
+                  {/* Step-by-step Explanation */}
                   {isAnswered && (
                     <div
                       className={`rounded-xl border p-4 space-y-2.5 ${
@@ -508,33 +435,23 @@ export const QuizPlayScreen: React.FC<QuizPlayScreenProps> = ({
                           : 'bg-[#FEE2E2]/65 dark:bg-[#7F1D1D]/65 border-[#DC2626]/50'
                       }`}
                     >
-                      <div className="flex items-center justify-between gap-2 flex-wrap">
-                        <div className="flex items-center gap-2 min-w-0">
-                          {isUserCorrect ? (
-                            <CheckCircle2 className="h-5 w-5 text-[#16A34A] shrink-0" />
-                          ) : (
-                            <Lightbulb className="h-5 w-5 text-[#DC2626] shrink-0" />
-                          )}
-                          <h4
-                            className={`text-sm font-bold ${
-                              isUserCorrect
-                                ? 'text-[#14532D] dark:text-[#DCFCE7]'
-                                : 'text-[#7F1D1D] dark:text-[#FEE2E2]'
-                            }`}
-                          >
-                            {isUserCorrect
-                              ? 'સાચો જવાબ! (+1)'
-                              : `ખોટો જવાબ! સાચો વિકલ્પ ${OPTION_LABELS[question.correctIndex] ?? ''} છે`}
-                          </h4>
-                        </div>
-                        {currentFeedbackPhrase && (
-                          <span className="rounded-lg bg-white/80 dark:bg-black/30 px-2.5 py-1 text-xs font-extrabold text-[#1E3A8A] dark:text-[#93C5FD] inline-flex items-center gap-1.5">
-                            {voiceSnap.status === 'speaking' && (
-                              <AudioLines className="h-3.5 w-3.5 animate-pulse shrink-0" />
-                            )}
-                            <span>{currentFeedbackPhrase}</span>
-                          </span>
+                      <div className="flex items-center gap-2 min-w-0">
+                        {isUserCorrect ? (
+                          <CheckCircle2 className="h-5 w-5 text-[#16A34A] shrink-0" />
+                        ) : (
+                          <Lightbulb className="h-5 w-5 text-[#DC2626] shrink-0" />
                         )}
+                        <h4
+                          className={`text-sm font-bold ${
+                            isUserCorrect
+                              ? 'text-[#14532D] dark:text-[#DCFCE7]'
+                              : 'text-[#7F1D1D] dark:text-[#FEE2E2]'
+                          }`}
+                        >
+                          {isUserCorrect
+                            ? 'સાચો જવાબ! (+1)'
+                            : `ખોટો જવાબ! સાચો વિકલ્પ ${OPTION_LABELS[question.correctIndex] ?? ''} છે`}
+                        </h4>
                       </div>
 
                       <p className="text-xs font-bold text-[#0F172A] dark:text-[#F8FAFC]">
@@ -562,7 +479,6 @@ export const QuizPlayScreen: React.FC<QuizPlayScreenProps> = ({
                         type="button"
                         onClick={() => {
                           quizAudioPlayer.stopCurrent();
-                          gujaratiVoicePlayer.stop();
                           setCurrentIndex((prev) => prev - 1);
                         }}
                         className={`${
@@ -687,7 +603,6 @@ export const QuizPlayScreen: React.FC<QuizPlayScreenProps> = ({
                       type="button"
                       onClick={() => {
                         quizAudioPlayer.stopCurrent();
-                        gujaratiVoicePlayer.stop();
                         onExit();
                       }}
                       className="min-h-[52px] rounded-xl bg-[#1E3A8A] hover:bg-[#172554] text-white text-sm font-semibold transition-colors cursor-pointer px-4"
@@ -731,7 +646,6 @@ export const QuizPlayScreen: React.FC<QuizPlayScreenProps> = ({
                     type="button"
                     onClick={() => {
                       quizAudioPlayer.stopCurrent();
-                      gujaratiVoicePlayer.stop();
                       setCurrentIndex(index);
                       setShowNavigatorDialog(false);
                     }}

@@ -1,11 +1,18 @@
-class QuizAudioPlayer {
+export const CORRECT_SOUND_DURATION_SEC = 0.11;
+export const WRONG_SOUND_DURATION_SEC = 0.12;
+export const CORRECT_SOUND_PEAK_GAIN = 0.08;
+export const WRONG_SOUND_PEAK_GAIN = 0.075;
+
+export class QuizAudioPlayer {
   private ctx: AudioContext | null = null;
   private activeNodes: AudioNode[] = [];
   private activeTimer: number | null = null;
 
   private ensureContext(): AudioContext | null {
     if (typeof window === 'undefined') return null;
-    const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    const AudioCtx =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
     if (!AudioCtx) return null;
     if (!this.ctx) {
       this.ctx = new AudioCtx();
@@ -34,6 +41,9 @@ class QuizAudioPlayer {
     this.activeNodes = [];
   }
 
+  /**
+   * Minimal, ultra-short soft ascending chime (~110ms) for a correct answer.
+   */
   playCorrectChime(): void {
     this.stopCurrent();
     const ctx = this.ensureContext();
@@ -42,54 +52,53 @@ class QuizAudioPlayer {
     const now = ctx.currentTime;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
+
     osc.type = 'sine';
-    osc.frequency.setValueAtTime(587.33, now); // D5
-    osc.frequency.setValueAtTime(880.0, now + 0.125); // A5
+    osc.frequency.setValueAtTime(880.0, now); // A5
+    osc.frequency.setValueAtTime(1174.66, now + 0.045); // D6
 
     gain.gain.setValueAtTime(0.001, now);
-    gain.gain.linearRampToValueAtTime(0.18, now + 0.02);
-    gain.gain.setValueAtTime(0.18, now + 0.22);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
+    gain.gain.linearRampToValueAtTime(CORRECT_SOUND_PEAK_GAIN, now + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + CORRECT_SOUND_DURATION_SEC);
 
     osc.connect(gain);
     gain.connect(ctx.destination);
     osc.start(now);
-    osc.stop(now + 0.29);
+    osc.stop(now + CORRECT_SOUND_DURATION_SEC + 0.005);
 
     this.activeNodes = [osc, gain];
   }
 
+  /**
+   * Minimal, ultra-short gentle low tap (~120ms) for a wrong answer — no loud buzzer or siren.
+   */
   playWrongSiren(): void {
     this.stopCurrent();
     const ctx = this.ensureContext();
     if (!ctx) return;
 
-    const sampleRate = ctx.sampleRate;
-    const durationSec = 0.85;
-    const totalSamples = Math.floor(sampleRate * durationSec);
-    const buffer = ctx.createBuffer(1, totalSamples, sampleRate);
-    const data = buffer.getChannelData(0);
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
 
-    let phase = 0;
-    for (let i = 0; i < totalSamples; i++) {
-      const progress = i / totalSamples;
-      const sweepWave = 0.5 - 0.5 * Math.cos(2 * Math.PI * 2.2 * progress);
-      const freq = 660 + 720 * sweepWave;
-      phase += (2 * Math.PI * freq) / sampleRate;
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(260.0, now);
+    osc.frequency.setValueAtTime(185.0, now + 0.05);
 
-      let envelope = 1;
-      if (progress < 0.05) envelope = progress / 0.05;
-      else if (progress > 0.9) envelope = (1 - progress) / 0.1;
+    gain.gain.setValueAtTime(0.001, now);
+    gain.gain.linearRampToValueAtTime(WRONG_SOUND_PEAK_GAIN, now + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + WRONG_SOUND_DURATION_SEC);
 
-      const wave = 0.78 * Math.sin(phase) + 0.22 * Math.sin(2 * phase);
-      data[i] = wave * envelope * 0.28;
-    }
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + WRONG_SOUND_DURATION_SEC + 0.005);
 
-    const source = ctx.createBufferSource();
-    source.buffer = buffer;
-    source.connect(ctx.destination);
-    source.start();
-    this.activeNodes = [source];
+    this.activeNodes = [osc, gain];
+  }
+
+  playWrongSound(): void {
+    this.playWrongSiren();
   }
 
   playAdminAlertChime(): void {
@@ -105,8 +114,8 @@ class QuizAudioPlayer {
     osc.frequency.setValueAtTime(1318.51, now + 0.22); // E6
 
     gain.gain.setValueAtTime(0.001, now);
-    gain.gain.linearRampToValueAtTime(0.16, now + 0.02);
-    gain.gain.setValueAtTime(0.16, now + 0.28);
+    gain.gain.linearRampToValueAtTime(0.14, now + 0.02);
+    gain.gain.setValueAtTime(0.14, now + 0.28);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.42);
 
     osc.connect(gain);

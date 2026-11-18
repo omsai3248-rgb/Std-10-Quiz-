@@ -695,7 +695,7 @@ const GU: Translations = {
 
 const EN: Translations = {
   appName: 'Quick Quiz',
-  appSubtitle: 'Std 10 Board Quiz • Gujarati Voice Feedback',
+  appSubtitle: 'Std 10 Board Quiz • Maths, Science & Social Science',
   langToggleLabel: 'ગુજરાતી',
   navSubmitPayment: 'Submit Payment',
   navUseCode: 'Use Code',

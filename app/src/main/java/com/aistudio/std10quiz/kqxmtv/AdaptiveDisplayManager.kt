@@ -243,7 +243,11 @@ object AdaptiveDisplayManager {
                 window.attributes = lp
             }
         }
+        val isNight = (activity.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+            Configuration.UI_MODE_NIGHT_YES
         val controller = WindowCompat.getInsetsController(window, window.decorView)
+        controller.isAppearanceLightStatusBars = !isNight
+        controller.isAppearanceLightNavigationBars = !isNight
         if (settings.isFullScreen) {
             controller.systemBarsBehavior =
                 WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE

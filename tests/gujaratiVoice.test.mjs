@@ -6,19 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 
-function createMemoryStorage() {
-  const store = new Map();
-  return {
-    getItem: (k) => (store.has(k) ? store.get(k) : null),
-    setItem: (k, v) => store.set(String(k), String(v)),
-    removeItem: (k) => store.delete(String(k)),
-    clear: () => store.clear(),
-  };
-}
-
-globalThis.localStorage = createMemoryStorage();
-
-const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'quickquiz-voice-test-'));
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'quickquiz-audio-test-'));
 const esbuildBin = path.resolve('node_modules/.bin/esbuild');
 
 function bundleTsModule(entryRelPath, outName) {
@@ -37,119 +25,149 @@ function bundleTsModule(entryRelPath, outName) {
   return import(pathToFileURL(outFile).href);
 }
 
-const voiceMod = await bundleTsModule('src/services/gujaratiVoicePlayer.ts', 'gujaratiVoicePlayer.mjs');
+const audioMod = await bundleTsModule('src/services/audioPlayer.ts', 'audioPlayer.mjs');
 
 test.after(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-test('contains all joyful & empathetic Gujarati teacher phrases (6 correct + 6 wrong)', () => {
-  assert.deepEqual(Array.from(voiceMod.GUJARATI_CORRECT_PHRASES), [
-    'અરે વાહ! એકદમ સાચો જવાબ!',
-    'શાબાશ! ખૂબ સરસ!',
-    'ઉત્તમ! આગળ વધો!',
-    'અભિનંદન! તમે સાચા છો!',
-    'ખૂબ સરસ બેટા! તારી તૈયારી જોરદાર છે!',
-    'વાહ! આ જ રીતે મહેનત ચાલુ રાખો!',
-  ]);
+function installMockAudioContext() {
+  const createdOscillators = [];
+  const createdGains = [];
+  let bufferCalls = 0;
+  let bufferSourceCalls = 0;
 
-  assert.deepEqual(Array.from(voiceMod.GUJARATI_WRONG_PHRASES), [
-    'કોઈ વાંધો નહીં! ફરી પ્રયત્ન કરો.',
-    'નિરાશ ન થશો! તમે કરી શકશો.',
-    'ભૂલમાંથી જ શીખવાનું છે.',
-    'હિંમત ન હારશો!',
-    'ચાલો, આપણે આની સરળ સમજૂતી સમજી લઈએ.',
-    'ધ્યાનથી વાંચો, આગળનો જવાબ જરૂર સાચો પડશે!',
-  ]);
-});
-
-test('NonRepeatingPhraseTracker never repeats the same phrase consecutively', () => {
-  const tracker = new voiceMod.NonRepeatingPhraseTracker();
-
-  let prevCorrect = '';
-  for (let i = 0; i < 60; i++) {
-    const { phrase } = tracker.pick(true, () => (i % 2 === 0 ? 0 : Math.random()));
-    assert.ok(voiceMod.GUJARATI_CORRECT_PHRASES.includes(phrase));
-    assert.notEqual(phrase, prevCorrect, `Correct phrase repeated consecutively: ${phrase}`);
-    prevCorrect = phrase;
+  class MockAudioContext {
+    constructor() {
+      this.currentTime = 10;
+      this.state = 'running';
+      this.destination = { kind: 'destination' };
+    }
+    resume() {
+      this.state = 'running';
+      return Promise.resolve();
+    }
+    createOscillator() {
+      const freqEvents = [];
+      const osc = {
+        type: 'sine',
+        frequency: {
+          setValueAtTime: (value, time) => {
+            freqEvents.push({ value, time });
+          },
+        },
+        connect: () => {},
+        disconnect: () => {},
+        start: (t) => {
+          osc.startedAt = t;
+        },
+        stop: (t) => {
+          osc.stoppedAt = t;
+        },
+        freqEvents,
+      };
+      createdOscillators.push(osc);
+      return osc;
+    }
+    createGain() {
+      const ramps = [];
+      const g = {
+        gain: {
+          setValueAtTime: (value, time) => ramps.push({ kind: 'set', value, time }),
+          linearRampToValueAtTime: (value, time) => ramps.push({ kind: 'linear', value, time }),
+          exponentialRampToValueAtTime: (value, time) => ramps.push({ kind: 'exp', value, time }),
+        },
+        connect: () => {},
+        disconnect: () => {},
+        ramps,
+      };
+      createdGains.push(g);
+      return g;
+    }
+    createBuffer() {
+      bufferCalls += 1;
+      return {};
+    }
+    createBufferSource() {
+      bufferSourceCalls += 1;
+      return { connect: () => {}, start: () => {}, stop: () => {}, disconnect: () => {} };
+    }
   }
-
-  let prevWrong = '';
-  for (let i = 0; i < 60; i++) {
-    const { phrase } = tracker.pick(false, () => (i % 3 === 0 ? 0 : Math.random()));
-    assert.ok(voiceMod.GUJARATI_WRONG_PHRASES.includes(phrase));
-    assert.notEqual(phrase, prevWrong, `Wrong phrase repeated consecutively: ${phrase}`);
-    prevWrong = phrase;
-  }
-});
-
-test('Natural Human Voice speaks only right/wrong feedback, supports Female/Male toggle, and removes explanation voice', () => {
-  const spokenCalls = [];
-  const prefetchedCalls = [];
-  let stoppedCalled = 0;
-  let storedGender = 'female';
 
   globalThis.window = {
-    setTimeout: (fn, delay = 0) => {
-      if (typeof fn === 'function' && Number(delay) === 0) fn();
-      return 1;
-    },
+    AudioContext: MockAudioContext,
+    setTimeout: () => 1,
     clearTimeout: () => {},
-    AndroidTtsBridge: {
-      isReady: () => true,
-      isGujaratiAvailable: () => true,
-      isHumanVoiceSupported: () => true,
-      getVoiceGender: () => storedGender,
-      setVoiceGender: (g) => {
-        storedGender = g;
-      },
-      speakNaturalChunk: (uttId, text, gender, tone, rate) => {
-        spokenCalls.push({ uttId, text, gender, tone, rate });
-      },
-      prefetchNaturalChunk: (text, gender, tone) => {
-        prefetchedCalls.push({ text, gender, tone });
-      },
-      pause: () => {},
-      resume: () => {},
-      stop: () => {
-        stoppedCalled += 1;
-      },
-    },
   };
 
+  return {
+    createdOscillators,
+    createdGains,
+    getBufferCalls: () => bufferCalls,
+    getBufferSourceCalls: () => bufferSourceCalls,
+  };
+}
+
+test('Right and wrong answer sounds are ultra-short, soft, and clearly distinct without siren buffers', () => {
+  assert.ok(audioMod.CORRECT_SOUND_DURATION_SEC <= 0.15);
+  assert.ok(audioMod.WRONG_SOUND_DURATION_SEC <= 0.15);
+  assert.ok(audioMod.CORRECT_SOUND_PEAK_GAIN <= 0.1);
+  assert.ok(audioMod.WRONG_SOUND_PEAK_GAIN <= 0.1);
+
+  const mock = installMockAudioContext();
   try {
-    assert.equal(typeof voiceMod.gujaratiVoicePlayer.playExplanationOnly, 'undefined');
-    assert.equal(typeof voiceMod.gujaratiVoicePlayer.playAnswerFeedbackAndExplanation, 'undefined');
+    const player = new audioMod.QuizAudioPlayer();
 
-    voiceMod.gujaratiVoicePlayer.setVoiceEnabled(false);
-    const mutedPhrase = voiceMod.gujaratiVoicePlayer.playAnswerFeedback(true, 0);
-    assert.ok(voiceMod.GUJARATI_CORRECT_PHRASES.includes(mutedPhrase));
-    assert.equal(spokenCalls.length, 0);
-    assert.equal(voiceMod.gujaratiVoicePlayer.getSnapshot().status, 'idle');
+    // Correct sound: soft ascending sine chime (~110ms)
+    player.playCorrectChime();
+    assert.equal(mock.createdOscillators.length, 1);
+    const correctOsc = mock.createdOscillators[0];
+    assert.equal(correctOsc.type, 'sine');
+    assert.equal(correctOsc.freqEvents.length, 2);
+    assert.ok(
+      correctOsc.freqEvents[1].value > correctOsc.freqEvents[0].value,
+      'Correct chime should ascend in pitch'
+    );
+    const correctDuration = correctOsc.stoppedAt - correctOsc.startedAt;
+    assert.ok(correctDuration > 0 && correctDuration <= 0.15, `Correct duration too long: ${correctDuration}`);
 
-    // Enable voice & test Female/Male toggle
-    voiceMod.gujaratiVoicePlayer.setVoiceEnabled(true);
-    voiceMod.gujaratiVoicePlayer.setVoiceGender('male');
-    assert.equal(voiceMod.gujaratiVoicePlayer.getSnapshot().voiceGender, 'male');
-    assert.equal(storedGender, 'male');
+    // Wrong sound: soft descending gentle low sine tone (~120ms), NO siren buffer
+    player.playWrongSiren();
+    assert.equal(mock.createdOscillators.length, 2);
+    const wrongOsc = mock.createdOscillators[1];
+    assert.equal(wrongOsc.type, 'sine');
+    assert.equal(wrongOsc.freqEvents.length, 2);
+    assert.ok(
+      wrongOsc.freqEvents[1].value < wrongOsc.freqEvents[0].value,
+      'Wrong tone should gently descend in pitch'
+    );
+    const wrongDuration = wrongOsc.stoppedAt - wrongOsc.startedAt;
+    assert.ok(wrongDuration > 0 && wrongDuration <= 0.15, `Wrong duration too long: ${wrongDuration}`);
 
-    voiceMod.gujaratiVoicePlayer.warmupFeedbackVoices();
-    assert.equal(prefetchedCalls.length, 2);
-
-    // Trigger answer feedback ONLY (1 chunk: feedback)
-    const spokenPhrase = voiceMod.gujaratiVoicePlayer.playAnswerFeedback(false, 0);
-    assert.ok(voiceMod.GUJARATI_WRONG_PHRASES.includes(spokenPhrase));
-    assert.equal(spokenCalls.length, 1);
-    assert.equal(spokenCalls[0].tone, 'feedback_wrong');
-    assert.equal(spokenCalls[0].gender, 'male');
-    assert.equal(voiceMod.gujaratiVoicePlayer.getSnapshot().totalChunks, 1);
-
-    voiceMod.gujaratiVoicePlayer.stop();
-    assert.ok(stoppedCalled >= 1);
-    assert.equal(voiceMod.gujaratiVoicePlayer.getSnapshot().status, 'idle');
+    assert.equal(mock.getBufferCalls(), 0);
+    assert.equal(mock.getBufferSourceCalls(), 0);
   } finally {
     delete globalThis.window;
   }
 });
 
+test('QuizPlayScreen removes male/female voice feedback controls while keeping sound mute toggle', () => {
+  const quizPlaySource = fs.readFileSync(path.resolve('src/screens/QuizPlayScreen.tsx'), 'utf8');
+  assert.equal(quizPlaySource.includes('gujaratiVoicePlayer'), false);
+  assert.equal(quizPlaySource.includes('gujarati_voice_gender_btn'), false);
+  assert.equal(quizPlaySource.includes('gujarati_voice_toggle_btn'), false);
+  assert.equal(quizPlaySource.includes('quiz_sound_toggle_btn'), true);
+});
 
+test('MainActivity unconditionally applies WindowInsets.safeDrawing so top buttons never overlap Android status bar', () => {
+  const mainActivitySource = fs.readFileSync(
+    path.resolve('app/src/main/java/com/aistudio/std10quiz/kqxmtv/MainActivity.kt'),
+    'utf8'
+  );
+  assert.equal(mainActivitySource.includes('contentWindowInsets = WindowInsets.safeDrawing'), true);
+  assert.equal(mainActivitySource.includes('AndroidTtsBridge'), false);
+  assert.equal(
+    mainActivitySource.includes('if (displaySettings.isFullScreen) WindowInsets.ime'),
+    false
+  );
+});
