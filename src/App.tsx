@@ -9,7 +9,7 @@ import { buildBoardExamMockTestChapter } from './data/curriculum/mockTestBuilder
 import { TopNavHeader, type PublicTabId } from './components/TopNavHeader';
 import { UpdateAvailableBanner, UpdateAvailableModal } from './components/AppUpdateComponents';
 import { DisplaySettingsModal } from './components/DisplaySettingsModal';
-import { AdaptiveDisplayProvider } from './context/AdaptiveDisplayContext';
+import { AdaptiveDisplayProvider, useAdaptiveDisplay } from './context/AdaptiveDisplayContext';
 import { useTranslation } from './i18n/translations';
 import { StudentMobileLoginScreen } from './screens/StudentMobileLoginScreen';
 import { UseCodeScreen } from './screens/UseCodeScreen';
@@ -353,6 +353,7 @@ const AppContent: React.FC = () => {
   const [activeMockChapter, setActiveMockChapter] = useState<QuizChapter | null>(null);
   const [pendingSubjectUnlockModal, setPendingSubjectUnlockModal] = useState<'pay' | 'code' | null>(null);
   const [isBusy, setIsBusy] = useState(false);
+  const { isLargeScreen, isTvOrSmartBoard } = useAdaptiveDisplay();
   const [banner, setBanner] = useState<ActionBanner | null>(null);
   const [lastGeneratedBatch, setLastGeneratedBatch] = useState<string[]>([]);
   const [liveAlerts, setLiveAlerts] = useState<AdminLiveAlert[]>([]);
@@ -2291,36 +2292,42 @@ const AppContent: React.FC = () => {
 
       {banner && isAdmin && (
         <div
-          className="fixed top-3 inset-x-0 z-[70] flex justify-center px-3 pt-[env(safe-area-inset-top)] pointer-events-none"
+          className="fixed top-0 inset-x-0 z-[95] flex justify-center px-3 sm:px-6 pt-[max(env(safe-area-inset-top),0.75rem)] pointer-events-none"
           data-testid="admin_top_popup"
         >
           <div
             role="alert"
             aria-live="assertive"
-            className={`admin-top-popup pointer-events-auto max-w-md w-full rounded-2xl p-3.5 shadow-2xl backdrop-blur-md border-2 flex items-start gap-3 ${
+            className={`admin-top-popup pointer-events-auto ${
+              isTvOrSmartBoard ? 'max-w-3xl p-5' : isLargeScreen ? 'max-w-xl p-4' : 'max-w-lg p-3.5 sm:p-4'
+            } w-full h-auto min-h-0 max-h-[65dvh] overflow-y-auto rounded-2xl shadow-2xl border-2 flex items-start gap-3 ${
               banner.isError
-                ? 'bg-[#FEF2F2]/95 dark:bg-[#450A0A]/95 text-[#7F1D1D] dark:text-[#FEE2E2] border-[#DC2626]'
-                : 'bg-white/95 dark:bg-[#0F172A]/95 text-[#0F172A] dark:text-[#F8FAFC] border-[#1E3A8A] dark:border-[#3B82F6]'
+                ? 'bg-[#FEF2F2] dark:bg-[#450A0A] text-[#7F1D1D] dark:text-[#FEE2E2] border-[#DC2626]'
+                : 'bg-white dark:bg-[#0F172A] text-[#0F172A] dark:text-[#F8FAFC] border-[#1E3A8A] dark:border-[#3B82F6]'
             }`}
           >
             <div
-              className={`h-9 w-9 rounded-xl flex items-center justify-center shrink-0 ${
+              className={`${
+                isTvOrSmartBoard ? 'h-11 w-11' : 'h-9 w-9 sm:h-10 sm:w-10'
+              } rounded-xl flex items-center justify-center shrink-0 ${
                 banner.isError
                   ? 'bg-[#DC2626] text-white'
                   : 'bg-[#1E3A8A] dark:bg-[#2563EB] text-white'
               }`}
             >
               {banner.isError ? (
-                <AlertTriangle className="h-4 w-4" />
+                <AlertTriangle className={isTvOrSmartBoard ? 'h-5 w-5' : 'h-4 w-4'} />
               ) : (
-                <BellRing className="h-4 w-4 animate-bounce" />
+                <BellRing className={`${isTvOrSmartBoard ? 'h-5 w-5' : 'h-4 w-4'} animate-bounce`} />
               )}
             </div>
 
-            <div className="min-w-0 flex-1 space-y-1">
-              <div className="flex items-center justify-between gap-2">
+            <div className="min-w-0 flex-1 space-y-1.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <span
-                  className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wide ${
+                  className={`inline-flex items-center rounded-full px-2.5 py-0.5 ${
+                    isTvOrSmartBoard ? 'text-xs' : 'text-[10px] sm:text-xs'
+                  } font-extrabold uppercase tracking-wide ${
                     banner.isError
                       ? 'bg-[#FEE2E2] dark:bg-[#7F1D1D] text-[#991B1B] dark:text-[#FECACA]'
                       : 'bg-[#DBEAFE] dark:bg-[#1E3A8A] text-[#1E3A8A] dark:text-[#DBEAFE]'
@@ -2335,7 +2342,15 @@ const AppContent: React.FC = () => {
                       : 'એડમિન મેસેજ'}
                 </span>
               </div>
-              <p className="text-xs sm:text-sm font-bold leading-snug break-words">
+              <p
+                className={`${
+                  isTvOrSmartBoard
+                    ? 'text-base sm:text-lg'
+                    : isLargeScreen
+                      ? 'text-sm sm:text-base'
+                      : 'text-xs sm:text-sm'
+                } font-bold leading-relaxed whitespace-pre-line break-words`}
+              >
                 {banner.message}
               </p>
               {(route.name !== 'public' || route.tab !== 'admin' || bannerTargetAction) && (
@@ -2352,7 +2367,9 @@ const AppContent: React.FC = () => {
                     }
                     setBanner(null);
                   }}
-                  className="mt-1 inline-flex items-center rounded-lg bg-[#1E3A8A] hover:bg-[#172554] dark:bg-[#2563EB] text-white px-2.5 py-1 text-[11px] font-extrabold cursor-pointer"
+                  className={`mt-1 inline-flex items-center rounded-xl bg-[#1E3A8A] hover:bg-[#172554] dark:bg-[#2563EB] text-white ${
+                    isTvOrSmartBoard ? 'min-h-[48px] px-4 text-sm' : 'min-h-[40px] px-3 text-xs'
+                  } font-extrabold cursor-pointer`}
                 >
                   {bannerTargetAction?.tab === 'chat'
                     ? lang === 'en'
@@ -2372,7 +2389,7 @@ const AppContent: React.FC = () => {
                 setBanner(null);
               }}
               aria-label={t.closeBtn}
-              className="h-9 w-9 rounded-xl hover:bg-black/10 dark:hover:bg-white/10 flex items-center justify-center cursor-pointer shrink-0"
+              className="min-h-[44px] min-w-[44px] rounded-xl hover:bg-black/10 dark:hover:bg-white/10 flex items-center justify-center cursor-pointer shrink-0"
             >
               <X className="h-4 w-4" />
             </button>
@@ -2381,23 +2398,30 @@ const AppContent: React.FC = () => {
       )}
 
       {banner && !isAdmin && (
-        <div className="fixed bottom-4 inset-x-0 z-50 flex justify-center px-4 pointer-events-none">
+        <div
+          className="fixed bottom-0 inset-x-0 z-[95] flex justify-center px-3 sm:px-6 pb-[max(env(safe-area-inset-bottom),1rem)] pointer-events-none"
+          data-testid="app_status_toast"
+        >
           <div
             role="status"
-            className={`pointer-events-auto max-w-lg w-full rounded-xl px-4 py-3 shadow-lg flex items-center justify-between gap-3 text-xs sm:text-sm font-semibold border ${
+            className={`pointer-events-auto ${
+              isTvOrSmartBoard ? 'max-w-3xl px-5 py-4 text-base sm:text-lg' : isLargeScreen ? 'max-w-2xl px-4 py-3.5 text-sm sm:text-base' : 'max-w-xl px-4 py-3.5 text-sm sm:text-base'
+            } w-full h-auto min-h-0 max-h-[65dvh] overflow-y-auto rounded-2xl shadow-2xl flex items-start justify-between gap-3 font-semibold border-2 ${
               banner.isError
-                ? 'bg-[#FEE2E2] text-[#7F1D1D] border-[#DC2626]/40 dark:bg-[#7F1D1D] dark:text-[#FEE2E2]'
-                : 'bg-[#0F172A] text-white border-slate-700 dark:bg-[#1E3A8A]'
+                ? 'bg-[#FEE2E2] text-[#7F1D1D] border-[#DC2626] dark:bg-[#7F1D1D] dark:text-[#FEE2E2]'
+                : 'bg-[#0F172A] text-white border-slate-700 dark:bg-[#1E3A8A] dark:border-[#3B82F6]'
             }`}
           >
-            <span>{banner.message}</span>
+            <span className="min-w-0 flex-1 whitespace-pre-line break-words leading-relaxed">
+              {banner.message}
+            </span>
             <button
               type="button"
               onClick={() => setBanner(null)}
               aria-label={t.closeBtn}
-              className="p-1 rounded-lg hover:bg-black/15 cursor-pointer shrink-0"
+              className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl hover:bg-black/15 cursor-pointer shrink-0"
             >
-              <X className="h-4 w-4" />
+              <X className="h-5 w-5" />
             </button>
           </div>
         </div>

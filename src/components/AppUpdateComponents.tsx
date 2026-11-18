@@ -51,35 +51,54 @@ export const AppUpdateFooterCard: React.FC<AppUpdateFooterCardProps> = ({
   onOpenUpdateModal,
 }) => {
   const { t } = useTranslation();
+  const { isTvOrSmartBoard } = useAdaptiveDisplay();
 
   return (
-    <div className="rounded-2xl border border-[#E2E8F0] dark:border-[#334155] bg-white dark:bg-[#1E293B] p-4 flex flex-wrap items-center justify-between gap-3">
-      <div className="space-y-0.5 min-w-0">
+    <div
+      className={`rounded-2xl border border-[#E2E8F0] dark:border-[#334155] bg-white dark:bg-[#1E293B] ${
+        isTvOrSmartBoard ? 'p-5 sm:p-6' : 'p-4'
+      } h-auto flex flex-wrap items-center justify-between gap-3`}
+    >
+      <div className="space-y-1 min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
-          <p className="text-sm font-bold text-[#0F172A] dark:text-[#F8FAFC]">
+          <p
+            className={`${
+              isTvOrSmartBoard ? 'text-base sm:text-lg' : 'text-sm sm:text-base'
+            } font-bold text-[#0F172A] dark:text-[#F8FAFC] whitespace-normal break-words`}
+          >
             {t.appName.split('&')[0].trim()} • v{currentVersionName} ({currentVersionCode})
           </p>
           {hasAvailableUpdate && latestVersionName && (
-            <span className="inline-flex items-center gap-1 rounded-full bg-[#DCFCE7] dark:bg-[#064E3B] text-[#047857] dark:text-[#6EE7B7] px-2.5 py-0.5 text-[11px] font-extrabold">
-              <Sparkles className="h-3 w-3" />
+            <span
+              className={`inline-flex items-center gap-1 rounded-full bg-[#DCFCE7] dark:bg-[#064E3B] text-[#047857] dark:text-[#6EE7B7] px-2.5 py-0.5 ${
+                isTvOrSmartBoard ? 'text-xs sm:text-sm' : 'text-[11px] sm:text-xs'
+              } font-extrabold whitespace-nowrap`}
+            >
+              <Sparkles className="h-3.5 w-3.5 shrink-0" />
               <span>v{latestVersionName}</span>
             </span>
           )}
         </div>
-        <p className="text-xs text-[#475569] dark:text-[#94A3B8]">
+        <p
+          className={`${
+            isTvOrSmartBoard ? 'text-sm sm:text-base' : 'text-xs sm:text-sm'
+          } text-[#475569] dark:text-[#94A3B8] whitespace-normal break-words leading-relaxed`}
+        >
           {hasAvailableUpdate ? t.appUpdateAvailableTitle : t.appUpdateUpToDateMsg}
         </p>
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto justify-end">
         {hasAvailableUpdate && onOpenUpdateModal ? (
           <button
             type="button"
             data-testid="footer_update_now_btn"
             onClick={onOpenUpdateModal}
-            className="min-h-[48px] inline-flex items-center gap-2 rounded-xl bg-[#1E3A8A] hover:bg-[#172554] text-white px-4 py-2 text-xs font-bold transition-colors cursor-pointer"
+            className={`${
+              isTvOrSmartBoard ? 'min-h-[54px] px-5 text-sm sm:text-base' : 'min-h-[48px] px-4 text-xs sm:text-sm'
+            } inline-flex items-center justify-center gap-2 rounded-xl bg-[#1E3A8A] hover:bg-[#172554] text-white py-2.5 font-bold whitespace-normal text-center transition-colors cursor-pointer`}
           >
-            <Download className="h-4 w-4" />
+            <Download className="h-4 w-4 shrink-0" />
             <span>{t.appUpdateNowBtn}</span>
           </button>
         ) : (
@@ -88,9 +107,11 @@ export const AppUpdateFooterCard: React.FC<AppUpdateFooterCardProps> = ({
             data-testid="check_app_updates_btn"
             onClick={onCheckUpdateClick}
             disabled={isCheckingUpdate}
-            className="min-h-[48px] inline-flex items-center gap-2 rounded-xl border border-[#CBD5E1] dark:border-[#475569] px-4 py-2 text-xs font-bold text-[#0F172A] dark:text-[#F8FAFC] hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-50 transition-colors cursor-pointer"
+            className={`${
+              isTvOrSmartBoard ? 'min-h-[54px] px-5 text-sm sm:text-base' : 'min-h-[48px] px-4 text-xs sm:text-sm'
+            } inline-flex items-center justify-center gap-2 rounded-xl border border-[#CBD5E1] dark:border-[#475569] py-2.5 font-bold text-[#0F172A] dark:text-[#F8FAFC] hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-50 whitespace-normal text-center transition-colors cursor-pointer`}
           >
-            <RefreshCw className={`h-4 w-4 ${isCheckingUpdate ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`h-4 w-4 shrink-0 ${isCheckingUpdate ? 'animate-spin' : ''}`} />
             <span>
               {isCheckingUpdate ? t.appUpdateCheckingBtn : t.appUpdateCheckNowBtn}
             </span>
@@ -240,7 +261,11 @@ export const UpdateAvailableModal: React.FC<UpdateAvailableModalProps> = ({
     ? ''
     : formatApkSizeMb(progressState.bytesDownloaded);
 
-  const containerWidthCls = isLargeScreen ? 'max-w-4xl' : 'max-w-2xl';
+  const containerWidthCls = isTvOrSmartBoard
+    ? 'max-w-5xl'
+    : isLargeScreen
+      ? 'max-w-4xl'
+      : 'max-w-2xl';
   const headingCls = isTvOrSmartBoard ? 'text-2xl sm:text-3xl' : 'text-lg sm:text-xl';
 
   return (
@@ -339,13 +364,21 @@ export const UpdateAvailableModal: React.FC<UpdateAvailableModalProps> = ({
           )}
 
           {/* Full Release Notes (Unclipped) */}
-          <div className="rounded-2xl bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] p-4 sm:p-5 shadow-sm space-y-2.5">
+          <div className="rounded-2xl bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] p-4 sm:p-5 shadow-sm space-y-2.5 h-auto">
             {release.releaseTitle && (
-              <h3 className="text-base sm:text-lg font-extrabold text-[#0F172A] dark:text-[#F8FAFC] break-words">
+              <h3
+                className={`${
+                  isTvOrSmartBoard ? 'text-lg sm:text-xl' : 'text-base sm:text-lg'
+                } font-extrabold text-[#0F172A] dark:text-[#F8FAFC] whitespace-normal break-words`}
+              >
                 {release.releaseTitle}
               </h3>
             )}
-            <div className="text-sm sm:text-base text-[#334155] dark:text-[#CBD5E1] whitespace-pre-wrap break-words leading-relaxed">
+            <div
+              className={`${
+                isTvOrSmartBoard ? 'text-base sm:text-lg' : 'text-sm sm:text-base'
+              } text-[#334155] dark:text-[#CBD5E1] whitespace-pre-wrap break-words leading-relaxed`}
+            >
               {release.releaseNotes || release.releaseTitle}
             </div>
           </div>
@@ -512,45 +545,82 @@ export const UpdateAvailableBanner: React.FC<UpdateAvailableBannerProps> = ({
   onUpdateLater,
 }) => {
   const { t } = useTranslation();
+  const { isLargeScreen, isTvOrSmartBoard } = useAdaptiveDisplay();
+
+  const maxBannerWidthCls = isTvOrSmartBoard
+    ? 'max-w-4xl'
+    : isLargeScreen
+      ? 'max-w-2xl'
+      : 'max-w-xl';
 
   return (
     <div
-      className="fixed inset-x-0 top-0 z-[85] flex justify-center px-3 pt-[max(env(safe-area-inset-top),0.5rem)] pointer-events-none"
+      className="fixed inset-x-0 top-0 z-[85] flex justify-center px-3 sm:px-6 pt-[max(env(safe-area-inset-top),0.75rem)] pointer-events-none"
       data-testid="app_update_banner"
     >
       <div
         role="region"
         aria-label={t.appUpdateAvailableTitle}
-        className="pointer-events-auto max-w-2xl w-full max-h-[45dvh] overflow-y-auto rounded-2xl bg-white dark:bg-[#0F172A] border-2 border-[#1E3A8A] dark:border-[#3B82F6] shadow-2xl p-3.5 sm:p-4 flex flex-wrap items-center justify-between gap-3"
+        className={`pointer-events-auto ${maxBannerWidthCls} w-full h-auto min-h-0 max-h-[82dvh] overflow-y-auto rounded-2xl bg-white dark:bg-[#0F172A] border-2 border-[#1E3A8A] dark:border-[#3B82F6] shadow-2xl ${
+          isTvOrSmartBoard ? 'p-5 sm:p-6 gap-4' : 'p-4 sm:p-5 gap-3'
+        } flex flex-col sm:flex-row sm:items-center justify-between`}
       >
         <div className="flex items-start gap-3 min-w-0 flex-1">
-          <div className="h-10 w-10 rounded-xl bg-[#DBEAFE] dark:bg-[#1E3A8A] text-[#1E3A8A] dark:text-[#93C5FD] flex items-center justify-center shrink-0">
-            <Sparkles className="h-5 w-5" />
+          <div
+            className={`${
+              isTvOrSmartBoard ? 'h-12 w-12' : 'h-10 w-10 sm:h-11 sm:w-11'
+            } rounded-xl bg-[#DBEAFE] dark:bg-[#1E3A8A] text-[#1E3A8A] dark:text-[#93C5FD] flex items-center justify-center shrink-0`}
+          >
+            <Sparkles className={isTvOrSmartBoard ? 'h-6 w-6' : 'h-5 w-5'} />
           </div>
-          <div className="min-w-0 flex-1 space-y-0.5">
+          <div className="min-w-0 flex-1 space-y-1">
             <div className="flex flex-wrap items-center gap-2">
-              <p className="text-xs sm:text-sm font-extrabold text-[#0F172A] dark:text-[#F8FAFC] break-words">
+              <p
+                className={`${
+                  isTvOrSmartBoard
+                    ? 'text-lg sm:text-xl'
+                    : isLargeScreen
+                      ? 'text-base sm:text-lg'
+                      : 'text-sm sm:text-base'
+                } font-extrabold text-[#0F172A] dark:text-[#F8FAFC] whitespace-normal break-words leading-snug`}
+              >
                 {t.appUpdateAvailableTitle}
               </p>
-              <span className="rounded-full bg-[#DCFCE7] dark:bg-[#064E3B] text-[#047857] dark:text-[#6EE7B7] px-2 py-0.5 text-[10px] font-extrabold tabular-nums shrink-0">
+              <span
+                className={`rounded-full bg-[#DCFCE7] dark:bg-[#064E3B] text-[#047857] dark:text-[#6EE7B7] px-2.5 py-0.5 ${
+                  isTvOrSmartBoard ? 'text-xs sm:text-sm' : 'text-[11px] sm:text-xs'
+                } font-extrabold tabular-nums shrink-0 whitespace-nowrap`}
+              >
                 v{release.versionName}
                 {release.versionCode ? ` (${release.versionCode})` : ''}
               </span>
             </div>
             {(release.releaseNotes || release.releaseTitle) && (
-              <p className="text-[11px] sm:text-xs text-[#475569] dark:text-[#CBD5E1] whitespace-pre-line break-words leading-relaxed">
+              <p
+                className={`${
+                  isTvOrSmartBoard
+                    ? 'text-base sm:text-lg'
+                    : isLargeScreen
+                      ? 'text-sm sm:text-base'
+                      : 'text-xs sm:text-sm'
+                } text-[#334155] dark:text-[#CBD5E1] whitespace-pre-line break-words leading-relaxed`}
+              >
                 {release.releaseNotes || release.releaseTitle}
               </p>
             )}
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 shrink-0 w-full sm:w-auto justify-end">
+        <div className="flex flex-wrap items-center gap-2.5 shrink-0 w-full sm:w-auto justify-end pt-1 sm:pt-0">
           <button
             type="button"
             data-testid="banner_update_later_btn"
             onClick={onUpdateLater}
-            className="min-h-[48px] px-3.5 py-2 rounded-xl text-xs font-bold text-[#475569] dark:text-[#CBD5E1] hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+            className={`${
+              isTvOrSmartBoard
+                ? 'min-h-[54px] px-5 text-sm sm:text-base'
+                : 'min-h-[48px] px-4 text-xs sm:text-sm'
+            } py-2 rounded-xl border border-[#CBD5E1] dark:border-[#334155] font-bold text-[#475569] dark:text-[#CBD5E1] hover:bg-slate-100 dark:hover:bg-slate-800 whitespace-normal text-center cursor-pointer`}
           >
             {t.appUpdateLaterBtn}
           </button>
@@ -558,9 +628,13 @@ export const UpdateAvailableBanner: React.FC<UpdateAvailableBannerProps> = ({
             type="button"
             data-testid="banner_update_now_btn"
             onClick={onUpdateNow}
-            className="min-h-[48px] inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#1E3A8A] hover:bg-[#172554] dark:bg-[#2563EB] text-white text-xs font-extrabold transition-colors cursor-pointer"
+            className={`${
+              isTvOrSmartBoard
+                ? 'min-h-[54px] px-5 text-sm sm:text-base'
+                : 'min-h-[48px] px-4 text-xs sm:text-sm'
+            } inline-flex items-center justify-center gap-1.5 py-2 rounded-xl bg-[#1E3A8A] hover:bg-[#172554] dark:bg-[#2563EB] text-white font-extrabold whitespace-normal text-center transition-colors cursor-pointer`}
           >
-            <Download className="h-3.5 w-3.5" />
+            <Download className="h-4 w-4 shrink-0" />
             <span>{t.appUpdateNowBtn}</span>
           </button>
         </div>
@@ -568,5 +642,6 @@ export const UpdateAvailableBanner: React.FC<UpdateAvailableBannerProps> = ({
     </div>
   );
 };
+
 
 
