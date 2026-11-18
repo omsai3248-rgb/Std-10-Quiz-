@@ -1,5 +1,6 @@
 import React, { useEffect } from 'react';
 import {
+  ArrowLeft,
   CheckCircle2,
   Maximize2,
   Monitor,
@@ -104,26 +105,32 @@ export const DisplaySettingsModal: React.FC<DisplaySettingsModalProps> = ({ isOp
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-3 sm:p-5"
+      className="fixed inset-0 z-50 w-full h-[100dvh] bg-[#FAF9F5] dark:bg-[#0B1120] text-[#0F172A] dark:text-[#F8FAFC] flex flex-col overflow-hidden"
       role="dialog"
       aria-modal="true"
       aria-label={t.displaySettingsTitle}
-      onClick={onClose}
+      data-testid="display_settings_fullscreen_view"
     >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-3xl bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] shadow-2xl p-4 sm:p-6 space-y-4"
-      >
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="h-11 w-11 rounded-2xl bg-[#DBEAFE] dark:bg-[#1E3A5F] text-[#1E3A8A] dark:text-[#93C5FD] flex items-center justify-center shrink-0">
+      {/* Full-Screen Top Bar */}
+      <header className="shrink-0 w-full bg-white/95 dark:bg-[#1E293B]/95 backdrop-blur border-b border-[#E2E8F0] dark:border-[#334155]">
+        <div className="max-w-5xl mx-auto w-full px-3 sm:px-6 h-16 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label={t.closeBtn}
+              className="min-h-[48px] min-w-[48px] rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-center cursor-pointer shrink-0"
+            >
+              <ArrowLeft className="h-5 w-5" />
+            </button>
+            <div className="h-10 w-10 rounded-xl bg-[#DBEAFE] dark:bg-[#1E3A5F] text-[#1E3A8A] dark:text-[#93C5FD] flex items-center justify-center shrink-0">
               {getDeviceTypeIcon(deviceType)}
             </div>
             <div className="min-w-0">
-              <h2 className="text-base sm:text-lg font-extrabold truncate">
+              <h2 className="text-sm sm:text-lg font-extrabold truncate">
                 {t.displaySettingsTitle}
               </h2>
-              <p className="text-xs text-[#475569] dark:text-[#94A3B8]">
+              <p className="text-[11px] sm:text-xs text-[#475569] dark:text-[#94A3B8] truncate">
                 {t.displaySettingsSubtitle}
               </p>
             </div>
@@ -139,9 +146,13 @@ export const DisplaySettingsModal: React.FC<DisplaySettingsModalProps> = ({ isOp
             <X className="h-5 w-5" />
           </button>
         </div>
+      </header>
 
-        {/* Live Detected Screen Telemetry */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+      {/* Scrollable Full-Screen Content */}
+      <main className="flex-1 overflow-y-auto w-full">
+        <div className="max-w-5xl mx-auto w-full px-4 sm:px-6 py-5 space-y-5">
+          {/* Live Detected Screen Telemetry */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 sm:gap-3 text-xs">
           <div className="rounded-xl bg-[#EFF4FA] dark:bg-[#0F172A] p-2.5">
             <p className="text-[10px] font-bold text-[#64748B] dark:text-[#94A3B8]">
               {t.displayDetectedDeviceLabel}
@@ -183,8 +194,8 @@ export const DisplaySettingsModal: React.FC<DisplaySettingsModalProps> = ({ isOp
           )}
         </div>
 
-        {/* 1-3 Orientation / Layout Modes */}
-        <div className="space-y-2.5">
+        {/* 1-3 Orientation / Layout Modes & 4 Full Screen Toggle */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           {modeOptions.map(({ id, title, desc, Icon }) => {
             const active = displayMode === id;
             return (
@@ -193,17 +204,17 @@ export const DisplaySettingsModal: React.FC<DisplaySettingsModalProps> = ({ isOp
                 type="button"
                 data-testid={`display_mode_${id}`}
                 onClick={() => setDisplayMode(id)}
-                className={`w-full min-h-[60px] rounded-2xl border-2 p-3.5 text-left flex items-center gap-3 transition-colors cursor-pointer ${
+                className={`w-full min-h-[72px] rounded-2xl border-2 p-4 text-left flex items-center gap-3.5 transition-colors cursor-pointer ${
                   active
                     ? 'border-[#1E3A8A] dark:border-[#3B82F6] bg-[#DBEAFE]/55 dark:bg-[#1E3A5F]/65'
-                    : 'border-[#E2E8F0] dark:border-[#334155] bg-[#FAF9F5] dark:bg-[#0F172A] hover:border-[#94A3B8]'
+                    : 'border-[#E2E8F0] dark:border-[#334155] bg-white dark:bg-[#1E293B] hover:border-[#94A3B8]'
                 }`}
               >
                 <div
-                  className={`h-10 w-10 rounded-xl flex items-center justify-center shrink-0 ${
+                  className={`h-11 w-11 rounded-xl flex items-center justify-center shrink-0 ${
                     active
                       ? 'bg-[#1E3A8A] dark:bg-[#2563EB] text-white'
-                      : 'bg-white dark:bg-[#1E293B] text-slate-600 dark:text-slate-300'
+                      : 'bg-[#EFF4FA] dark:bg-[#0F172A] text-slate-600 dark:text-slate-300'
                   }`}
                 >
                   <Icon className="h-5 w-5" />
@@ -226,17 +237,17 @@ export const DisplaySettingsModal: React.FC<DisplaySettingsModalProps> = ({ isOp
             aria-checked={isFullScreen}
             data-testid="display_mode_fullscreen_toggle"
             onClick={toggleFullScreenMode}
-            className={`w-full min-h-[60px] rounded-2xl border-2 p-3.5 text-left flex items-center gap-3 transition-colors cursor-pointer ${
+            className={`w-full min-h-[72px] rounded-2xl border-2 p-4 text-left flex items-center gap-3.5 transition-colors cursor-pointer ${
               isFullScreen
                 ? 'border-[#047857] bg-[#ECFDF5] dark:bg-[#064E3B]/50'
-                : 'border-[#E2E8F0] dark:border-[#334155] bg-[#FAF9F5] dark:bg-[#0F172A] hover:border-[#94A3B8]'
+                : 'border-[#E2E8F0] dark:border-[#334155] bg-white dark:bg-[#1E293B] hover:border-[#94A3B8]'
             }`}
           >
             <div
-              className={`h-10 w-10 rounded-xl flex items-center justify-center shrink-0 ${
+              className={`h-11 w-11 rounded-xl flex items-center justify-center shrink-0 ${
                 isFullScreen
                   ? 'bg-[#047857] text-white'
-                  : 'bg-white dark:bg-[#1E293B] text-slate-600 dark:text-slate-300'
+                  : 'bg-[#EFF4FA] dark:bg-[#0F172A] text-slate-600 dark:text-slate-300'
               }`}
             >
               <Maximize2 className="h-5 w-5" />
@@ -258,13 +269,17 @@ export const DisplaySettingsModal: React.FC<DisplaySettingsModalProps> = ({ isOp
             </span>
           </button>
         </div>
+        </div>
+      </main>
 
-        <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+      {/* Full-Screen Sticky Bottom Action Bar */}
+      <footer className="shrink-0 w-full bg-white/95 dark:bg-[#1E293B]/95 backdrop-blur border-t border-[#E2E8F0] dark:border-[#334155]">
+        <div className="max-w-5xl mx-auto w-full px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-2">
           <button
             type="button"
             data-testid="display_mode_reset_btn"
             onClick={resetDisplaySettings}
-            className="min-h-[48px] px-4 rounded-xl border border-[#CBD5E1] dark:border-[#334155] text-xs font-bold inline-flex items-center gap-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+            className="min-h-[48px] px-4 rounded-xl border border-[#CBD5E1] dark:border-[#334155] text-xs sm:text-sm font-bold inline-flex items-center gap-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
           >
             <RotateCcw className="h-4 w-4" />
             <span>{t.displayResetDefaultBtn}</span>
@@ -273,12 +288,12 @@ export const DisplaySettingsModal: React.FC<DisplaySettingsModalProps> = ({ isOp
           <button
             type="button"
             onClick={onClose}
-            className="min-h-[48px] px-5 rounded-xl bg-[#1E3A8A] hover:bg-[#172554] dark:bg-[#2563EB] text-white text-xs sm:text-sm font-extrabold cursor-pointer"
+            className="min-h-[48px] px-6 rounded-xl bg-[#1E3A8A] hover:bg-[#172554] dark:bg-[#2563EB] text-white text-xs sm:text-sm font-extrabold cursor-pointer"
           >
             {t.closeBtn}
           </button>
         </div>
-      </div>
+      </footer>
     </div>
   );
 };

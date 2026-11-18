@@ -19,5 +19,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Std10QuizPortal"
+rootProject.name = "Quick Quiz"
 include(":app")

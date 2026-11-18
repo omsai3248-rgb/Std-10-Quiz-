@@ -45,6 +45,7 @@ interface AndroidFirebaseBridgeApi {
   startStudentListeners?: (studentId: string) => void;
   stopStudentListeners?: () => void;
   recordQuizAttempt?: (callId: string, payloadJson: string) => void;
+  markFreeMockTestUsed?: (callId: string, payloadJson: string) => void;
   submitPaymentRequest?: (callId: string, payloadJson: string) => void;
   redeemAccessCode?: (callId: string, payloadJson: string) => void;
   startPublicListeners?: (paymentIdsJson: string) => void;

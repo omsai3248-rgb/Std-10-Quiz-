@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">ધોરણ 10 ક્વિઝ</string>
-    <string name="loading_portal">એપ લોડ થઈ રહી છે…</string>
+    <string name="app_name">Quick Quiz</string>
+    <string name="loading_portal">Quick Quiz લોડ થઈ રહ્યું છે…</string>
     <string name="error_no_app">આ લિંક ખોલવા માટે કોઈ સુસંગત એપ ઉપલબ્ધ નથી.</string>
     <string name="error_no_upi_app">કોઈ UPI એપ મળી નથી. કૃપા કરીને UPI ID કોપી કરીને પેમેન્ટ કરો.</string>
     <string name="upi_chooser_title">UPI એપ પસંદ કરો</string>
     <string name="share_export_title">એક્સપોર્ટ ફાઇલ શેર / સેવ કરો</string>
-    <string name="qr_downloaded_gallery">QR કોડ Gallery (Pictures/Std10Quiz) માં ડાઉનલોડ થઈ ગયો છે.</string>
+    <string name="qr_downloaded_gallery">QR કોડ Gallery (Pictures/QuickQuiz) માં ડાઉનલોડ થઈ ગયો છે.</string>
 </resources>

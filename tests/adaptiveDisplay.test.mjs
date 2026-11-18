@@ -235,6 +235,9 @@ test('handles foldable hinge postures, landscape monitors, and display settings 
   assert.equal(forcedLandscape.effectiveOrientation, 'landscape');
   assert.equal(forcedLandscape.useSplitQuizCockpit, true);
 
+  // Default Full Screen setting
+  assert.equal(adaptive.DEFAULT_DISPLAY_SETTINGS.isFullScreen, true);
+
   // Settings persistence round-trip
   adaptive.persistDisplaySettings({ displayMode: 'landscape', isFullScreen: true });
   const loaded = adaptive.loadSavedDisplaySettings();

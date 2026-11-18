@@ -16,6 +16,7 @@ export interface StudentProfile {
   totalQuizzesTaken: number;
   bestScorePercent: number;
   unlockedSubjects: string[];
+  freeMockUsedSubjects?: string[];
   paymentRequestIds?: string[];
   activeDeviceId?: string;
   activeDeviceName?: string;
@@ -106,6 +107,7 @@ export interface QuizQuestion {
   correctIndex: number;
   explanation: string;
   graphPattern?: PolynomialGraphPattern;
+  sourceLabel?: string;
 }
 
 export interface QuizChapter {
@@ -117,6 +119,7 @@ export interface QuizChapter {
   questions: QuizQuestion[];
   questionTypeLabel: string;
   isFreeUnlocked?: boolean;
+  isMockTest?: boolean;
 }
 
 export interface QuizSubject {

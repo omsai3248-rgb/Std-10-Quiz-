@@ -11,6 +11,22 @@ export interface Translations {
   navAdmin: string;
   navAdminLive: string;
   loadingApp: string;
+  voiceOnLabel: string;
+  voiceOffLabel: string;
+  voicePauseBtn: string;
+  voiceResumeBtn: string;
+  voiceStopBtn: string;
+  voiceReplayBtn: string;
+  voiceReadingFeedback: string;
+  voiceReadingExplanation: string;
+  voicePausedLabel: string;
+  voiceUnavailableNote: string;
+  voiceGenderFemale: string;
+  voiceGenderMale: string;
+  voicePreparingLabel: string;
+  voiceAiHumanBadge: string;
+  voiceOfflineFallbackBadge: string;
+  voiceReplayExplanationBtn: string;
 
   // Public Payment Page
   payHeaderTitle: string;
@@ -328,14 +344,30 @@ export interface Translations {
 }
 
 const GU: Translations = {
-  appName: 'ધોરણ ૧૦ ક્વિઝ & પેમેન્ટ પોર્ટલ',
-  appSubtitle: 'પેમેન્ટ વેરિફિકેશન • કાયમી કોડ • બોર્ડ ક્વિઝ',
+  appName: 'Quick Quiz',
+  appSubtitle: 'ધોરણ ૧૦ બોર્ડ ક્વિઝ • ગુજરાતી વોઇસ ફીડબેક',
   langToggleLabel: 'English',
   navSubmitPayment: 'પેમેન્ટ મોકલો',
   navUseCode: 'કોડ વાપરો',
   navAdmin: 'એડમિન',
   navAdminLive: 'એડમિન લાઇવ',
-  loadingApp: 'એપ લોડ થઈ રહી છે...',
+  loadingApp: 'Quick Quiz લોડ થઈ રહ્યું છે...',
+  voiceOnLabel: 'Voice ચાલુ',
+  voiceOffLabel: 'Voice બંધ',
+  voicePauseBtn: 'Pause',
+  voiceResumeBtn: 'Resume',
+  voiceStopBtn: 'Stop',
+  voiceReplayBtn: 'ફરી સાંભળો',
+  voiceReadingFeedback: 'ગુજરાતી પ્રોત્સાહન બોલાઈ રહ્યું છે...',
+  voiceReadingExplanation: 'સમજૂતી ગુજરાતી અવાજમાં વંચાઈ રહી છે...',
+  voicePausedLabel: 'અવાજ અસ્થાયી રૂપે રોકેલ છે',
+  voiceUnavailableNote: 'આ ડિવાઇસમાં ગુજરાતી અવાજ ઉપલબ્ધ નથી — લિખિત સમજૂતી વાંચી શકાય છે.',
+  voiceGenderFemale: 'સ્ત્રી અવાજ',
+  voiceGenderMale: 'પુરુષ અવાજ',
+  voicePreparingLabel: 'કુદરતી અવાજ તૈયાર થાય છે...',
+  voiceAiHumanBadge: 'AI માનવ અવાજ',
+  voiceOfflineFallbackBadge: 'ઓફલાઇન અવાજ',
+  voiceReplayExplanationBtn: 'સમજૂતી ફરી સાંભળો',
 
   payHeaderTitle: 'પેમેન્ટ સ્ક્રીનશોટ મોકલો',
   payHeaderDesc:
@@ -356,7 +388,7 @@ const GU: Translations = {
   payUpiBankLimitNote:
     'જો "ડાયરેક્ટ UPI એપ" બટનમાં HDFC/Bank Limit Error આવે, તો ઉપરનો QR કોડ સેવ કરી GPay/PhonePe માં "Scan from Gallery" કરો અથવા UPI ID કોપી કરી સીધું પેમેન્ટ કરો.',
   loginTitle: 'મોબાઇલ નંબરથી લૉગિન કરો',
-  loginSubtitle: 'તમારું નામ અને ૧૦ અંકનો મોબાઇલ નંબર દાખલ કરી ધોરણ ૧૦ ક્વિઝ પ્લેટફોર્મ ખોલો.',
+  loginSubtitle: 'તમારું નામ અને ૧૦ અંકનો મોબાઇલ નંબર દાખલ કરી Quick Quiz પ્લેટફોર્મ ખોલો.',
   loginBtn: 'લૉગિન કરી ક્વિઝ શરૂ કરો',
   switchAccountBtn: 'લૉગ આઉટ',
   adminNumberLoginHint: 'આ એડમિન નંબર છે — કૃપા કરીને પાસવર્ડથી એડમિન પેનલમાં લૉગિન કરો.',
@@ -417,7 +449,7 @@ const GU: Translations = {
   redeemingBtn: 'ચકાસણી થાય છે...',
   codeSuccessTitle: 'કોડ માન્ય! ક્વિઝ એક્સેસ અનલૉક થઈ ગયું છે',
   codeSuccessDesc: 'તમે હવે નીચેના વિષયોની બોર્ડ ક્વિઝ રમી શકો છો.',
-  unlockedContentTitle: 'ધોરણ ૧૦ બોર્ડ ક્વિઝ (સુરક્ષિત કન્ટેન્ટ)',
+  unlockedContentTitle: 'Quick Quiz — ધોરણ ૧૦ બોર્ડ ક્વિઝ',
   unlockedContentSubtitle: 'કોઈ પણ વિષયના ફોલ્ડર ખોલી પ્રકરણ મુજબ MCQ ક્વિઝ રમો.',
   subjectsHeader: 'વિષય ફોલ્ડર્સ',
   lockedBadge: 'કોડ જરૂરી',
@@ -650,14 +682,30 @@ const GU: Translations = {
 };
 
 const EN: Translations = {
-  appName: 'Std 10 Quiz & Payment Portal',
-  appSubtitle: 'Payment Verification • Permanent Codes • Board Quiz',
+  appName: 'Quick Quiz',
+  appSubtitle: 'Std 10 Board Quiz • Gujarati Voice Feedback',
   langToggleLabel: 'ગુજરાતી',
   navSubmitPayment: 'Submit Payment',
   navUseCode: 'Use Code',
   navAdmin: 'Admin',
   navAdminLive: 'Admin Live',
-  loadingApp: 'Loading app...',
+  loadingApp: 'Loading Quick Quiz...',
+  voiceOnLabel: 'Voice ON',
+  voiceOffLabel: 'Voice OFF',
+  voicePauseBtn: 'Pause',
+  voiceResumeBtn: 'Resume',
+  voiceStopBtn: 'Stop',
+  voiceReplayBtn: 'Listen Again',
+  voiceReadingFeedback: 'Speaking Gujarati encouragement...',
+  voiceReadingExplanation: 'Reading full explanation in Gujarati...',
+  voicePausedLabel: 'Voice paused',
+  voiceUnavailableNote: 'Gujarati voice is unavailable on this device — text explanation is shown below.',
+  voiceGenderFemale: 'Female Voice',
+  voiceGenderMale: 'Male Voice',
+  voicePreparingLabel: 'Preparing human voice...',
+  voiceAiHumanBadge: 'AI Human Voice',
+  voiceOfflineFallbackBadge: 'Offline Voice',
+  voiceReplayExplanationBtn: 'Listen Explanation Again',
 
   payHeaderTitle: 'Submit Payment Screenshot',
   payHeaderDesc:
@@ -678,7 +726,7 @@ const EN: Translations = {
   payUpiBankLimitNote:
     'If direct UPI intent shows a Bank Limit error (common in HDFC/GPay), save/scan this QR from Gallery or copy the UPI ID and pay directly inside GPay/PhonePe.',
   loginTitle: 'Login with Mobile Number',
-  loginSubtitle: 'Enter your name and 10-digit mobile number to open the Std 10 Quiz platform.',
+  loginSubtitle: 'Enter your name and 10-digit mobile number to open the Quick Quiz platform.',
   loginBtn: 'Login & Open Quiz Platform',
   switchAccountBtn: 'Log Out',
   adminNumberLoginHint: 'This is the Admin number — please sign in with your Admin password.',
@@ -738,8 +786,8 @@ const EN: Translations = {
   redeemNowBtn: 'Validate & Unlock Content',
   redeemingBtn: 'Validating...',
   codeSuccessTitle: 'Code verified! Protected content unlocked',
-  codeSuccessDesc: 'You now have access to the Std 10 Quiz folders below.',
-  unlockedContentTitle: 'Std 10 Board Quiz (Protected Content)',
+  codeSuccessDesc: 'You now have access to the Quick Quiz folders below.',
+  unlockedContentTitle: 'Quick Quiz — Std 10 Board Quiz',
   unlockedContentSubtitle: 'Open any subject folder to start chapter-wise MCQ practice.',
   subjectsHeader: 'Subject Folders',
   lockedBadge: 'Code Required',

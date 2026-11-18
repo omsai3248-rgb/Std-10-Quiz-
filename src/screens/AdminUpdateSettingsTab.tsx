@@ -90,7 +90,7 @@ export const AdminUpdateSettingsTab: React.FC<AdminUpdateSettingsTabProps> = ({
 
   useEffect(() => {
     if (!updateTitleInput && versionNameInput) {
-      setUpdateTitleInput(`ધોરણ 10 ક્વિઝ v${versionNameInput}`);
+      setUpdateTitleInput(`Quick Quiz v${versionNameInput}`);
     }
   }, [updateTitleInput, versionNameInput]);
 
@@ -103,7 +103,7 @@ export const AdminUpdateSettingsTab: React.FC<AdminUpdateSettingsTabProps> = ({
         setSelectedWebFile(null);
         if (meta.versionName) {
           setVersionNameInput(meta.versionName);
-          setUpdateTitleInput(`ધોરણ 10 ક્વિઝ v${meta.versionName}`);
+          setUpdateTitleInput(`Quick Quiz v${meta.versionName}`);
         }
         if (meta.versionCode > 0) {
           setVersionCodeInput(String(meta.versionCode));
@@ -166,7 +166,7 @@ export const AdminUpdateSettingsTab: React.FC<AdminUpdateSettingsTabProps> = ({
         file: selectedWebFile,
         versionName: versionNameInput.trim(),
         versionCode: parsedVersionCode,
-        updateTitle: updateTitleInput.trim() || `ધોરણ 10 ક્વિઝ v${versionNameInput.trim()}`,
+        updateTitle: updateTitleInput.trim() || `Quick Quiz v${versionNameInput.trim()}`,
         releaseNotes: notesInput.trim(),
         isMandatory,
         apkFileName: inspectedApk?.fileName || selectedWebFile?.name,

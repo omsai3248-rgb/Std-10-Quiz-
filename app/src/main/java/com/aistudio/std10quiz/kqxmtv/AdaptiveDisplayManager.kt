@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.os.Build
 import android.util.DisplayMetrics
+import android.view.WindowManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import androidx.activity.ComponentActivity
@@ -24,7 +25,7 @@ import kotlin.math.roundToInt
 
 data class DisplaySettings(
     val displayMode: String = MODE_AUTO_ADAPTIVE,
-    val isFullScreen: Boolean = false
+    val isFullScreen: Boolean = true
 ) {
     companion object {
         const val MODE_AUTO_ADAPTIVE = "auto_adaptive"
@@ -86,12 +87,12 @@ data class NativeDisplayTelemetry(
 object AdaptiveDisplayManager {
     private const val PREFS_NAME = "std10_display_settings"
     private const val KEY_DISPLAY_MODE = "display_mode"
-    private const val KEY_FULL_SCREEN = "full_screen"
+    private const val KEY_FULL_SCREEN_V2 = "full_screen_v2"
 
     fun loadSettings(context: Context): DisplaySettings {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val mode = DisplaySettings.normalizeMode(prefs.getString(KEY_DISPLAY_MODE, DisplaySettings.MODE_AUTO_ADAPTIVE))
-        val fullScreen = prefs.getBoolean(KEY_FULL_SCREEN, false)
+        val fullScreen = prefs.getBoolean(KEY_FULL_SCREEN_V2, true)
         return DisplaySettings(displayMode = mode, isFullScreen = fullScreen)
     }
 
@@ -104,7 +105,7 @@ object AdaptiveDisplayManager {
 
     fun saveFullScreenMode(context: Context, enabled: Boolean): DisplaySettings {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit().putBoolean(KEY_FULL_SCREEN, enabled).apply()
+        prefs.edit().putBoolean(KEY_FULL_SCREEN_V2, enabled).apply()
         return loadSettings(context)
     }
 
@@ -229,6 +230,19 @@ object AdaptiveDisplayManager {
         }
 
         val window = activity.window
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            val lp = window.attributes
+            val desiredCutout = if (settings.isFullScreen) {
+                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            } else {
+                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
+            }
+            if (lp.layoutInDisplayCutoutMode != desiredCutout) {
+                lp.layoutInDisplayCutoutMode = desiredCutout
+                window.attributes = lp
+            }
+        }
         val controller = WindowCompat.getInsetsController(window, window.decorView)
         if (settings.isFullScreen) {
             controller.systemBarsBehavior =

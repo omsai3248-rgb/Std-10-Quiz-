@@ -1093,4 +1093,89 @@ test("App Update system: only Admin can publish releases/configs/notifications; 
   await assertSucceeds(adminDb.collection("device_fcm_tokens").doc(devId).delete());
 });
 
+test("Board Mock Test: student freeMockUsedSubjects must start empty, grows monotonically, and cannot forge access", async () => {
+  const unauthDb = testEnv.unauthenticatedContext().firestore();
+  const studentId = "mob_9123456789";
+  const now = new Date();
+
+  // Cannot create student with pre-populated freeMockUsedSubjects
+  await assertFails(
+    unauthDb.collection("students").doc(studentId).set({
+      userId: studentId,
+      fullName: "Mock Student",
+      mobileNumber: "9123456789",
+      email: "",
+      standard: "ધોરણ 10",
+      hasQuizAccess: false,
+      redeemedCode: "",
+      paymentStatus: "none",
+      totalQuizzesTaken: 0,
+      bestScorePercent: 0,
+      unlockedSubjects: [],
+      freeMockUsedSubjects: ["maths"],
+      paymentRequestIds: [],
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  // Valid creation with empty freeMockUsedSubjects succeeds
+  await assertSucceeds(
+    unauthDb.collection("students").doc(studentId).set({
+      userId: studentId,
+      fullName: "Mock Student",
+      mobileNumber: "9123456789",
+      email: "",
+      standard: "ધોરણ 10",
+      hasQuizAccess: false,
+      redeemedCode: "",
+      paymentStatus: "none",
+      totalQuizzesTaken: 0,
+      bestScorePercent: 0,
+      unlockedSubjects: [],
+      freeMockUsedSubjects: [],
+      paymentRequestIds: [],
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  // Student can record free mock usage per folder
+  await assertSucceeds(
+    unauthDb.collection("students").doc(studentId).update({
+      freeMockUsedSubjects: ["science"],
+      updatedAt: now,
+    })
+  );
+  await assertSucceeds(
+    unauthDb.collection("students").doc(studentId).update({
+      freeMockUsedSubjects: ["science", "maths"],
+      updatedAt: now,
+    })
+  );
+
+  // Student CANNOT remove an already-used folder to reset free mock quota
+  await assertFails(
+    unauthDb.collection("students").doc(studentId).update({
+      freeMockUsedSubjects: ["maths"],
+      updatedAt: now,
+    })
+  );
+
+  // Student CANNOT pass invalid subject IDs or piggyback hasQuizAccess
+  await assertFails(
+    unauthDb.collection("students").doc(studentId).update({
+      freeMockUsedSubjects: ["science", "maths", "all"],
+      updatedAt: now,
+    })
+  );
+  await assertFails(
+    unauthDb.collection("students").doc(studentId).update({
+      freeMockUsedSubjects: ["science", "maths", "social_science"],
+      hasQuizAccess: true,
+      updatedAt: now,
+    })
+  );
+});
+
 

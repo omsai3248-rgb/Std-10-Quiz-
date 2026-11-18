@@ -16,6 +16,7 @@
         "totalQuizzesTaken": { "type": "integer" },
         "bestScorePercent": { "type": "integer" },
         "unlockedSubjects": { "type": "array", "items": { "type": "string" } },
+        "freeMockUsedSubjects": { "type": "array", "items": { "type": "string" } },
         "paymentRequestIds": { "type": "array", "items": { "type": "string" } },
         "activeDeviceId": { "type": "string" },
         "activeDeviceName": { "type": "string" },

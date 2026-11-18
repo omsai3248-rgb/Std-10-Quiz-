@@ -9,7 +9,6 @@ import com.google.firebase.auth.auth
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.SetOptions
-import com.google.firebase.messaging.FirebaseMessaging
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 
@@ -17,11 +16,9 @@ class QuizFirebaseMessagingService : FirebaseMessagingService() {
 
     override fun onNewToken(token: String) {
         super.onNewToken(token)
+        AdminNotificationHelper.clearStaleFcmTopicQueue(applicationContext)
         AdminNotificationHelper.saveFcmToken(applicationContext, token)
-        runCatching {
-            FirebaseMessaging.getInstance().subscribeToTopic("app_updates")
-        }
-        persistPublicDeviceFcmToken(applicationContext, token, topicSubscribed = true)
+        persistPublicDeviceFcmToken(applicationContext, token, topicSubscribed = false)
         persistRefreshedTokenIfAdminSignedIn(token)
     }
 

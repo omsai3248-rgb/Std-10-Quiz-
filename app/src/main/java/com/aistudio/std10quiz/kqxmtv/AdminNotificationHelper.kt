@@ -98,7 +98,7 @@ object AdminNotificationHelper {
             "App Updates",
             NotificationManager.IMPORTANCE_HIGH
         ).apply {
-            description = "Heads-up notifications when a new version of Std 10 Quiz is available"
+            description = "Heads-up notifications when a new version of Quick Quiz is available"
             enableLights(true)
             enableVibration(true)
             vibrationPattern = VIBRATION_PATTERN
@@ -213,6 +213,33 @@ object AdminNotificationHelper {
     fun getSavedFcmToken(context: Context): String {
         return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .getString(KEY_FCM_TOKEN, "").orEmpty()
+    }
+
+    /**
+     * Purges any previously persisted `subscribeToTopic("app_updates")` entries from
+     * FirebaseMessaging's SharedPreferences queue so GMS does not keep retrying a failed
+     * `INVALID_PARAMETERS` topic sync RPC (`E/FirebaseMessaging: Failed to sync topics`).
+     * App update notifications are delivered via direct multicast in Cloud Functions instead.
+     */
+    fun clearStaleFcmTopicQueue(context: Context) {
+        runCatching {
+            val gmsPrefs = context.getSharedPreferences("com.google.android.gms.appid", Context.MODE_PRIVATE)
+            val rawQueue = gmsPrefs.getString("topic_operation_queue", null) ?: return
+            val remaining = rawQueue.split(',')
+                .map { it.trim() }
+                .filter { entry ->
+                    entry.isNotEmpty() &&
+                        !entry.endsWith("!app_updates") &&
+                        !entry.endsWith("!/topics/app_updates")
+                }
+            val editor = gmsPrefs.edit()
+            if (remaining.isEmpty()) {
+                editor.remove("topic_operation_queue")
+            } else {
+                editor.putString("topic_operation_queue", remaining.joinToString(","))
+            }
+            editor.apply()
+        }
     }
 
     fun extractDeepLinkFromIntent(intent: Intent?): JSONObject? {

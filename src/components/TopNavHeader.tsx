@@ -62,11 +62,11 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
       >
         <div className="flex items-center gap-2.5 min-w-0">
           <img
-            src="/images/ic_app_logo.jpg"
+            src="/images/ic_app_logo.png"
             alt={t.appName}
             className={`${
               isTvOrSmartBoard ? 'h-11 w-11' : 'h-9 w-9'
-            } rounded-xl object-cover border border-slate-200 dark:border-slate-700 shrink-0`}
+            } rounded-xl object-contain bg-black border border-slate-200 dark:border-slate-700 shrink-0`}
           />
           <div className="min-w-0">
             <h1 className="text-sm sm:text-base font-extrabold truncate leading-tight">

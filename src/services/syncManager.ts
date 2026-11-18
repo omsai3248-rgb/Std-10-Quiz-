@@ -6,6 +6,7 @@ export type LiveSyncState = 'active' | 'paused';
 
 export type SyncOperationType =
   | 'quiz_attempt'
+  | 'free_mock_used'
   | 'student_profile_sync'
   | 'payment_submit'
   | 'admin_toggle_access'
@@ -514,11 +515,15 @@ export function mergeStudentProfilesConflictSafe(
   const mergedPaymentIds = Array.from(
     new Set([...(remote.paymentRequestIds ?? []), ...(local.paymentRequestIds ?? [])])
   ).slice(0, 25);
+  const mergedFreeMocks = Array.from(
+    new Set([...(remote.freeMockUsedSubjects ?? []), ...(local.freeMockUsedSubjects ?? [])])
+  ).slice(0, 3);
 
   return {
     ...remote,
     hasQuizAccess: hasFull,
     unlockedSubjects: Array.from(unlocked).slice(0, 10),
+    freeMockUsedSubjects: mergedFreeMocks,
     redeemedCode: remote.redeemedCode || local.redeemedCode,
     totalQuizzesTaken: Math.max(remote.totalQuizzesTaken, local.totalQuizzesTaken),
     bestScorePercent: Math.max(remote.bestScorePercent, local.bestScorePercent),

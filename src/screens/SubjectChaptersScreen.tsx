@@ -1,12 +1,14 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   ArrowLeft,
+  Award,
   BookOpen,
   IndianRupee,
   KeyRound,
   Lock,
   LockOpen,
   Play,
+  Sparkles,
 } from 'lucide-react';
 import { useAdaptiveDisplay } from '../context/AdaptiveDisplayContext';
 import { SubjectPaymentModal } from '../components/SubjectPaymentModal';
@@ -22,11 +24,15 @@ import {
 interface SubjectChaptersScreenProps {
   subject: QuizSubject;
   hasQuizAccess: boolean;
+  hasUsedFreeMock: boolean;
   studentName: string;
   studentMobile: string;
   myPayments: PaymentRequest[];
   isBusy?: boolean;
+  initialModalMode?: 'pay' | 'code' | null;
+  onConsumeInitialModalMode?: () => void;
   onBack: () => void;
+  onStartMockTest: () => void;
   onStartChapterQuiz: (chapter: QuizChapter) => void;
   onSubmitPayment: (params: {
     studentName: string;
@@ -49,11 +55,15 @@ interface SubjectChaptersScreenProps {
 export const SubjectChaptersScreen: React.FC<SubjectChaptersScreenProps> = ({
   subject,
   hasQuizAccess,
+  hasUsedFreeMock,
   studentName,
   studentMobile,
   myPayments,
   isBusy = false,
+  initialModalMode = null,
+  onConsumeInitialModalMode,
   onBack,
+  onStartMockTest,
   onStartChapterQuiz,
   onSubmitPayment,
   onRedeemCode,
@@ -63,8 +73,18 @@ export const SubjectChaptersScreen: React.FC<SubjectChaptersScreenProps> = ({
   const { useSplitLayout, isLargeScreen, isTvOrSmartBoard, gridColumns } = useAdaptiveDisplay();
   const [modalMode, setModalMode] = useState<'pay' | 'code' | null>(null);
 
+  useEffect(() => {
+    if (initialModalMode && !hasQuizAccess) {
+      setModalMode(initialModalMode);
+      onConsumeInitialModalMode?.();
+    } else if (initialModalMode) {
+      onConsumeInitialModalMode?.();
+    }
+  }, [hasQuizAccess, initialModalMode, onConsumeInitialModalMode]);
+
   const totalQuestions = subject.chapters.reduce((sum, ch) => sum + ch.questions.length, 0);
   const containerMaxCls = isLargeScreen ? 'max-w-[1480px] px-4 sm:px-6' : 'max-w-[720px] px-3 sm:px-4';
+  const isMockUnlocked = hasQuizAccess || !hasUsedFreeMock;
 
   return (
     <div className="min-h-screen bg-[#FAF9F5] dark:bg-[#0B1120] text-[#0F172A] dark:text-[#F8FAFC]">
@@ -156,6 +176,85 @@ export const SubjectChaptersScreen: React.FC<SubjectChaptersScreenProps> = ({
               : 'space-y-3'
           }`}
         >
+          {/* Board Exam Mock Test Card at the very top of every subject folder */}
+          <button
+            type="button"
+            data-testid="board_mock_test_card"
+            onClick={() => {
+              if (isMockUnlocked) {
+                onStartMockTest();
+              } else {
+                setModalMode('pay');
+              }
+            }}
+            className={`${
+              gridColumns >= 2 ? 'col-span-full' : ''
+            } w-full text-left rounded-2xl border-2 shadow-sm hover:shadow-md transition-all ${
+              isTvOrSmartBoard ? 'p-5 gap-4' : 'p-4 sm:p-5 gap-3.5'
+            } flex items-center cursor-pointer ${
+              isMockUnlocked
+                ? 'bg-gradient-to-r from-[#EEF2FF] via-[#E0E7FF]/70 to-white dark:from-[#1E293B] dark:via-[#1E3A5F]/65 dark:to-[#1E293B] border-[#1E3A8A]/40 dark:border-[#60A5FA]/50'
+                : 'bg-[#FFFBEB] dark:bg-[#1E293B] border-[#F59E0B]/45 dark:border-[#F59E0B]/40'
+            }`}
+          >
+            <div
+              className="h-14 w-14 rounded-2xl flex items-center justify-center shrink-0 shadow-xs"
+              style={{
+                backgroundColor: isMockUnlocked ? subject.accentHex : '#D97706',
+              }}
+            >
+              {isMockUnlocked ? (
+                <Award className="h-7 w-7 text-white" />
+              ) : (
+                <Lock className="h-6 w-6 text-white" />
+              )}
+            </div>
+
+            <div className="flex-1 min-w-0 space-y-1">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span
+                  className="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-extrabold text-white"
+                  style={{ backgroundColor: subject.accentHex }}
+                >
+                  <Sparkles className="h-3 w-3" />
+                  <span>પ્રશ્ન 1 થી 24 (ક્રમમાં)</span>
+                </span>
+                <span
+                  className={`rounded-md px-2 py-0.5 text-[11px] font-extrabold ${
+                    hasQuizAccess
+                      ? 'bg-[#D1FAE5] text-[#064E3B] dark:bg-[#064E3B] dark:text-[#D1FAE5]'
+                      : !hasUsedFreeMock
+                        ? 'bg-[#D1FAE5] text-[#064E3B] dark:bg-[#064E3B] dark:text-[#D1FAE5]'
+                        : 'bg-[#FEF3C7] text-[#92400E] dark:bg-[#451A03] dark:text-[#FDE68A]'
+                  }`}
+                >
+                  {hasQuizAccess
+                    ? 'અનલિમિટેડ મોક ટેસ્ટ'
+                    : !hasUsedFreeMock
+                      ? '૧ મોક ટેસ્ટ ફ્રી'
+                      : `ફ્રી મોક ટેસ્ટ પૂર્ણ • લૉક (₹${PRICE_SINGLE_SUBJECT} / ₹${PRICE_ALL_SUBJECTS})`}
+                </span>
+              </div>
+
+              <h3 className="text-base sm:text-lg font-extrabold text-[#0F172A] dark:text-[#F8FAFC]">
+                બોર્ડ પરીક્ષા મોક ટેસ્ટ
+              </h3>
+              <p className="text-xs sm:text-sm text-[#475569] dark:text-[#94A3B8]">
+                {hasQuizAccess
+                  ? 'દરેક વખતે પ્રશ્ન 1 થી 24 ક્રમમાં નવા રેન્ડમ પ્રશ્નો • અનલિમિટેડ પ્રેક્ટિસ'
+                  : !hasUsedFreeMock
+                    ? 'પ્રશ્ન 1 થી 24 ક્રમમાં નવા રેન્ડમ પ્રશ્નો • આ ફોલ્ડરમાં ૧ મોક ટેસ્ટ ફ્રી આપો'
+                    : 'તમારો ૧ ફ્રી મોક ટેસ્ટ પૂર્ણ થઈ ગયો છે • અનલિમિટેડ માટે ફોલ્ડર અનલૉક કરો'}
+              </p>
+            </div>
+
+            {isMockUnlocked ? (
+              <Play className="h-7 w-7 shrink-0" style={{ color: subject.accentHex }} />
+            ) : (
+              <Lock className="h-6 w-6 shrink-0 text-[#D97706]" />
+            )}
+          </button>
+
           {subject.chapters.map((chapter) => {
             const isChapterUnlocked = hasQuizAccess || Boolean(chapter.isFreeUnlocked);
             return (

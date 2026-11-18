@@ -41,5 +41,24 @@ service firebase.storage {
 
       allow delete: if isStorageAdmin();
     }
+
+    match /voice_cache/{gender}/{fileName} {
+      // Any quiz user can stream cached natural Gujarati voice clips
+      allow read: if true;
+
+      // Immutable content-addressed SHA-256 WAV audio cache (max 10 MB)
+      allow create: if gender in ['female', 'male'] &&
+                       fileName.matches('^[a-f0-9]{64}\\.wav$') &&
+                       request.resource.size > 44 &&
+                       request.resource.size < 10 * 1024 * 1024 &&
+                       (
+                         request.resource.contentType == 'audio/wav' ||
+                         request.resource.contentType == 'audio/x-wav' ||
+                         request.resource.contentType == 'audio/wave'
+                       );
+
+      allow update: if false;
+      allow delete: if isStorageAdmin();
+    }
   }
 }

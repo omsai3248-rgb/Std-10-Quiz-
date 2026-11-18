@@ -82,7 +82,7 @@ export interface AdaptiveDisplayState {
   screenProfileLabel: string;
 }
 
-export const DISPLAY_SETTINGS_STORAGE_KEY = 'std10_display_settings_v1';
+export const DISPLAY_SETTINGS_STORAGE_KEY = 'std10_display_settings_v2';
 
 interface NativeDisplayBridgeApi {
   getDisplayState?: () => string;
@@ -97,7 +97,7 @@ interface WindowWithNativeDisplay extends Window {
 
 export const DEFAULT_DISPLAY_SETTINGS: DisplaySettings = {
   displayMode: 'auto_adaptive',
-  isFullScreen: false,
+  isFullScreen: true,
 };
 
 export function normalizeDisplayMode(raw: unknown): DisplayModeSetting {

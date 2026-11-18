@@ -503,6 +503,9 @@ function mapStudentDoc(id: string, d: Record<string, unknown>): StudentProfile {
     unlockedSubjects: Array.isArray(d.unlockedSubjects)
       ? d.unlockedSubjects.map((x) => String(x))
       : [],
+    freeMockUsedSubjects: Array.isArray(d.freeMockUsedSubjects)
+      ? d.freeMockUsedSubjects.map((x) => String(x))
+      : [],
     paymentRequestIds: Array.isArray(d.paymentRequestIds)
       ? d.paymentRequestIds.map((x) => String(x))
       : [],
@@ -657,6 +660,7 @@ export async function loginStudentByMobile(params: {
       totalQuizzesTaken: 0,
       bestScorePercent: 0,
       unlockedSubjects: [],
+      freeMockUsedSubjects: [],
       paymentRequestIds: [],
       isReturningUser: false,
       createdAt: null,
@@ -691,6 +695,7 @@ export async function loginStudentByMobile(params: {
           totalQuizzesTaken: 0,
           bestScorePercent: 0,
           unlockedSubjects: [],
+          freeMockUsedSubjects: [],
           paymentRequestIds: [],
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
@@ -708,6 +713,7 @@ export async function loginStudentByMobile(params: {
           totalQuizzesTaken: 0,
           bestScorePercent: 0,
           unlockedSubjects: [],
+          freeMockUsedSubjects: [],
           paymentRequestIds: [],
           isReturningUser: false,
           createdAt: null,
@@ -938,6 +944,7 @@ export async function registerOrUpdateStudentProfile(
         totalQuizzesTaken: 0,
         bestScorePercent: 0,
         unlockedSubjects: [],
+        freeMockUsedSubjects: [],
         paymentRequestIds: [],
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
@@ -2123,6 +2130,55 @@ async function executeIdempotentQuizAttemptWrite(payload: {
   });
 }
 
+export async function markFreeMockTestUsed(
+  studentId: string,
+  subjectId: SubjectId
+): Promise<void> {
+  const uid = studentId.trim();
+  if (!uid || !ALL_SUBJECT_IDS.includes(subjectId)) return;
+
+  const backup = loadWebStudentBackup(uid);
+  if (backup) {
+    const merged = Array.from(new Set([...(backup.freeMockUsedSubjects ?? []), subjectId])).slice(0, 3);
+    saveWebStudentBackup({ ...backup, freeMockUsedSubjects: merged }, Boolean(backup.pendingServerSync));
+  }
+
+  if (hasNativeFirebaseBridge()) {
+    await invokeNativeBridgeCall((callId) => {
+      window.AndroidFirebaseBridge?.markFreeMockTestUsed?.(
+        callId,
+        JSON.stringify({ studentId: uid, subjectId })
+      );
+    }).catch(() => {});
+    return;
+  }
+
+  const enqueueUsed = () => {
+    enqueueSyncOperation('free_mock_used', `freemock_${uid}_${subjectId}`, {
+      studentId: uid,
+      subjectId,
+    });
+  };
+
+  if (!canHitServer()) {
+    enqueueUsed();
+    return;
+  }
+
+  try {
+    await updateDoc(doc(db, COLLECTION_STUDENTS, uid), {
+      freeMockUsedSubjects: arrayUnion(subjectId),
+      updatedAt: serverTimestamp(),
+    });
+    markServerSyncSuccess();
+  } catch (error) {
+    const kind = markServerSyncError(error);
+    if (kind === 'network' || kind === 'quota' || kind === 'unknown') {
+      enqueueUsed();
+    }
+  }
+}
+
 export function observeAllStudents(
   onData: (list: StudentProfile[]) => void,
   onError?: (err: Error) => void
@@ -2400,6 +2456,17 @@ export async function flushPendingSyncOperations(options: { forceDue?: boolean }
         });
         break;
       }
+      case 'free_mock_used': {
+        const uid = String(p.studentId ?? '').trim();
+        const subId = String(p.subjectId ?? '').trim() as SubjectId;
+        if (uid && ALL_SUBJECT_IDS.includes(subId)) {
+          await updateDoc(doc(db, COLLECTION_STUDENTS, uid), {
+            freeMockUsedSubjects: arrayUnion(subId),
+            updatedAt: serverTimestamp(),
+          });
+        }
+        break;
+      }
       case 'student_profile_sync': {
         await loginStudentByMobile({
           mobileNumber: String(p.mobileNumber ?? ''),
@@ -2670,7 +2737,7 @@ export function observeUpdateNotifications(
           return {
             id: d.id,
             releaseId: String(data.releaseId ?? d.id),
-            appName: String(data.appName ?? 'ધોરણ 10 ક્વિઝ'),
+            appName: String(data.appName ?? 'Quick Quiz'),
             versionName: String(data.versionName ?? ''),
             versionCode: Number(data.versionCode ?? 1),
             title: String(data.title ?? ''),
@@ -2750,7 +2817,7 @@ export async function publishFirebaseAppUpdate(
 ): Promise<{ releaseId: string; apkDownloadUrl: string; versionName: string; versionCode: number }> {
   const cleanVersionName = input.versionName.trim().slice(0, 32);
   const cleanVersionCode = Math.max(1, Math.min(1_000_000, Math.floor(input.versionCode)));
-  const cleanTitle = (input.updateTitle.trim() || `ધોરણ 10 ક્વિઝ v${cleanVersionName}`).slice(0, 120);
+  const cleanTitle = (input.updateTitle.trim() || `Quick Quiz v${cleanVersionName}`).slice(0, 120);
   const cleanNotes = (input.releaseNotes.trim() || `નવું વર્ઝન v${cleanVersionName} ઉપલબ્ધ છે.`).slice(
     0,
     1000
@@ -2896,7 +2963,7 @@ export async function publishFirebaseAppUpdate(
 
   batch.set(doc(db, COLLECTION_UPDATE_NOTIFICATIONS, releaseId), {
     releaseId,
-    appName: 'ધોરણ 10 ક્વિઝ',
+    appName: 'Quick Quiz',
     versionName: cleanVersionName,
     versionCode: cleanVersionCode,
     title: cleanTitle,

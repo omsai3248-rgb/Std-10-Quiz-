@@ -34,13 +34,26 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
 import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSizeClassApi
 import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
 import androidx.compose.runtime.Composable
@@ -52,16 +65,28 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.constraintlayout.compose.ConstraintLayout
 import androidx.constraintlayout.compose.Dimension
 import androidx.core.content.FileProvider
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.window.layout.WindowInfoTracker
 import androidx.window.layout.WindowLayoutInfo
 import com.aistudio.std10quiz.kqxmtv.ui.theme.Std10QuizTheme
+import kotlinx.coroutines.delay
 import java.io.File
 import java.io.IOException
 
@@ -73,13 +98,32 @@ class MainActivity : ComponentActivity() {
     private var activeWebViewRef: WebView? = null
     private var latestLayoutInfoRef: WindowLayoutInfo? = null
 
+    private var wasImeVisible: Boolean = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        configureAppCheck(this, intent)
         enableEdgeToEdge()
         val initialSettings = AdaptiveDisplayManager.loadSettings(this)
         val initialTelemetry = AdaptiveDisplayManager.collectTelemetry(this, null, initialSettings)
         AdaptiveDisplayManager.applyActivityDisplaySettings(this, initialSettings, initialTelemetry)
 
+        ViewCompat.setOnApplyWindowInsetsListener(window.decorView) { view, insets ->
+            val imeVisible = insets.isVisible(WindowInsetsCompat.Type.ime())
+            val settings = AdaptiveDisplayManager.loadSettings(this)
+            if (settings.isFullScreen && !imeVisible && (wasImeVisible || insets.isVisible(WindowInsetsCompat.Type.systemBars()))) {
+                view.post {
+                    if (AdaptiveDisplayManager.loadSettings(this).isFullScreen) {
+                        WindowCompat.getInsetsController(window, window.decorView)
+                            .hide(WindowInsetsCompat.Type.systemBars())
+                    }
+                }
+            }
+            wasImeVisible = imeVisible
+            ViewCompat.onApplyWindowInsets(view, insets)
+        }
+
+        AdminNotificationHelper.clearStaleFcmTopicQueue(this)
         AdminNotificationHelper.ensureChannels(this)
         AdminNotificationHelper.extractDeepLinkFromIntent(intent)?.let { deepLink ->
             AdminNotificationHelper.savePendingDeepLink(this, deepLink)
@@ -99,6 +143,13 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        val settings = AdaptiveDisplayManager.loadSettings(this)
+        val telemetry = AdaptiveDisplayManager.collectTelemetry(this, latestLayoutInfoRef, settings)
+        AdaptiveDisplayManager.applyActivityDisplaySettings(this, settings, telemetry)
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
@@ -441,10 +492,17 @@ private fun PortalWebContainer(
         mutableStateOf(AdaptiveDisplayManager.loadSettings(activity))
     }
     var loadProgress by remember { mutableIntStateOf(0) }
+    var isInitialPageLoaded by remember { mutableStateOf(false) }
     var canGoBack by remember { mutableStateOf(false) }
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
     var firebaseBridgeRef by remember { mutableStateOf<NativeFirebaseBridge?>(null) }
+    var ttsBridgeRef by remember { mutableStateOf<AndroidTtsBridge?>(null) }
     var pendingFileCallback by remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
+
+    LaunchedEffect(Unit) {
+        delay(2600)
+        isInitialPageLoaded = true
+    }
 
     LaunchedEffect(layoutInfo) {
         onLayoutInfoChanged(layoutInfo)
@@ -496,6 +554,8 @@ private fun PortalWebContainer(
         onDispose {
             pendingFileCallback?.onReceiveValue(null)
             pendingFileCallback = null
+            ttsBridgeRef?.shutdown()
+            ttsBridgeRef = null
             firebaseBridgeRef?.detach()
             firebaseBridgeRef = null
             onBridgeChanged(null)
@@ -505,20 +565,21 @@ private fun PortalWebContainer(
         }
     }
 
-    Scaffold(
-        modifier = Modifier.fillMaxSize(),
-        contentWindowInsets = if (displaySettings.isFullScreen) {
-            WindowInsets(0)
-        } else {
-            WindowInsets.safeDrawing
-        }
-    ) { innerPadding ->
-        ConstraintLayout(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-        ) {
-            val (webContainerRef, progressBarRef) = createRefs()
+    Box(modifier = Modifier.fillMaxSize()) {
+        Scaffold(
+            modifier = Modifier.fillMaxSize(),
+            contentWindowInsets = if (displaySettings.isFullScreen) {
+                WindowInsets.ime
+            } else {
+                WindowInsets.safeDrawing
+            }
+        ) { innerPadding ->
+            ConstraintLayout(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+            ) {
+                val (webContainerRef, progressBarRef) = createRefs()
 
             AndroidView(
                 modifier = Modifier.constrainAs(webContainerRef) {
@@ -549,6 +610,13 @@ private fun PortalWebContainer(
                         }
 
                         addJavascriptInterface(AndroidExportBridge(activity), "AndroidBridge")
+                        runCatching {
+                            val ttsBridge = AndroidTtsBridge(activity, this)
+                            ttsBridgeRef = ttsBridge
+                            addJavascriptInterface(ttsBridge, "AndroidTtsBridge")
+                        }.onFailure { err ->
+                            Log.w("MainActivity", "AndroidTtsBridge init failed", err)
+                        }
                         addJavascriptInterface(
                             AndroidDisplayBridge(
                                 activity = activity,
@@ -707,6 +775,7 @@ private fun PortalWebContainer(
                             override fun onPageFinished(view: WebView?, url: String?) {
                                 super.onPageFinished(view, url)
                                 canGoBack = view?.canGoBack() == true
+                                isInitialPageLoaded = true
                                 val telemetry = AdaptiveDisplayManager.collectTelemetry(
                                     activity,
                                     layoutInfo,
@@ -813,6 +882,45 @@ private fun PortalWebContainer(
                     },
                     color = MaterialTheme.colorScheme.primary
                 )
+            }
+        }
+    }
+
+        AnimatedVisibility(
+            visible = !isInitialPageLoaded,
+            exit = fadeOut()
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                    modifier = Modifier.padding(24.dp)
+                ) {
+                    Image(
+                        painter = painterResource(id = R.drawable.ic_app_logo),
+                        contentDescription = stringResource(id = R.string.app_name),
+                        modifier = Modifier.size(180.dp),
+                        contentScale = ContentScale.Fit
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = stringResource(id = R.string.app_name),
+                        color = Color(0xFFFACC15),
+                        fontSize = 26.sp,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                    Spacer(modifier = Modifier.height(18.dp))
+                    CircularProgressIndicator(
+                        color = Color(0xFFFACC15),
+                        strokeWidth = 3.dp,
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
             }
         }
     }

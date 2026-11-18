@@ -5,6 +5,7 @@ import {
   getCachedSubject,
   loadSubjectWithChapters,
 } from './data/curriculum/std10Curriculum';
+import { buildBoardExamMockTestChapter } from './data/curriculum/mockTestBuilder';
 import { TopNavHeader, type PublicTabId } from './components/TopNavHeader';
 import { UpdateAvailableModal } from './components/AppUpdateComponents';
 import { DisplaySettingsModal } from './components/DisplaySettingsModal';
@@ -50,6 +51,7 @@ import {
   markAdminChatMessagesRead,
   markAdminNotificationAsRead,
   markAllAdminNotificationsAsRead,
+  markFreeMockTestUsed,
   observeAdminChatMessages,
   observeAdminChats,
   observeAdminDirectory,
@@ -123,6 +125,7 @@ import {
   type PaymentRequest,
   type PublishAppUpdateInput,
   type QuizAttempt,
+  type QuizChapter,
   type QuizSubject,
   type StudentProfile,
   type SubjectId,
@@ -151,6 +154,7 @@ type AppRoute =
 
 const LOCAL_UNLOCKS_KEY = 'std10_unlocked_subjects_v2';
 const LEGACY_UNLOCKS_KEY = 'std10_unlocked_subjects_v1';
+const LOCAL_FREE_MOCK_KEY = 'std10_free_mock_used_v1';
 const LOCAL_USER_META_KEY = 'std10_public_user_meta_v2';
 const LEGACY_USER_META_KEY = 'std10_public_user_meta_v1';
 
@@ -166,6 +170,21 @@ function loadSavedUnlockedSubjects(mobileNumber = ''): string[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed.map((x) => String(x)) : [];
+  } catch {
+    return [];
+  }
+}
+
+function loadSavedFreeMockUsedSubjects(mobileNumber = ''): string[] {
+  const cleanMob = mobileNumber.replace(/\D/g, '').slice(-10);
+  const scopedKey = cleanMob ? `${LOCAL_FREE_MOCK_KEY}_${cleanMob}` : LOCAL_FREE_MOCK_KEY;
+  try {
+    const raw = localStorage.getItem(scopedKey);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed.map((x) => String(x)).filter((s) => ALL_SUBJECT_IDS.includes(s as SubjectId))
+      : [];
   } catch {
     return [];
   }
@@ -190,6 +209,7 @@ function loadSavedUserMeta(): { name: string; mobile: string } {
 function loadInitialStudentSession(): {
   meta: { name: string; mobile: string };
   unlocked: string[];
+  freeMockUsed: string[];
   paymentIds: string[];
   initialAttempts: QuizAttempt[];
   nativeSnapshot: StudentProfile | null;
@@ -235,6 +255,23 @@ function loadInitialStudentSession(): {
     }
   }
 
+  const freeMockUsedSet = new Set<string>(loadSavedFreeMockUsedSubjects(meta.mobile));
+  if (nativeSnapshot && nativeMobile === meta.mobile) {
+    (nativeSnapshot.freeMockUsedSubjects ?? []).forEach((s) => {
+      if (ALL_SUBJECT_IDS.includes(s as SubjectId)) freeMockUsedSet.add(String(s));
+    });
+  }
+  if (freeMockUsedSet.size > 0 && meta.mobile) {
+    try {
+      localStorage.setItem(
+        `${LOCAL_FREE_MOCK_KEY}_${meta.mobile}`,
+        JSON.stringify(Array.from(freeMockUsedSet))
+      );
+    } catch {
+      // Ignore
+    }
+  }
+
   let paymentIds = loadMyPaymentRequestIds(meta.mobile);
   if (nativeSnapshot && nativeMobile === meta.mobile && nativeSnapshot.paymentRequestIds?.length) {
     nativeSnapshot.paymentRequestIds.forEach((pid) => {
@@ -253,6 +290,7 @@ function loadInitialStudentSession(): {
   return {
     meta,
     unlocked: Array.from(unlockedSet),
+    freeMockUsed: Array.from(freeMockUsedSet),
     paymentIds,
     initialAttempts,
     nativeSnapshot: hydratedSnapshot,
@@ -280,6 +318,9 @@ const AppContent: React.FC = () => {
   const [localUnlockedSubjects, setLocalUnlockedSubjects] = useState<string[]>(
     initialSession.unlocked
   );
+  const [localFreeMockUsedSubjects, setLocalFreeMockUsedSubjects] = useState<string[]>(
+    initialSession.freeMockUsed
+  );
   const [myPaymentIds, setMyPaymentIds] = useState<string[]>(initialSession.paymentIds);
   const [prefilledCode] = useState('');
 
@@ -300,6 +341,8 @@ const AppContent: React.FC = () => {
   const [syncVersion, setSyncVersion] = useState(0);
   const [route, setRoute] = useState<AppRoute>({ name: 'public', tab: 'quiz' });
   const [loadedSubjects, setLoadedSubjects] = useState<Partial<Record<SubjectId, QuizSubject>>>({});
+  const [activeMockChapter, setActiveMockChapter] = useState<QuizChapter | null>(null);
+  const [pendingSubjectUnlockModal, setPendingSubjectUnlockModal] = useState<'pay' | 'code' | null>(null);
   const [isBusy, setIsBusy] = useState(false);
   const [banner, setBanner] = useState<ActionBanner | null>(null);
   const [lastGeneratedBatch, setLastGeneratedBatch] = useState<string[]>([]);
@@ -737,6 +780,9 @@ const AppContent: React.FC = () => {
     setStudent(null);
     setMyAttempts([]);
     setLocalUnlockedSubjects([]);
+    setLocalFreeMockUsedSubjects([]);
+    setActiveMockChapter(null);
+    setPendingSubjectUnlockModal(null);
     setMyPaymentIds([]);
     setMyPayments([]);
     setNativeActiveStudentMobile('');
@@ -817,6 +863,16 @@ const AppContent: React.FC = () => {
     return Array.from(set).slice(0, 25);
   }, [myPaymentIds, student?.paymentRequestIds]);
 
+  // Ensure activeMockChapter is stably built if entering a mock quiz route directly
+  useEffect(() => {
+    if (route.name !== 'quiz') return;
+    if (route.chapterId !== `mock_test_${route.subjectId}`) return;
+    const subject = loadedSubjects[route.subjectId] ?? getCachedSubject(route.subjectId);
+    if (!subject) return;
+    if (activeMockChapter?.subjectId === subject.id) return;
+    setActiveMockChapter(buildBoardExamMockTestChapter(subject));
+  }, [activeMockChapter?.subjectId, loadedSubjects, route]);
+
   const effectiveUnlockedSubjects = useMemo(() => {
     if (student) {
       const set = new Set<string>(student.unlockedSubjects ?? []);
@@ -828,6 +884,14 @@ const AppContent: React.FC = () => {
     }
     return localUnlockedSubjects;
   }, [localUnlockedSubjects, student]);
+
+  const effectiveFreeMockUsedSubjects = useMemo(
+    () =>
+      Array.from(
+        new Set([...localFreeMockUsedSubjects, ...(student?.freeMockUsedSubjects ?? [])])
+      ),
+    [localFreeMockUsedSubjects, student?.freeMockUsedSubjects]
+  );
 
   const mergedPaymentIdsKey = mergedPaymentIds.join(',');
   const authUserUid = authUser?.uid ?? '';
@@ -1054,6 +1118,24 @@ const AppContent: React.FC = () => {
       }
     }
 
+    const remoteFreeMock = (student.freeMockUsedSubjects ?? []).filter((s) =>
+      ALL_SUBJECT_IDS.includes(s as SubjectId)
+    );
+    if (remoteFreeMock.length > 0) {
+      setLocalFreeMockUsedSubjects((prev) => {
+        const merged = Array.from(new Set([...prev, ...remoteFreeMock]));
+        if (merged.length === prev.length && merged.every((x, i) => x === prev[i])) {
+          return prev;
+        }
+        try {
+          localStorage.setItem(`${LOCAL_FREE_MOCK_KEY}_${savedUserMeta.mobile}`, JSON.stringify(merged));
+        } catch {
+          // Ignore
+        }
+        return merged;
+      });
+    }
+
     if (student.paymentRequestIds && student.paymentRequestIds.length > 0) {
       student.paymentRequestIds.forEach((pid) => {
         if (/^pay_[a-f0-9]{32}$/.test(pid)) {
@@ -1103,7 +1185,7 @@ const AppContent: React.FC = () => {
       tagName: `v${remoteVerName}`,
       versionName: remoteVerName,
       versionCode: remoteVerCode || currentVersionCode + 1,
-      releaseTitle: releaseConfig?.updateTitle?.trim() || `ધોરણ 10 ક્વિઝ v${remoteVerName}`,
+      releaseTitle: releaseConfig?.updateTitle?.trim() || `Quick Quiz v${remoteVerName}`,
       releaseNotes: releaseConfig?.releaseNotes?.trim() || '',
       apkDownloadUrl: apkUrl,
       htmlUrl: '',
@@ -1210,6 +1292,9 @@ const AppContent: React.FC = () => {
       setLocalUnlockedSubjects((prev) =>
         Array.from(new Set([...prev, ...loadSavedUnlockedSubjects(cleanMobile)]))
       );
+      setLocalFreeMockUsedSubjects((prev) =>
+        Array.from(new Set([...prev, ...loadSavedFreeMockUsedSubjects(cleanMobile)]))
+      );
       setMyPaymentIds((prev) =>
         Array.from(new Set([...prev, ...loadMyPaymentRequestIds(cleanMobile)])).slice(0, 25)
       );
@@ -1242,6 +1327,23 @@ const AppContent: React.FC = () => {
       setLocalUnlockedSubjects(arr);
       try {
         localStorage.setItem(`${LOCAL_UNLOCKS_KEY}_${cleanMobile}`, JSON.stringify(arr));
+      } catch {
+        // Ignore
+      }
+    }
+
+    const restoredFreeMock = Array.from(
+      new Set([
+        ...loadSavedFreeMockUsedSubjects(cleanMobile),
+        ...(profile.freeMockUsedSubjects ?? []).filter((s) =>
+          ALL_SUBJECT_IDS.includes(s as SubjectId)
+        ),
+      ])
+    );
+    setLocalFreeMockUsedSubjects(restoredFreeMock);
+    if (restoredFreeMock.length > 0) {
+      try {
+        localStorage.setItem(`${LOCAL_FREE_MOCK_KEY}_${cleanMobile}`, JSON.stringify(restoredFreeMock));
       } catch {
         // Ignore
       }
@@ -1290,6 +1392,43 @@ const AppContent: React.FC = () => {
       return arr;
     });
   };
+
+  const handleConsumeFreeMockTest = useCallback(
+    (subjectId: SubjectId) => {
+      const cleanMob = savedUserMeta.mobile.replace(/\D/g, '').slice(-10);
+      setLocalFreeMockUsedSubjects((prev) => {
+        const next = Array.from(new Set([...prev, subjectId]));
+        if (cleanMob) {
+          try {
+            localStorage.setItem(`${LOCAL_FREE_MOCK_KEY}_${cleanMob}`, JSON.stringify(next));
+          } catch {
+            // Ignore
+          }
+        }
+        return next;
+      });
+      setStudent((prev) =>
+        prev
+          ? {
+              ...prev,
+              freeMockUsedSubjects: Array.from(
+                new Set([...(prev.freeMockUsedSubjects ?? []), subjectId])
+              ),
+            }
+          : prev
+      );
+      if (studentDocId) {
+        void markFreeMockTestUsed(studentDocId, subjectId).catch(() => {});
+      }
+    },
+    [savedUserMeta.mobile, studentDocId]
+  );
+
+  const startSubjectMockTest = useCallback((subject: QuizSubject) => {
+    const mockCh = buildBoardExamMockTestChapter(subject);
+    setActiveMockChapter(mockCh);
+    setRoute({ name: 'quiz', subjectId: subject.id, chapterId: mockCh.id });
+  }, []);
 
   const handleSubmitPayment = async (params: {
     studentName: string;
@@ -1681,16 +1820,27 @@ const AppContent: React.FC = () => {
 
   if (!authInitialized) {
     return (
-      <div className="min-h-screen bg-[#FAF9F5] dark:bg-[#0B1120] flex flex-col items-center justify-center gap-3 text-[#0F172A] dark:text-[#F8FAFC]">
-        <div className="h-9 w-9 rounded-full border-3 border-[#1E3A8A] border-t-transparent animate-spin" />
-        <p className="text-sm font-semibold">{t.loadingApp}</p>
+      <div className="min-h-[100dvh] bg-black flex flex-col items-center justify-center gap-4 p-6 text-white">
+        <img
+          src="/images/ic_app_logo.png"
+          alt="Quick Quiz"
+          className="h-32 w-32 object-contain rounded-2xl"
+        />
+        <h1 className="text-2xl font-extrabold tracking-wide text-[#FACC15]">Quick Quiz</h1>
+        <div className="h-8 w-8 rounded-full border-3 border-[#FACC15] border-t-transparent animate-spin" />
+        <p className="text-sm font-semibold text-slate-300">{t.loadingApp}</p>
       </div>
     );
   }
 
   const routeSpinner = (
-    <div className="min-h-screen bg-[#FAF9F5] dark:bg-[#0B1120] flex flex-col items-center justify-center gap-3 text-[#0F172A] dark:text-[#F8FAFC]">
-      <div className="h-9 w-9 rounded-full border-3 border-[#1E3A8A] border-t-transparent animate-spin" />
+    <div className="min-h-[100dvh] bg-[#FAF9F5] dark:bg-[#0B1120] flex flex-col items-center justify-center gap-3 text-[#0F172A] dark:text-[#F8FAFC]">
+      <img
+        src="/images/ic_app_logo.png"
+        alt="Quick Quiz"
+        className="h-20 w-20 object-contain rounded-2xl bg-black p-1"
+      />
+      <div className="h-8 w-8 rounded-full border-3 border-[#1E3A8A] border-t-transparent animate-spin" />
       <p className="text-sm font-semibold">{t.loadingApp}</p>
     </div>
   );
@@ -1821,16 +1971,21 @@ const AppContent: React.FC = () => {
       const hasAccess =
         effectiveUnlockedSubjects.includes('all') ||
         effectiveUnlockedSubjects.includes(subject.id);
+      const hasUsedFreeMock = effectiveFreeMockUsedSubjects.includes(subject.id);
       bodyNode = (
         <Suspense fallback={routeSpinner}>
           <LazySubjectChaptersScreen
             subject={subject}
             hasQuizAccess={hasAccess}
+            hasUsedFreeMock={hasUsedFreeMock}
             studentName={effectiveStudentName}
             studentMobile={savedUserMeta.mobile}
             myPayments={myPayments}
             isBusy={isBusy}
+            initialModalMode={pendingSubjectUnlockModal}
+            onConsumeInitialModalMode={() => setPendingSubjectUnlockModal(null)}
             onBack={() => setRoute({ name: 'public', tab: 'quiz' })}
+            onStartMockTest={() => startSubjectMockTest(subject)}
             onStartChapterQuiz={(ch) =>
               setRoute({ name: 'quiz', subjectId: subject.id, chapterId: ch.id })
             }
@@ -1843,17 +1998,32 @@ const AppContent: React.FC = () => {
     }
   } else if (route.name === 'quiz' && isStudentLoggedIn) {
     const subject = loadedSubjects[route.subjectId] ?? getCachedSubject(route.subjectId);
-    const chapter =
-      subject?.chapters.find((c) => c.id === route.chapterId) ??
-      getCachedChapter(route.subjectId, route.chapterId);
+    const isMockRoute = route.chapterId === `mock_test_${route.subjectId}`;
+    const chapter = isMockRoute
+      ? activeMockChapter?.subjectId === route.subjectId
+        ? activeMockChapter
+        : undefined
+      : subject?.chapters.find((c) => c.id === route.chapterId) ??
+        getCachedChapter(route.subjectId, route.chapterId);
     if (!subject || !chapter) {
       bodyNode = routeSpinner;
     } else {
+      const hasFolderAccess =
+        effectiveUnlockedSubjects.includes('all') ||
+        effectiveUnlockedSubjects.includes(subject.id);
       bodyNode = (
         <Suspense fallback={routeSpinner}>
           <LazyQuizPlayScreen
             subject={subject}
             chapter={chapter}
+            hasFolderAccess={hasFolderAccess}
+            onConsumeFreeMockTest={() => handleConsumeFreeMockTest(subject.id)}
+            onRebuildMockTest={() => setActiveMockChapter(buildBoardExamMockTestChapter(subject))}
+            onRequestUnlockForMockTest={() => {
+              setActiveMockChapter(null);
+              setPendingSubjectUnlockModal('pay');
+              setRoute({ name: 'subject', subjectId: subject.id });
+            }}
             onQuizCompleted={(score, total, elapsedSeconds) => {
               void recordQuizAttempt({
                 studentId: studentDocId,
@@ -1883,7 +2053,10 @@ const AppContent: React.FC = () => {
                 })
                 .catch(() => {});
             }}
-            onExit={() => setRoute({ name: 'subject', subjectId: subject.id })}
+            onExit={() => {
+              setActiveMockChapter(null);
+              setRoute({ name: 'subject', subjectId: subject.id });
+            }}
           />
         </Suspense>
       );

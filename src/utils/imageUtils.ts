@@ -230,7 +230,7 @@ export function buildDirectCodeWhatsAppHref(
     lang === 'en'
       ? [
           greetingEn,
-          `Your Std 10 Quiz Access Code is ready ✅`,
+          `Your Quick Quiz Access Code is ready ✅`,
           '',
           `🔑 Access Code: *${params.code}*`,
           `• Subject: ${subjectName} (₹${amt})`,
@@ -240,7 +240,7 @@ export function buildDirectCodeWhatsAppHref(
         ]
       : [
           greetingGu,
-          `તમારો ધોરણ ૧૦ ક્વિઝનો એક્સેસ કોડ તૈયાર છે ✅`,
+          `તમારો Quick Quiz એક્સેસ કોડ તૈયાર છે ✅`,
           '',
           `🔑 એક્સેસ કોડ: *${params.code}*`,
           `• વિષય: ${subjectName} (₹${amt})`,

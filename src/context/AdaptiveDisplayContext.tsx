@@ -160,7 +160,7 @@ export const AdaptiveDisplayProvider: React.FC<{ children: React.ReactNode }> = 
   }, []);
 
   const resetDisplaySettings = useCallback(() => {
-    const next: DisplaySettings = { displayMode: 'auto_adaptive', isFullScreen: false };
+    const next: DisplaySettings = { displayMode: 'auto_adaptive', isFullScreen: true };
     setSettings(next);
     applyNativeAndWebDisplayMode(next);
   }, []);

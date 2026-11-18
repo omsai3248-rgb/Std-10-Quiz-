@@ -94,7 +94,7 @@ service cloud.firestore {
                'userId', 'fullName', 'mobileNumber', 'email', 'standard',
                'hasQuizAccess', 'redeemedCode', 'paymentStatus',
                'totalQuizzesTaken', 'bestScorePercent', 'unlockedSubjects',
-               'paymentRequestIds', 'activeDeviceId', 'activeDeviceName',
+               'freeMockUsedSubjects', 'paymentRequestIds', 'activeDeviceId', 'activeDeviceName',
                'createdAt', 'updatedAt'
              ]) &&
              data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
@@ -108,6 +108,7 @@ service cloud.firestore {
              data.totalQuizzesTaken is int && data.totalQuizzesTaken >= 0 && data.totalQuizzesTaken <= 100000 &&
              data.bestScorePercent is int && data.bestScorePercent >= 0 && data.bestScorePercent <= 100 &&
              (!('unlockedSubjects' in data) || (data.unlockedSubjects is list && data.unlockedSubjects.size() <= 10)) &&
+             (!('freeMockUsedSubjects' in data) || (data.freeMockUsedSubjects is list && data.freeMockUsedSubjects.size() <= 3 && data.freeMockUsedSubjects.hasOnly(['maths', 'science', 'social_science']))) &&
              (!('paymentRequestIds' in data) || (data.paymentRequestIds is list && data.paymentRequestIds.size() <= 25)) &&
              (!('activeDeviceId' in data) || (data.activeDeviceId is string && data.activeDeviceId.size() <= 128)) &&
              (!('activeDeviceName' in data) || (data.activeDeviceName is string && data.activeDeviceName.size() <= 120)) &&
@@ -533,6 +534,7 @@ service cloud.firestore {
                        incoming().totalQuizzesTaken == 0 &&
                        incoming().bestScorePercent == 0 &&
                        (!('unlockedSubjects' in incoming()) || incoming().unlockedSubjects.size() == 0) &&
+                       (!('freeMockUsedSubjects' in incoming()) || incoming().freeMockUsedSubjects.size() == 0) &&
                        (!('paymentRequestIds' in incoming()) || incoming().paymentRequestIds.size() == 0);
 
       allow update: if isValidId(userId) &&
@@ -560,6 +562,14 @@ service cloud.firestore {
                                isSignedIn() &&
                                request.auth.uid == userId &&
                                incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'mobileNumber', 'email', 'activeDeviceId', 'activeDeviceName', 'updatedAt'])
+                             ) ||
+                             (
+                               'freeMockUsedSubjects' in incoming() &&
+                               incoming().freeMockUsedSubjects is list &&
+                               incoming().freeMockUsedSubjects.size() <= 3 &&
+                               incoming().freeMockUsedSubjects.hasOnly(['maths', 'science', 'social_science']) &&
+                               (!('freeMockUsedSubjects' in existing()) || incoming().freeMockUsedSubjects.hasAll(existing().freeMockUsedSubjects)) &&
+                               incoming().diff(existing()).affectedKeys().hasOnly(['freeMockUsedSubjects', 'updatedAt'])
                              ) ||
                              (
                                incoming().paymentStatus == 'pending' &&

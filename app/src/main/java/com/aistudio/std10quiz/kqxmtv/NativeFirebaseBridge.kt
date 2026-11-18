@@ -22,6 +22,8 @@ import androidx.credentials.exceptions.NoCredentialException
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.lifecycleScope
+import com.google.android.gms.common.ConnectionResult
+import com.google.android.gms.common.GoogleApiAvailability
 import com.google.android.gms.tasks.Task
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
@@ -769,6 +771,7 @@ class NativeFirebaseBridge(
         put("totalQuizzesTaken", 0)
         put("bestScorePercent", 0)
         put("unlockedSubjects", JSONArray())
+        put("freeMockUsedSubjects", JSONArray())
         put("paymentRequestIds", JSONArray())
         put("isReturningUser", false)
     }
@@ -915,6 +918,7 @@ class NativeFirebaseBridge(
                                         "totalQuizzesTaken" to 0,
                                         "bestScorePercent" to 0,
                                         "unlockedSubjects" to emptyList<String>(),
+                                        "freeMockUsedSubjects" to emptyList<String>(),
                                         "paymentRequestIds" to emptyList<String>(),
                                         "createdAt" to FieldValue.serverTimestamp(),
                                         "updatedAt" to FieldValue.serverTimestamp(),
@@ -1056,6 +1060,7 @@ class NativeFirebaseBridge(
                                                 "totalQuizzesTaken" to 0,
                                                 "bestScorePercent" to 0,
                                                 "unlockedSubjects" to emptyList<String>(),
+                                                "freeMockUsedSubjects" to emptyList<String>(),
                                                 "paymentRequestIds" to emptyList<String>(),
                                                 "createdAt" to FieldValue.serverTimestamp(),
                                                 "updatedAt" to FieldValue.serverTimestamp(),
@@ -1202,6 +1207,54 @@ class NativeFirebaseBridge(
                 handleFirestoreError(e, OperationType.CREATE, "quiz_attempts")
                 resolveCallError(callId, e.localizedMessage ?: "Failed to record quiz attempt")
             }
+        }
+    }
+
+    @JavascriptInterface
+    fun markFreeMockTestUsed(callId: String, payloadJson: String) {
+        val obj = runCatching { JSONObject(payloadJson) }.getOrNull()
+        val studentId = obj?.optString("studentId", "").orEmpty().trim()
+        val subjectId = obj?.optString("subjectId", "").orEmpty().trim()
+        if (studentId.isBlank() || subjectId !in listOf("maths", "science", "social_science")) {
+            resolveCallSuccess(callId, "false")
+            return
+        }
+
+        // Persist locally immediately so the 1-free-mock limit holds even offline
+        val backup = loadLocalStudentBackup(studentId)
+        if (backup != null) {
+            val prevArr = backup.optJSONArray("freeMockUsedSubjects") ?: JSONArray()
+            val mergedSet = linkedSetOf<String>()
+            for (i in 0 until prevArr.length()) {
+                val item = prevArr.optString(i, "").trim()
+                if (item.isNotBlank()) mergedSet.add(item)
+            }
+            mergedSet.add(subjectId)
+            backup.put("freeMockUsedSubjects", JSONArray(mergedSet.toList()))
+            saveLocalStudentBackup(backup, pendingSync = backup.optBoolean("pendingServerSync", false))
+        }
+
+        val localDb = db
+        if (localDb == null || !isInternetConnected() || System.currentTimeMillis() < serverQuotaDegradedUntilMs) {
+            resolveCallSuccess(callId, "true")
+            return
+        }
+
+        activity.lifecycleScope.launch(Dispatchers.IO) {
+            val ref = localDb.collection("students").document(studentId)
+            runCatching {
+                withTimeoutOrNull(4_000L) {
+                    ref.update(
+                        mapOf(
+                            "freeMockUsedSubjects" to FieldValue.arrayUnion(subjectId),
+                            "updatedAt" to FieldValue.serverTimestamp(),
+                        )
+                    ).awaitResult()
+                }
+            }.onFailure { err ->
+                markQuotaDegradedIfApplicable(err)
+            }
+            resolveCallSuccess(callId, "true")
         }
     }
 
@@ -2290,13 +2343,14 @@ class NativeFirebaseBridge(
     // =========================================================================
 
     private fun syncPublicDeviceFcmRegistration() {
+        if (!ensureFirebaseInitialized()) return
         val localDb = db ?: return
         activity.lifecycleScope.launch(Dispatchers.IO) {
             runCatching {
-                var topicOk = false
-                withTimeoutOrNull(4_000L) {
-                    FirebaseMessaging.getInstance().subscribeToTopic("app_updates").awaitResult()
-                    topicOk = true
+                AdminNotificationHelper.clearStaleFcmTopicQueue(appContext)
+                val gmsStatus = GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(appContext)
+                if (gmsStatus != ConnectionResult.SUCCESS) {
+                    return@launch
                 }
                 val token = withTimeoutOrNull(4_500L) {
                     FirebaseMessaging.getInstance().token.awaitResult()
@@ -2304,12 +2358,12 @@ class NativeFirebaseBridge(
                 if (token.length >= 20) {
                     AdminNotificationHelper.saveFcmToken(appContext, token)
                     val deviceId = AdminNotificationHelper.getOrCreateDeviceId(appContext)
-                    val pkgInfo = runCatching {
+                    val actualPkgInfo = runCatching {
                         appContext.packageManager.getPackageInfo(appContext.packageName, 0)
                     }.getOrNull()
-                    val appVersion = pkgInfo?.versionName.orEmpty().ifBlank { "1.0.0" }.take(32)
-                    val versionCode = if (pkgInfo != null) {
-                        PackageInfoCompat.getLongVersionCode(pkgInfo).coerceAtLeast(1L)
+                    val appVersion = actualPkgInfo?.versionName.orEmpty().ifBlank { "1.0.0" }.take(32)
+                    val versionCode = if (actualPkgInfo != null) {
+                        PackageInfoCompat.getLongVersionCode(actualPkgInfo).coerceAtLeast(1L)
                     } else 1L
 
                     val docRef = localDb.collection("device_fcm_tokens").document(deviceId)
@@ -2322,7 +2376,7 @@ class NativeFirebaseBridge(
                         "platform" to "android",
                         "appVersion" to appVersion,
                         "versionCode" to versionCode,
-                        "topicSubscribed" to topicOk,
+                        "topicSubscribed" to false,
                         "enabled" to true,
                         "updatedAt" to FieldValue.serverTimestamp()
                     )
@@ -2391,7 +2445,7 @@ class NativeFirebaseBridge(
                 val versionName = obj.optString("versionName", "1.0.1").trim().ifBlank { "1.0.1" }.take(32)
                 val versionCode = obj.optLong("versionCode", 2L).coerceIn(1L, 1_000_000L)
                 val updateTitle = obj.optString("updateTitle", "").trim()
-                    .ifBlank { "ધોરણ 10 ક્વિઝ v$versionName" }
+                    .ifBlank { "Quick Quiz v$versionName" }
                     .take(120)
                 val releaseNotes = obj.optString("releaseNotes", "").trim().take(1000)
                 val isMandatory = obj.optBoolean("isMandatory", false)
@@ -3923,6 +3977,11 @@ class NativeFirebaseBridge(
                 item?.toString()?.let { put(it) }
             }
         }
+        val freeMockArr = JSONArray().apply {
+            (doc.get("freeMockUsedSubjects") as? List<*>)?.forEach { item ->
+                item?.toString()?.let { put(it) }
+            }
+        }
         return JSONObject().apply {
             put("id", doc.id)
             put("userId", doc.getString("userId") ?: doc.id)
@@ -3936,6 +3995,7 @@ class NativeFirebaseBridge(
             put("totalQuizzesTaken", (doc.getLong("totalQuizzesTaken") ?: 0L).toInt())
             put("bestScorePercent", (doc.getLong("bestScorePercent") ?: 0L).toInt())
             put("unlockedSubjects", unlockedArr)
+            put("freeMockUsedSubjects", freeMockArr)
             put("paymentRequestIds", payIdsArr)
             put("createdAt", serializeTimestamp(doc.getTimestamp("createdAt")))
             put("updatedAt", serializeTimestamp(doc.getTimestamp("updatedAt")))
