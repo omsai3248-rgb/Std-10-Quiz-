@@ -12,6 +12,7 @@ import {
   FolderKanban,
   Languages,
   LogOut,
+  MessageCircle,
   Radio,
   RefreshCw,
   Send,
@@ -38,6 +39,13 @@ import {
   getSubjectDisplayName,
   resolvePaymentSubjectId,
   type AccessCode,
+  type AdminChatMessage,
+  type AdminChatThread,
+  type AdminInvite,
+  type AdminNotificationItem,
+  type AdminNotificationPrefs,
+  type AdminNotificationRoute,
+  type AdminUser,
   type AppReleaseConfig,
   type PaymentRequest,
   type StudentProfile,
@@ -47,6 +55,8 @@ import {
   buildPaymentApprovalWhatsAppHref,
   launchExternalUrl,
 } from '../utils/imageUtils';
+import { AdminChatTab } from './AdminChatTab';
+import { AdminNotificationsTab } from './AdminNotificationsTab';
 import {
   AdminAllCodesTab,
   AdminRequestsTab,
@@ -54,6 +64,15 @@ import {
   AdminUsedCodesTab,
 } from './AdminTabs';
 import { AdminUpdateSettingsTab } from './AdminUpdateSettingsTab';
+
+export type AdminTabId =
+  | 'requests'
+  | 'all_codes'
+  | 'used_codes'
+  | 'students'
+  | 'notifications'
+  | 'chat'
+  | 'updates';
 
 export interface AdminLiveAlert {
   id: string;
@@ -113,6 +132,35 @@ interface AdminPanelScreenProps {
   onDeleteCode: (code: AccessCode) => Promise<void> | void;
   onDeleteStudent: (student: StudentProfile) => Promise<void> | void;
   onNotify?: (message: string, isError?: boolean) => void;
+  // Admin Notification Center & Personal Messaging Props
+  currentAdminUid?: string;
+  currentAdminEmail?: string;
+  isSuperAdmin?: boolean;
+  adminDirectory?: AdminUser[];
+  adminInvites?: AdminInvite[];
+  adminNotifications?: AdminNotificationItem[];
+  adminChats?: AdminChatThread[];
+  notificationPrefs?: AdminNotificationPrefs | null;
+  notificationPermissionStatus?: 'granted' | 'denied' | 'default';
+  activeChatId?: string;
+  activeChatMessages?: AdminChatMessage[];
+  controlledTab?: AdminTabId;
+  onSelectTab?: (tab: AdminTabId) => void;
+  onSelectChat?: (chatId: string) => void;
+  onRequestNotificationPermission?: () => Promise<void> | void;
+  onUpdateNotificationPrefs?: (prefs: AdminNotificationPrefs) => Promise<void> | void;
+  onMarkNotificationRead?: (notifId: string) => Promise<void> | void;
+  onMarkAllNotificationsRead?: () => Promise<void> | void;
+  onDeleteNotification?: (notifId: string) => Promise<void> | void;
+  onSendChatMessage?: (params: {
+    recipientUid: string;
+    recipientName: string;
+    recipientPhotoUrl?: string;
+    text: string;
+  }) => Promise<void>;
+  onMarkChatRead?: (chatId: string) => Promise<void> | void;
+  onInviteAdmin?: (email: string, displayName: string) => Promise<void>;
+  onRemoveAdminInvite?: (email: string) => Promise<void>;
 }
 
 type PendingDeleteTarget =
@@ -162,11 +210,37 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
   onDeleteCode,
   onDeleteStudent,
   onNotify,
+  currentAdminUid = '',
+  currentAdminEmail = '',
+  isSuperAdmin = false,
+  adminDirectory = [],
+  adminInvites = [],
+  adminNotifications = [],
+  adminChats = [],
+  notificationPrefs = null,
+  notificationPermissionStatus = 'default',
+  activeChatId = '',
+  activeChatMessages = [],
+  controlledTab,
+  onSelectTab,
+  onSelectChat,
+  onRequestNotificationPermission,
+  onUpdateNotificationPrefs,
+  onMarkNotificationRead,
+  onMarkAllNotificationsRead,
+  onDeleteNotification,
+  onSendChatMessage,
+  onMarkChatRead,
+  onInviteAdmin,
+  onRemoveAdminInvite,
 }) => {
   const { lang, toggleLang, t } = useTranslation();
-  const [selectedTab, setSelectedTab] = useState<
-    'requests' | 'all_codes' | 'used_codes' | 'students' | 'updates'
-  >('requests');
+  const [internalTab, setInternalTab] = useState<AdminTabId>('requests');
+  const selectedTab = controlledTab ?? internalTab;
+  const selectTab = (tab: AdminTabId) => {
+    setInternalTab(tab);
+    onSelectTab?.(tab);
+  };
   const [showAlertsDrawer, setShowAlertsDrawer] = useState(false);
   const [zoomedScreenshotUrl, setZoomedScreenshotUrl] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<PendingDeleteTarget | null>(null);
@@ -218,6 +292,33 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
 
   const pendingCount = payments.filter((p) => p.status === 'pending').length;
   const usedCodeCount = accessCodes.filter((c) => c.status === 'used' || c.isUsed).length;
+  const unreadNotificationsCount = adminNotifications.filter(
+    (n) => !n.isRead && (!currentAdminUid || !n.readBy.includes(currentAdminUid))
+  ).length;
+  const unreadChatCount = adminChats.reduce(
+    (sum, c) => sum + (currentAdminUid ? Number(c.unreadCounts?.[currentAdminUid] ?? 0) : 0),
+    0
+  );
+
+  const handleOpenNotificationRoute = (targetRoute: AdminNotificationRoute) => {
+    switch (targetRoute) {
+      case 'admin_requests':
+        selectTab('requests');
+        break;
+      case 'admin_codes':
+        selectTab('used_codes');
+        break;
+      case 'admin_students':
+        selectTab('students');
+        break;
+      case 'admin_updates':
+        selectTab('updates');
+        break;
+      default:
+        selectTab('notifications');
+        break;
+    }
+  };
 
   return (
     <div className="min-h-screen bg-[#FAF9F5] dark:bg-[#0B1120] text-[#0F172A] dark:text-[#F8FAFC] flex flex-col">
@@ -382,35 +483,53 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
               id: 'requests' as const,
               label: `${t.tabRequests} (${pendingCount})`,
               Icon: Wallet,
+              badge: pendingCount,
+            },
+            {
+              id: 'notifications' as const,
+              label: t.tabNotifications,
+              Icon: Bell,
+              badge: unreadNotificationsCount,
+            },
+            {
+              id: 'chat' as const,
+              label: t.tabAdminChat,
+              Icon: MessageCircle,
+              badge: unreadChatCount,
             },
             {
               id: 'all_codes' as const,
               label: `${t.tabAllCodes} (${accessCodes.length})`,
               Icon: FolderKanban,
+              badge: 0,
             },
             {
               id: 'used_codes' as const,
               label: `${t.tabUsedCodes} (${usedCodeCount})`,
               Icon: UserCheck,
+              badge: 0,
             },
             {
               id: 'students' as const,
               label: `${t.tabStudents} (${students.length})`,
               Icon: Users,
+              badge: 0,
             },
             {
               id: 'updates' as const,
               label: t.tabUpdates,
               Icon: Settings,
+              badge: 0,
             },
-          ].map(({ id, label, Icon }) => {
+          ].map(({ id, label, Icon, badge }) => {
             const active = selectedTab === id;
             return (
               <button
                 key={id}
                 type="button"
-                onClick={() => setSelectedTab(id)}
-                className={`flex-1 min-w-[100px] py-2.5 px-3 flex items-center justify-center gap-1.5 text-xs sm:text-sm font-bold border-b-2 transition-colors whitespace-nowrap cursor-pointer ${
+                data-testid={`admin_tab_${id}`}
+                onClick={() => selectTab(id)}
+                className={`flex-1 min-w-[100px] min-h-[44px] py-2.5 px-3 flex items-center justify-center gap-1.5 text-xs sm:text-sm font-bold border-b-2 transition-colors whitespace-nowrap cursor-pointer ${
                   active
                     ? 'border-[#1E3A8A] text-[#1E3A8A] dark:border-[#93C5FD] dark:text-[#93C5FD]'
                     : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
@@ -418,6 +537,11 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
               >
                 <Icon className="h-4 w-4 shrink-0" />
                 <span>{label}</span>
+                {badge > 0 && (id === 'notifications' || id === 'chat') && (
+                  <span className="rounded-full bg-[#DC2626] text-white text-[10px] font-extrabold px-1.5 min-w-[18px] h-[18px] flex items-center justify-center tabular-nums">
+                    {badge}
+                  </span>
+                )}
               </button>
             );
           })}
@@ -640,6 +764,47 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
                 title: st.fullName || st.mobileNumber,
                 subtitle: `+91 ${st.mobileNumber} • ID: ${st.id || st.userId}`,
               })
+            }
+          />
+        )}
+
+        {selectedTab === 'notifications' && (
+          <AdminNotificationsTab
+            notifications={adminNotifications}
+            prefs={notificationPrefs}
+            permissionStatus={notificationPermissionStatus}
+            currentAdminUid={currentAdminUid}
+            isBusy={isBusy}
+            onRequestPermission={() => onRequestNotificationPermission?.()}
+            onUpdatePrefs={(next) => onUpdateNotificationPrefs?.(next)}
+            onMarkRead={(id) => onMarkNotificationRead?.(id)}
+            onMarkAllRead={() => onMarkAllNotificationsRead?.()}
+            onDeleteNotif={(id) => onDeleteNotification?.(id)}
+            onOpenRoute={handleOpenNotificationRoute}
+          />
+        )}
+
+        {selectedTab === 'chat' && (
+          <AdminChatTab
+            currentAdminUid={currentAdminUid}
+            currentAdminEmail={currentAdminEmail}
+            isSuperAdmin={isSuperAdmin}
+            adminDirectory={adminDirectory}
+            adminInvites={adminInvites}
+            adminChats={adminChats}
+            activeChatId={activeChatId}
+            activeMessages={activeChatMessages}
+            isBusy={isBusy}
+            onSelectChat={(cid) => onSelectChat?.(cid)}
+            onSendMessage={(p) =>
+              onSendChatMessage ? onSendChatMessage(p) : Promise.resolve()
+            }
+            onMarkChatRead={(cid) => onMarkChatRead?.(cid)}
+            onInviteAdmin={(em, dn) =>
+              onInviteAdmin ? onInviteAdmin(em, dn) : Promise.resolve()
+            }
+            onRemoveAdminInvite={(em) =>
+              onRemoveAdminInvite ? onRemoveAdminInvite(em) : Promise.resolve()
             }
           />
         )}

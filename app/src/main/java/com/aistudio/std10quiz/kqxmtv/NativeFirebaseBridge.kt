@@ -38,9 +38,11 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.Query
+import com.google.firebase.firestore.SetOptions
 import com.google.firebase.firestore.Source
 import com.google.firebase.firestore.firestoreSettings
 import com.google.firebase.firestore.persistentCacheSettings
+import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
@@ -51,6 +53,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.security.MessageDigest
 import java.security.SecureRandom
+import java.util.Collections
+import java.util.UUID
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
@@ -61,10 +65,31 @@ private const val EXPECTED_DEBUG_CERT_SHA1 = "7c60102b8ecb85ffd89e24d3c220661506
 
 class NativeFirebaseBridge(
     private val activity: ComponentActivity,
-    private val webView: WebView
+    private val webView: WebView,
+    private val onRequestPostNotificationsPermission: () -> Unit = {}
 ) {
     private val appContext = activity.applicationContext
     private val secureRandom = SecureRandom()
+    private val verifiedAdminUids: MutableSet<String> = Collections.synchronizedSet(hashSetOf())
+    @Volatile
+    private var pendingNotificationPermissionCallId: String? = null
+    @Volatile
+    private var adminDirectoryReg: ListenerRegistration? = null
+    @Volatile
+    private var adminInvitesReg: ListenerRegistration? = null
+    @Volatile
+    private var adminNotificationsReg: ListenerRegistration? = null
+    @Volatile
+    private var adminChatsReg: ListenerRegistration? = null
+    @Volatile
+    private var activeChatMessagesReg: ListenerRegistration? = null
+    @Volatile
+    private var activeChatThreadId: String = ""
+    @Volatile
+    private var initialAdminNotifsSnapshotDone = false
+    @Volatile
+    private var initialAdminChatsSnapshotDone = false
+    private val lastSeenChatMsgIds: MutableMap<String, String> = Collections.synchronizedMap(hashMapOf())
 
     private fun getOptionalStringResource(name: String): String {
         val resId = appContext.resources.getIdentifier(name, "string", appContext.packageName)
@@ -407,6 +432,8 @@ class NativeFirebaseBridge(
         stopPublicListeners()
         stopStudentListeners()
         stopAdminListeners()
+        stopAdminNotificationsAndChatListeners()
+        stopAdminChatThreadListener()
     }
 
     private fun attemptAutoSignInWhenResumed() {
@@ -433,11 +460,11 @@ class NativeFirebaseBridge(
                     val idToken = GoogleIdTokenCredential.createFrom(credential.data).idToken
                     val firebaseCred = GoogleAuthProvider.getCredential(idToken, null)
                     val signed = localAuth.signInWithCredential(firebaseCred).awaitResult()
-                    val email = signed.user?.email?.trim()?.lowercase().orEmpty()
-                    if (email != ADMIN_OWNER_EMAIL) {
+                    val signedUser = signed.user
+                    if (!verifyAuthorizedAdminSuspended(signedUser)) {
                         runCatching { localAuth.signOut() }
                     } else {
-                        emitAuthState(signed.user)
+                        emitAuthState(signedUser)
                     }
                 }
             } catch (_: Throwable) {
@@ -500,8 +527,8 @@ class NativeFirebaseBridge(
                     val googleCred = GoogleIdTokenCredential.createFrom(credential.data)
                     val authCred = GoogleAuthProvider.getCredential(googleCred.idToken, null)
                     val authResult = localAuth.signInWithCredential(authCred).awaitResult()
-                    val signedEmail = authResult.user?.email?.trim()?.lowercase().orEmpty()
-                    if (signedEmail != ADMIN_OWNER_EMAIL) {
+                    val signedUser = authResult.user
+                    if (!verifyAuthorizedAdminSuspended(signedUser)) {
                         withContext(NonCancellable) {
                             runCatching { creds.clearCredentialState(ClearCredentialStateRequest()) }
                             localAuth.signOut()
@@ -510,8 +537,8 @@ class NativeFirebaseBridge(
                         resolveCallError(callId, "ONLY_ADMIN_GOOGLE_EMAIL")
                         return@launch
                     }
-                    emitAuthState(authResult.user)
-                    resolveCallSuccess(callId, serializeUser(authResult.user)?.toString() ?: "{}")
+                    emitAuthState(signedUser)
+                    resolveCallSuccess(callId, serializeUser(signedUser)?.toString() ?: "{}")
                 } else {
                     resolveCallError(callId, "Unexpected credential type")
                 }
@@ -561,6 +588,20 @@ class NativeFirebaseBridge(
     fun signOutGoogle(callId: String) {
         activity.lifecycleScope.launch {
             withContext(NonCancellable) {
+                runCatching {
+                    val uid = auth?.currentUser?.uid
+                    val localDb = db
+                    if (!uid.isNullOrBlank() && localDb != null) {
+                        val deviceId = AdminNotificationHelper.getOrCreateDeviceId(appContext)
+                        withTimeoutOrNull(3_000L) {
+                            localDb.collection("admin_fcm_tokens").document("${uid}_$deviceId").delete().awaitResult()
+                        }
+                    }
+                }
+                AdminNotificationHelper.clearAdminSessionState(appContext)
+                stopAdminNotificationsAndChatListeners()
+                stopAdminChatThreadListener()
+                stopAdminListeners()
                 try {
                     credentialManager?.clearCredentialState(ClearCredentialStateRequest())
                 } catch (e: Throwable) {
@@ -2411,11 +2452,941 @@ class NativeFirebaseBridge(
         }
     }
 
-    private fun isCurrentUserAdmin(): Boolean {
-        val user = auth?.currentUser ?: return false
+    private fun isSuperAdminUser(user: FirebaseUser?): Boolean {
+        if (user == null) return false
         val email = user.email?.trim()?.lowercase().orEmpty()
         if (email == ADMIN_OWNER_EMAIL && user.isEmailVerified) return true
         return user.phoneNumber == ADMIN_PHONE_E164
+    }
+
+    private fun isCurrentUserAdmin(): Boolean {
+        val user = auth?.currentUser ?: return false
+        if (isSuperAdminUser(user)) return true
+        if (verifiedAdminUids.contains(user.uid)) return true
+        return AdminNotificationHelper.isAdminSessionActive(appContext) &&
+            AdminNotificationHelper.getSavedAdminUid(appContext) == user.uid
+    }
+
+    private suspend fun verifyAuthorizedAdminSuspended(user: FirebaseUser?): Boolean {
+        if (user == null) return false
+        if (isSuperAdminUser(user)) {
+            verifiedAdminUids.add(user.uid)
+            return true
+        }
+        val localDb = db ?: return false
+        val adminSnap = runCatching {
+            withTimeoutOrNull(3_500L) {
+                localDb.collection("admins").document(user.uid).get().awaitResult()
+            }
+        }.getOrNull()
+        if (adminSnap != null && adminSnap.exists() && adminSnap.getBoolean("isActive") != false) {
+            verifiedAdminUids.add(user.uid)
+            return true
+        }
+        val email = user.email?.trim()?.lowercase().orEmpty()
+        if (email.isNotBlank() && user.isEmailVerified) {
+            val inviteSnap = runCatching {
+                withTimeoutOrNull(3_500L) {
+                    localDb.collection("admin_invites").document(email).get().awaitResult()
+                }
+            }.getOrNull()
+            if (inviteSnap != null && inviteSnap.exists()) {
+                verifiedAdminUids.add(user.uid)
+                return true
+            }
+        }
+        return false
+    }
+
+    // =========================================================================
+    // Notifications, FCM Tokens, Multi-Admin & 1-to-1 Admin Personal Messaging
+    // =========================================================================
+
+    @JavascriptInterface
+    fun getNotificationPermissionStatus(): String {
+        return if (AdminNotificationHelper.hasNotificationPermission(appContext)) "granted" else "denied"
+    }
+
+    @JavascriptInterface
+    fun requestNotificationPermission(callId: String) {
+        if (AdminNotificationHelper.hasNotificationPermission(appContext)) {
+            resolveCallSuccess(callId, JSONObject.quote("granted"))
+            return
+        }
+        pendingNotificationPermissionCallId = callId
+        activity.runOnUiThread {
+            onRequestPostNotificationsPermission()
+        }
+    }
+
+    fun onNotificationPermissionResult(granted: Boolean) {
+        val status = if (granted) "granted" else "denied"
+        pendingNotificationPermissionCallId?.let { callId ->
+            pendingNotificationPermissionCallId = null
+            resolveCallSuccess(callId, JSONObject.quote(status))
+        }
+        emitToJs("window.__onNativeNotificationPermissionChanged", JSONObject.quote(status))
+    }
+
+    @JavascriptInterface
+    fun consumePendingDeepLink(): String {
+        return AdminNotificationHelper.consumePendingDeepLink(appContext)
+    }
+
+    fun emitPendingDeepLink() {
+        val raw = AdminNotificationHelper.consumePendingDeepLink(appContext)
+        if (raw != "null" && raw.isNotBlank()) {
+            emitToJs("window.__onNativeAdminDeepLink", raw)
+        }
+    }
+
+    @JavascriptInterface
+    fun syncAdminProfileAndFcmToken(callId: String) {
+        val localDb = db ?: run {
+            resolveCallError(callId, "Native Firebase is not initialized.")
+            return
+        }
+        val user = auth?.currentUser ?: run {
+            resolveCallError(callId, "Admin Google login required.")
+            return
+        }
+        activity.lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                if (!verifyAuthorizedAdminSuspended(user)) {
+                    resolveCallError(callId, "ONLY_ADMIN_GOOGLE_EMAIL")
+                    return@launch
+                }
+                val isSuper = isSuperAdminUser(user)
+                val adminRef = localDb.collection("admins").document(user.uid)
+                val existingSnap = runCatching {
+                    withTimeoutOrNull(3_000L) { adminRef.get().awaitResult() }
+                }.getOrNull()
+
+                val defaultPrefs = mapOf(
+                    "registrations" to true,
+                    "logins" to true,
+                    "payments" to true,
+                    "codeRedemptions" to true,
+                    "quizActivity" to true,
+                    "dataUpdates" to true,
+                    "adminChat" to true
+                )
+
+                val displayName = (user.displayName?.takeIf { it.isNotBlank() }
+                    ?: user.email?.substringBefore('@')
+                    ?: "Admin").take(80)
+                val email = user.email.orEmpty().trim().lowercase().take(120)
+                val photoUrl = user.photoUrl?.toString().orEmpty().take(500)
+
+                val prefsMap: Map<String, Boolean> = if (existingSnap != null && existingSnap.exists()) {
+                    val rawPrefs = existingSnap.get("notificationPrefs") as? Map<*, *>
+                    defaultPrefs.mapValues { (k, defVal) ->
+                        (rawPrefs?.get(k) as? Boolean) ?: defVal
+                    }
+                } else {
+                    defaultPrefs
+                }
+
+                if (existingSnap == null || !existingSnap.exists()) {
+                    adminRef.set(
+                        mapOf(
+                            "uid" to user.uid,
+                            "email" to email,
+                            "displayName" to displayName,
+                            "photoUrl" to photoUrl,
+                            "role" to if (isSuper) "super_admin" else "admin",
+                            "isActive" to true,
+                            "notificationPrefs" to prefsMap,
+                            "createdAt" to FieldValue.serverTimestamp(),
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    ).awaitResult()
+                } else {
+                    adminRef.update(
+                        mapOf(
+                            "email" to email,
+                            "displayName" to displayName,
+                            "photoUrl" to photoUrl,
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    ).awaitResult()
+                }
+
+                val prefsJsonObj = JSONObject()
+                prefsMap.forEach { (k, v) -> prefsJsonObj.put(k, v) }
+                AdminNotificationHelper.saveAdminSessionState(
+                    context = appContext,
+                    isAdminActive = true,
+                    adminUid = user.uid,
+                    adminEmail = email,
+                    adminName = displayName,
+                    prefsJson = prefsJsonObj.toString()
+                )
+
+                var fcmTokenRegistered = false
+                val token = runCatching {
+                    withTimeoutOrNull(4_500L) {
+                        FirebaseMessaging.getInstance().token.awaitResult()
+                    }
+                }.getOrNull().orEmpty()
+
+                if (token.length >= 20) {
+                    AdminNotificationHelper.saveFcmToken(appContext, token)
+                    val deviceId = AdminNotificationHelper.getOrCreateDeviceId(appContext)
+                    val tokenDocId = "${user.uid}_$deviceId"
+                    val deviceName = "${Build.MANUFACTURER} ${Build.MODEL}".trim().ifBlank { "Android Device" }.take(120)
+                    val appVersion = runCatching {
+                        appContext.packageManager.getPackageInfo(appContext.packageName, 0).versionName.orEmpty().ifBlank { "1.0.0" }
+                    }.getOrDefault("1.0.0").take(32)
+
+                    val tokenRef = localDb.collection("admin_fcm_tokens").document(tokenDocId)
+                    val existingToken = runCatching {
+                        withTimeoutOrNull(2_500L) { tokenRef.get().awaitResult() }
+                    }.getOrNull()
+                    val tokenPayload = hashMapOf<String, Any>(
+                        "adminUid" to user.uid,
+                        "adminEmail" to email,
+                        "adminName" to displayName,
+                        "token" to token,
+                        "platform" to "android",
+                        "deviceId" to deviceId,
+                        "deviceName" to deviceName,
+                        "appVersion" to appVersion,
+                        "enabled" to true,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                    if (existingToken == null || !existingToken.exists()) {
+                        tokenPayload["createdAt"] = FieldValue.serverTimestamp()
+                        tokenRef.set(tokenPayload).awaitResult()
+                    } else {
+                        tokenRef.set(tokenPayload, SetOptions.merge()).awaitResult()
+                    }
+                    fcmTokenRegistered = true
+                }
+
+                val res = JSONObject().apply {
+                    put("uid", user.uid)
+                    put("email", email)
+                    put("displayName", displayName)
+                    put("photoUrl", photoUrl)
+                    put("role", if (isSuper) "super_admin" else "admin")
+                    put("isActive", true)
+                    put("notificationPrefs", prefsJsonObj)
+                    put("fcmTokenRegistered", fcmTokenRegistered)
+                }
+                resolveCallSuccess(callId, res.toString())
+            } catch (e: Exception) {
+                Log.w("NativeFirebase", "syncAdminProfileAndFcmToken failed", e)
+                resolveCallError(callId, e.localizedMessage ?: "Failed to sync Admin profile & FCM token")
+            }
+        }
+    }
+
+    @JavascriptInterface
+    fun updateAdminNotificationPrefs(callId: String, prefsJson: String) {
+        val localDb = db ?: run {
+            resolveCallError(callId, "Native Firebase is not initialized.")
+            return
+        }
+        val user = auth?.currentUser ?: run {
+            resolveCallError(callId, "Authentication session not ready.")
+            return
+        }
+        activity.lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                if (!verifyAuthorizedAdminSuspended(user)) {
+                    resolveCallError(callId, "Admin authorization required.")
+                    return@launch
+                }
+                val obj = JSONObject(prefsJson)
+                val normalized = mapOf(
+                    "registrations" to obj.optBoolean("registrations", true),
+                    "logins" to obj.optBoolean("logins", true),
+                    "payments" to obj.optBoolean("payments", true),
+                    "codeRedemptions" to obj.optBoolean("codeRedemptions", true),
+                    "quizActivity" to obj.optBoolean("quizActivity", true),
+                    "dataUpdates" to obj.optBoolean("dataUpdates", true),
+                    "adminChat" to obj.optBoolean("adminChat", true)
+                )
+                localDb.collection("admins").document(user.uid).update(
+                    mapOf(
+                        "notificationPrefs" to normalized,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                ).awaitResult()
+                val cacheObj = JSONObject()
+                normalized.forEach { (k, v) -> cacheObj.put(k, v) }
+                AdminNotificationHelper.updateNotificationPrefsJson(appContext, cacheObj.toString())
+                resolveCallSuccess(callId, "true")
+            } catch (e: Exception) {
+                resolveCallError(callId, e.localizedMessage ?: "Failed to save preferences")
+            }
+        }
+    }
+
+    @JavascriptInterface
+    fun addAdminInvite(callId: String, payloadJson: String) {
+        val localDb = db ?: run {
+            resolveCallError(callId, "Native Firebase is not initialized.")
+            return
+        }
+        val user = auth?.currentUser ?: run {
+            resolveCallError(callId, "Authentication session not ready.")
+            return
+        }
+        activity.lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                if (!isSuperAdminUser(user)) {
+                    resolveCallError(callId, "Only Super Admin can invite other Admins.")
+                    return@launch
+                }
+                val obj = JSONObject(payloadJson)
+                val email = obj.getString("email").trim().lowercase().take(120)
+                val displayName = obj.optString("displayName", email.substringBefore('@')).trim().ifBlank { "Co-Admin" }.take(80)
+                if (!Regex("^[a-z0-9._%+\\-]+@[a-z0-9.\\-]+\\.[a-z]{2,}$").matches(email)) {
+                    resolveCallError(callId, "Invalid email address")
+                    return@launch
+                }
+                localDb.collection("admin_invites").document(email).set(
+                    mapOf(
+                        "email" to email,
+                        "displayName" to displayName,
+                        "addedByUid" to user.uid,
+                        "createdAt" to FieldValue.serverTimestamp()
+                    )
+                ).awaitResult()
+                resolveCallSuccess(callId, "true")
+            } catch (e: Exception) {
+                resolveCallError(callId, e.localizedMessage ?: "Failed to invite Admin")
+            }
+        }
+    }
+
+    @JavascriptInterface
+    fun removeAdminInvite(callId: String, emailRaw: String) {
+        val localDb = db ?: run {
+            resolveCallError(callId, "Native Firebase is not initialized.")
+            return
+        }
+        val user = auth?.currentUser ?: run {
+            resolveCallError(callId, "Authentication session not ready.")
+            return
+        }
+        activity.lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                if (!isSuperAdminUser(user)) {
+                    resolveCallError(callId, "Only Super Admin can remove Admins.")
+                    return@launch
+                }
+                val email = emailRaw.trim().lowercase()
+                localDb.collection("admin_invites").document(email).delete().awaitResult()
+                resolveCallSuccess(callId, "true")
+            } catch (e: Exception) {
+                resolveCallError(callId, e.localizedMessage ?: "Failed to remove Admin invite")
+            }
+        }
+    }
+
+    @JavascriptInterface
+    fun logAdminNotificationEvent(callId: String, payloadJson: String) {
+        val localDb = db ?: run {
+            resolveCallSuccess(callId, "true")
+            return
+        }
+        activity.lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val obj = JSONObject(payloadJson)
+                val rawId = obj.optString("notifId", "").trim().replace(Regex("[^a-zA-Z0-9_-]"), "_").take(120)
+                val notifId = rawId.ifBlank { "evt_${UUID.randomUUID().toString().replace("-", "").take(20)}" }
+                val category = obj.optString("category", "data_update")
+                val validCategory = if (category in listOf("registration", "login", "payment", "code_redeem", "quiz_activity", "data_update", "admin_chat")) category else "data_update"
+                val targetRoute = obj.optString("targetRoute", "admin_notifications")
+                val validRoute = if (targetRoute in listOf("admin_requests", "admin_codes", "admin_students", "admin_updates", "admin_notifications")) targetRoute else "admin_notifications"
+                val ref = localDb.collection("admin_notifications").document(notifId)
+                val existing = runCatching {
+                    withTimeoutOrNull(2_000L) { ref.get().awaitResult() }
+                }.getOrNull()
+                if (existing == null || !existing.exists()) {
+                    ref.set(
+                        mapOf(
+                            "category" to validCategory,
+                            "title" to obj.optString("title", "નવી સૂચના").take(120),
+                            "body" to obj.optString("body", "").ifBlank { "એપ અપડેટ" }.take(400),
+                            "actorName" to obj.optString("actorName", "").take(80),
+                            "actorMobile" to obj.optString("actorMobile", "").take(15),
+                            "actorId" to obj.optString("actorId", "").take(128),
+                            "targetRoute" to validRoute,
+                            "referenceId" to obj.optString("referenceId", "").take(128),
+                            "isRead" to false,
+                            "readBy" to emptyList<String>(),
+                            "pushDispatched" to false,
+                            "createdAt" to FieldValue.serverTimestamp(),
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    ).awaitResult()
+                }
+                resolveCallSuccess(callId, JSONObject.quote(notifId))
+            } catch (_: Exception) {
+                resolveCallSuccess(callId, "\"skipped\"")
+            }
+        }
+    }
+
+    @JavascriptInterface
+    fun startAdminNotificationsAndChatListeners() {
+        val localDb = db ?: return
+        val user = auth?.currentUser ?: return
+        activity.runOnUiThread {
+            if (!isCurrentUserAdmin()) return@runOnUiThread
+            stopAdminNotificationsAndChatListeners()
+            initialAdminNotifsSnapshotDone = false
+            initialAdminChatsSnapshotDone = false
+
+            adminDirectoryReg = localDb.collection("admins")
+                .addSnapshotListener { snap, error ->
+                    if (error != null) return@addSnapshotListener
+                    val arr = JSONArray()
+                    snap?.documents?.forEach { arr.put(serializeAdminUser(it)) }
+                    emitToJs("window.__onNativeAdminDirectory", arr.toString())
+                }
+
+            if (isSuperAdminUser(user)) {
+                adminInvitesReg = localDb.collection("admin_invites")
+                    .orderBy("createdAt", Query.Direction.DESCENDING)
+                    .addSnapshotListener { snap, error ->
+                        if (error != null) return@addSnapshotListener
+                        val arr = JSONArray()
+                        snap?.documents?.forEach { doc ->
+                            arr.put(
+                                JSONObject().apply {
+                                    put("email", doc.getString("email") ?: doc.id)
+                                    put("displayName", doc.getString("displayName").orEmpty())
+                                    put("addedByUid", doc.getString("addedByUid").orEmpty())
+                                    put("createdAt", serializeTimestamp(doc.getTimestamp("createdAt")))
+                                }
+                            )
+                        }
+                        emitToJs("window.__onNativeAdminInvites", arr.toString())
+                    }
+            }
+
+            adminNotificationsReg = localDb.collection("admin_notifications")
+                .orderBy("createdAt", Query.Direction.DESCENDING)
+                .limit(80)
+                .addSnapshotListener { snap, error ->
+                    if (error != null || snap == null) return@addSnapshotListener
+                    val arr = JSONArray()
+                    snap.documents.forEach { arr.put(serializeAdminNotification(it)) }
+                    val jsonStr = arr.toString()
+                    saveAdminListBackup("admin_notifications", jsonStr)
+                    emitToJs("window.__onNativeAdminNotifications", jsonStr)
+
+                    if (initialAdminNotifsSnapshotDone && !snap.metadata.isFromCache) {
+                        snap.documentChanges.forEach { change ->
+                            if (change.type == com.google.firebase.firestore.DocumentChange.Type.ADDED) {
+                                val doc = change.document
+                                val isRead = doc.getBoolean("isRead") == true
+                                if (!isRead) {
+                                    AdminNotificationHelper.showAdminActivityNotification(
+                                        context = appContext,
+                                        notifId = doc.id,
+                                        category = doc.getString("category").orEmpty(),
+                                        title = doc.getString("title").orEmpty(),
+                                        body = doc.getString("body").orEmpty(),
+                                        targetRoute = doc.getString("targetRoute").orEmpty(),
+                                        referenceId = doc.getString("referenceId").orEmpty()
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    if (!snap.metadata.isFromCache) {
+                        initialAdminNotifsSnapshotDone = true
+                    }
+                }
+
+            adminChatsReg = localDb.collection("admin_chats")
+                .whereArrayContains("participants", user.uid)
+                .orderBy("lastMessageAt", Query.Direction.DESCENDING)
+                .limit(40)
+                .addSnapshotListener { snap, error ->
+                    if (error != null || snap == null) return@addSnapshotListener
+                    val arr = JSONArray()
+                    snap.documents.forEach { doc ->
+                        arr.put(serializeAdminChat(doc))
+                        val chatId = doc.id
+                        val lastSender = doc.getString("lastMessageSenderUid").orEmpty()
+                        val lastStatus = doc.getString("lastMessageStatus").orEmpty()
+                        val lastAtMs = doc.getTimestamp("lastMessageAt")?.toDate()?.time ?: 0L
+                        val sig = "${lastSender}_$lastAtMs"
+                        val prevSig = lastSeenChatMsgIds[chatId]
+                        if (initialAdminChatsSnapshotDone && prevSig != sig && lastSender.isNotBlank() && lastSender != user.uid) {
+                            val lastText = doc.getString("lastMessageText").orEmpty()
+                            val senderName = doc.getString("lastMessageSenderName").orEmpty().ifBlank { "Admin" }
+                            val rawMeta = doc.get("participantMeta") as? Map<*, *>
+                            val senderMeta = rawMeta?.get(lastSender) as? Map<*, *>
+                            val senderPhoto = senderMeta?.get("photoUrl")?.toString().orEmpty()
+                            AdminNotificationHelper.showAdminChatNotification(
+                                context = appContext,
+                                chatId = chatId,
+                                messageId = "${chatId}_$lastAtMs",
+                                senderUid = lastSender,
+                                senderName = senderName,
+                                senderPhotoUrl = senderPhoto,
+                                text = lastText,
+                                timestampMs = lastAtMs
+                            )
+                            if (lastStatus == "sent") {
+                                markIncomingChatDeliveredInternal(localDb, chatId, user.uid)
+                            }
+                        }
+                        lastSeenChatMsgIds[chatId] = sig
+                    }
+                    emitToJs("window.__onNativeAdminChats", arr.toString())
+                    if (!snap.metadata.isFromCache) {
+                        initialAdminChatsSnapshotDone = true
+                    }
+                }
+        }
+    }
+
+    private fun markIncomingChatDeliveredInternal(localDb: FirebaseFirestore, chatId: String, myUid: String) {
+        activity.lifecycleScope.launch(Dispatchers.IO) {
+            runCatching {
+                val pending = localDb.collection("admin_chats").document(chatId)
+                    .collection("messages")
+                    .whereArrayContains("participantUids", myUid)
+                    .whereEqualTo("recipientUid", myUid)
+                    .whereEqualTo("status", "sent")
+                    .limit(20)
+                    .get()
+                    .awaitResult()
+                if (pending.isEmpty) return@runCatching
+                val batch = localDb.batch()
+                val now = FieldValue.serverTimestamp()
+                pending.documents.forEach { doc ->
+                    batch.update(
+                        doc.reference,
+                        mapOf("status" to "delivered", "deliveredAt" to now, "updatedAt" to now)
+                    )
+                }
+                batch.update(
+                    localDb.collection("admin_chats").document(chatId),
+                    mapOf("lastMessageStatus" to "delivered", "updatedAt" to now)
+                )
+                batch.commit().awaitResult()
+            }
+        }
+    }
+
+    @JavascriptInterface
+    fun stopAdminNotificationsAndChatListeners() {
+        activity.runOnUiThread {
+            adminDirectoryReg?.remove()
+            adminDirectoryReg = null
+            adminInvitesReg?.remove()
+            adminInvitesReg = null
+            adminNotificationsReg?.remove()
+            adminNotificationsReg = null
+            adminChatsReg?.remove()
+            adminChatsReg = null
+        }
+    }
+
+    @JavascriptInterface
+    fun markAdminNotificationRead(callId: String, notifId: String) {
+        val localDb = db ?: run {
+            resolveCallError(callId, "Native Firebase is not initialized.")
+            return
+        }
+        val user = auth?.currentUser ?: run {
+            resolveCallError(callId, "Authentication session not ready.")
+            return
+        }
+        activity.lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val ref = localDb.collection("admin_notifications").document(notifId.trim())
+                ref.update(
+                    mapOf(
+                        "isRead" to true,
+                        "readBy" to FieldValue.arrayUnion(user.uid),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                ).awaitResult()
+                resolveCallSuccess(callId, "true")
+            } catch (e: Exception) {
+                resolveCallError(callId, e.localizedMessage ?: "Failed to mark read")
+            }
+        }
+    }
+
+    @JavascriptInterface
+    fun markAllAdminNotificationsRead(callId: String) {
+        val localDb = db ?: run {
+            resolveCallError(callId, "Native Firebase is not initialized.")
+            return
+        }
+        val user = auth?.currentUser ?: run {
+            resolveCallError(callId, "Authentication session not ready.")
+            return
+        }
+        activity.lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val unreadSnap = localDb.collection("admin_notifications")
+                    .whereEqualTo("isRead", false)
+                    .limit(100)
+                    .get()
+                    .awaitResult()
+                if (!unreadSnap.isEmpty) {
+                    val batch = localDb.batch()
+                    val now = FieldValue.serverTimestamp()
+                    unreadSnap.documents.forEach { doc ->
+                        batch.update(
+                            doc.reference,
+                            mapOf(
+                                "isRead" to true,
+                                "readBy" to FieldValue.arrayUnion(user.uid),
+                                "updatedAt" to now
+                            )
+                        )
+                    }
+                    batch.commit().awaitResult()
+                }
+                resolveCallSuccess(callId, "true")
+            } catch (e: Exception) {
+                resolveCallError(callId, e.localizedMessage ?: "Failed to mark all read")
+            }
+        }
+    }
+
+    @JavascriptInterface
+    fun deleteAdminNotification(callId: String, notifId: String) {
+        val localDb = db ?: run {
+            resolveCallError(callId, "Native Firebase is not initialized.")
+            return
+        }
+        activity.lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                if (!isCurrentUserAdmin()) {
+                    resolveCallError(callId, "Admin authorization required.")
+                    return@launch
+                }
+                localDb.collection("admin_notifications").document(notifId.trim()).delete().awaitResult()
+                resolveCallSuccess(callId, "true")
+            } catch (e: Exception) {
+                resolveCallError(callId, e.localizedMessage ?: "Failed to delete notification")
+            }
+        }
+    }
+
+    @JavascriptInterface
+    fun startAdminChatThreadListener(chatId: String) {
+        val localDb = db ?: return
+        val user = auth?.currentUser ?: return
+        val cleanChatId = chatId.trim()
+        activity.runOnUiThread {
+            if (cleanChatId.isBlank()) {
+                stopAdminChatThreadListener()
+                emitToJs("window.__onNativeAdminChatMessages", "[]")
+                return@runOnUiThread
+            }
+            if (activeChatThreadId == cleanChatId && activeChatMessagesReg != null) {
+                return@runOnUiThread
+            }
+            stopAdminChatThreadListener()
+            activeChatThreadId = cleanChatId
+            activeChatMessagesReg = localDb.collection("admin_chats").document(cleanChatId)
+                .collection("messages")
+                .whereArrayContains("participantUids", user.uid)
+                .orderBy("createdAt", Query.Direction.ASCENDING)
+                .limit(120)
+                .addSnapshotListener { snap, error ->
+                    if (error != null || snap == null) return@addSnapshotListener
+                    val arr = JSONArray()
+                    snap.documents.forEach { arr.put(serializeAdminChatMessage(it)) }
+                    emitToJs("window.__onNativeAdminChatMessages", arr.toString())
+                }
+        }
+    }
+
+    @JavascriptInterface
+    fun stopAdminChatThreadListener() {
+        activity.runOnUiThread {
+            activeChatMessagesReg?.remove()
+            activeChatMessagesReg = null
+            activeChatThreadId = ""
+        }
+    }
+
+    @JavascriptInterface
+    fun sendAdminChatMessage(callId: String, payloadJson: String) {
+        val localDb = db ?: run {
+            resolveCallError(callId, "Native Firebase is not initialized.")
+            return
+        }
+        val user = auth?.currentUser ?: run {
+            resolveCallError(callId, "Authentication session not ready.")
+            return
+        }
+        activity.lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                if (!verifyAuthorizedAdminSuspended(user)) {
+                    resolveCallError(callId, "Admin authorization required.")
+                    return@launch
+                }
+                val obj = JSONObject(payloadJson)
+                val recipientUid = obj.getString("recipientUid").trim()
+                val recipientName = obj.optString("recipientName", "Admin").trim().take(80)
+                val recipientPhoto = obj.optString("recipientPhotoUrl", "").trim().take(500)
+                val text = obj.getString("text").trim().take(2000)
+                if (recipientUid.isBlank() || recipientUid == user.uid || text.isBlank()) {
+                    resolveCallError(callId, "Invalid recipient or empty message")
+                    return@launch
+                }
+                val participants = listOf(user.uid, recipientUid).sorted()
+                val chatId = participants.joinToString("__").replace(Regex("[^a-zA-Z0-9_-]"), "_")
+                val myName = (user.displayName?.takeIf { it.isNotBlank() } ?: user.email?.substringBefore('@') ?: "Admin").take(80)
+                val myPhoto = user.photoUrl?.toString().orEmpty().take(500)
+                val chatRef = localDb.collection("admin_chats").document(chatId)
+                val msgId = "msg_${System.currentTimeMillis()}_${UUID.randomUUID().toString().replace("-", "").take(8)}"
+                val msgRef = chatRef.collection("messages").document(msgId)
+
+                val existingChat = runCatching {
+                    withTimeoutOrNull(2_500L) { chatRef.get().awaitResult() }
+                }.getOrNull()
+                val existingUnreadMap = (existingChat?.get("unreadCounts") as? Map<*, *>)
+                val recipientUnread = ((existingUnreadMap?.get(recipientUid) as? Number)?.toLong() ?: 0L) + 1L
+
+                val now = FieldValue.serverTimestamp()
+                val participantMeta = mapOf(
+                    user.uid to mapOf("displayName" to myName, "photoUrl" to myPhoto),
+                    recipientUid to mapOf("displayName" to recipientName, "photoUrl" to recipientPhoto)
+                )
+                val chatPayload = hashMapOf<String, Any>(
+                    "participants" to participants,
+                    "participantMeta" to participantMeta,
+                    "lastMessageText" to text.take(500),
+                    "lastMessageSenderUid" to user.uid,
+                    "lastMessageSenderName" to myName,
+                    "lastMessageStatus" to "sent",
+                    "lastMessageAt" to now,
+                    "unreadCounts" to mapOf(user.uid to 0L, recipientUid to recipientUnread),
+                    "updatedAt" to now
+                )
+                if (existingChat == null || !existingChat.exists()) {
+                    chatPayload["createdAt"] = now
+                    chatRef.set(chatPayload).awaitResult()
+                } else {
+                    chatRef.update(chatPayload).awaitResult()
+                }
+
+                msgRef.set(
+                    mapOf(
+                        "chatId" to chatId,
+                        "senderUid" to user.uid,
+                        "senderName" to myName,
+                        "senderPhotoUrl" to myPhoto,
+                        "recipientUid" to recipientUid,
+                        "participantUids" to participants,
+                        "text" to text,
+                        "status" to "sent",
+                        "createdAt" to now,
+                        "updatedAt" to now
+                    )
+                ).awaitResult()
+
+                val res = JSONObject().apply {
+                    put("chatId", chatId)
+                    put("messageId", msgId)
+                }
+                resolveCallSuccess(callId, res.toString())
+            } catch (e: Exception) {
+                resolveCallError(callId, e.localizedMessage ?: "Failed to send message")
+            }
+        }
+    }
+
+    @JavascriptInterface
+    fun markChatMessagesRead(callId: String, chatIdRaw: String) {
+        val localDb = db ?: run {
+            resolveCallSuccess(callId, "true")
+            return
+        }
+        val user = auth?.currentUser ?: run {
+            resolveCallSuccess(callId, "true")
+            return
+        }
+        val chatId = chatIdRaw.trim()
+        activity.lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val chatRef = localDb.collection("admin_chats").document(chatId)
+                val msgsSnap = chatRef.collection("messages")
+                    .whereArrayContains("participantUids", user.uid)
+                    .whereEqualTo("recipientUid", user.uid)
+                    .limit(100)
+                    .get()
+                    .awaitResult()
+
+                val batch = localDb.batch()
+                val now = FieldValue.serverTimestamp()
+                var hasChanges = false
+                msgsSnap.documents.forEach { doc ->
+                    val status = doc.getString("status").orEmpty()
+                    if (status != "read") {
+                        hasChanges = true
+                        val updates = hashMapOf<String, Any>(
+                            "status" to "read",
+                            "readAt" to now,
+                            "updatedAt" to now
+                        )
+                        if (doc.get("deliveredAt") == null) {
+                            updates["deliveredAt"] = now
+                        }
+                        batch.update(doc.reference, updates)
+                    }
+                }
+
+                val chatSnap = runCatching { chatRef.get().awaitResult() }.getOrNull()
+                if (chatSnap != null && chatSnap.exists()) {
+                    val unreadMap = (chatSnap.get("unreadCounts") as? Map<*, *>)
+                    val nextUnread = hashMapOf<String, Long>()
+                    unreadMap?.forEach { (k, v) ->
+                        k?.toString()?.let { uid ->
+                            nextUnread[uid] = (v as? Number)?.toLong() ?: 0L
+                        }
+                    }
+                    val hadUnread = (nextUnread[user.uid] ?: 0L) > 0L
+                    nextUnread[user.uid] = 0L
+                    val lastSender = chatSnap.getString("lastMessageSenderUid").orEmpty()
+                    val chatUpdates = hashMapOf<String, Any>(
+                        "unreadCounts" to nextUnread,
+                        "updatedAt" to now
+                    )
+                    if (lastSender != user.uid && chatSnap.getString("lastMessageStatus") != "read") {
+                        chatUpdates["lastMessageStatus"] = "read"
+                        hasChanges = true
+                    }
+                    if (hadUnread || hasChanges) {
+                        batch.update(chatRef, chatUpdates)
+                        hasChanges = true
+                    }
+                }
+                if (hasChanges) {
+                    batch.commit().awaitResult()
+                }
+                resolveCallSuccess(callId, "true")
+            } catch (_: Exception) {
+                resolveCallSuccess(callId, "false")
+            }
+        }
+    }
+
+    private fun serializeAdminUser(doc: DocumentSnapshot): JSONObject {
+        val rawPrefs = doc.get("notificationPrefs") as? Map<*, *>
+        val prefsObj = JSONObject().apply {
+            put("registrations", (rawPrefs?.get("registrations") as? Boolean) ?: true)
+            put("logins", (rawPrefs?.get("logins") as? Boolean) ?: true)
+            put("payments", (rawPrefs?.get("payments") as? Boolean) ?: true)
+            put("codeRedemptions", (rawPrefs?.get("codeRedemptions") as? Boolean) ?: true)
+            put("quizActivity", (rawPrefs?.get("quizActivity") as? Boolean) ?: true)
+            put("dataUpdates", (rawPrefs?.get("dataUpdates") as? Boolean) ?: true)
+            put("adminChat", (rawPrefs?.get("adminChat") as? Boolean) ?: true)
+        }
+        return JSONObject().apply {
+            put("uid", doc.getString("uid") ?: doc.id)
+            put("email", doc.getString("email").orEmpty())
+            put("displayName", doc.getString("displayName").orEmpty())
+            put("photoUrl", doc.getString("photoUrl").orEmpty())
+            put("role", doc.getString("role") ?: "admin")
+            put("isActive", doc.getBoolean("isActive") != false)
+            put("notificationPrefs", prefsObj)
+            put("createdAt", serializeTimestamp(doc.getTimestamp("createdAt")))
+            put("updatedAt", serializeTimestamp(doc.getTimestamp("updatedAt")))
+        }
+    }
+
+    private fun serializeAdminNotification(doc: DocumentSnapshot): JSONObject {
+        val readByArr = JSONArray().apply {
+            (doc.get("readBy") as? List<*>)?.forEach { item ->
+                item?.toString()?.let { put(it) }
+            }
+        }
+        return JSONObject().apply {
+            put("id", doc.id)
+            put("category", doc.getString("category") ?: "data_update")
+            put("title", doc.getString("title").orEmpty())
+            put("body", doc.getString("body").orEmpty())
+            put("actorName", doc.getString("actorName").orEmpty())
+            put("actorMobile", doc.getString("actorMobile").orEmpty())
+            put("actorId", doc.getString("actorId").orEmpty())
+            put("targetRoute", doc.getString("targetRoute") ?: "admin_notifications")
+            put("referenceId", doc.getString("referenceId").orEmpty())
+            put("isRead", doc.getBoolean("isRead") == true)
+            put("readBy", readByArr)
+            put("pushDispatched", doc.getBoolean("pushDispatched") == true)
+            put("createdAt", serializeTimestamp(doc.getTimestamp("createdAt")))
+            put("updatedAt", serializeTimestamp(doc.getTimestamp("updatedAt")))
+        }
+    }
+
+    private fun serializeAdminChat(doc: DocumentSnapshot): JSONObject {
+        val participantsArr = JSONArray().apply {
+            (doc.get("participants") as? List<*>)?.forEach { item ->
+                item?.toString()?.let { put(it) }
+            }
+        }
+        val unreadObj = JSONObject()
+        (doc.get("unreadCounts") as? Map<*, *>)?.forEach { (k, v) ->
+            k?.toString()?.let { unreadObj.put(it, (v as? Number)?.toInt() ?: 0) }
+        }
+        val metaObj = JSONObject()
+        (doc.get("participantMeta") as? Map<*, *>)?.forEach { (k, v) ->
+            val key = k?.toString() ?: return@forEach
+            val valMap = v as? Map<*, *> ?: return@forEach
+            metaObj.put(
+                key,
+                JSONObject().apply {
+                    put("displayName", valMap["displayName"]?.toString().orEmpty())
+                    put("photoUrl", valMap["photoUrl"]?.toString().orEmpty())
+                }
+            )
+        }
+        return JSONObject().apply {
+            put("id", doc.id)
+            put("participants", participantsArr)
+            put("participantMeta", metaObj)
+            put("lastMessageText", doc.getString("lastMessageText").orEmpty())
+            put("lastMessageSenderUid", doc.getString("lastMessageSenderUid").orEmpty())
+            put("lastMessageSenderName", doc.getString("lastMessageSenderName").orEmpty())
+            put("lastMessageStatus", doc.getString("lastMessageStatus") ?: "sent")
+            put("lastMessageAt", serializeTimestamp(doc.getTimestamp("lastMessageAt")))
+            put("unreadCounts", unreadObj)
+            put("createdAt", serializeTimestamp(doc.getTimestamp("createdAt")))
+            put("updatedAt", serializeTimestamp(doc.getTimestamp("updatedAt")))
+        }
+    }
+
+    private fun serializeAdminChatMessage(doc: DocumentSnapshot): JSONObject {
+        val partArr = JSONArray().apply {
+            (doc.get("participantUids") as? List<*>)?.forEach { item ->
+                item?.toString()?.let { put(it) }
+            }
+        }
+        return JSONObject().apply {
+            put("id", doc.id)
+            put("chatId", doc.getString("chatId").orEmpty())
+            put("senderUid", doc.getString("senderUid").orEmpty())
+            put("senderName", doc.getString("senderName").orEmpty())
+            put("senderPhotoUrl", doc.getString("senderPhotoUrl").orEmpty())
+            put("recipientUid", doc.getString("recipientUid").orEmpty())
+            put("participantUids", partArr)
+            put("text", doc.getString("text").orEmpty())
+            put("status", doc.getString("status") ?: "sent")
+            put("deliveredAt", serializeTimestamp(doc.getTimestamp("deliveredAt")))
+            put("readAt", serializeTimestamp(doc.getTimestamp("readAt")))
+            put("createdAt", serializeTimestamp(doc.getTimestamp("createdAt")))
+            put("updatedAt", serializeTimestamp(doc.getTimestamp("updatedAt")))
+        }
     }
 
     private fun generate8CharCode(): String = buildString(8) {
@@ -2437,6 +3408,7 @@ class NativeFirebaseBridge(
             put("phoneNumber", user.phoneNumber ?: "")
             put("emailVerified", user.isEmailVerified)
             put("displayName", user.displayName ?: "")
+            put("photoUrl", user.photoUrl?.toString() ?: "")
         }
     }
 

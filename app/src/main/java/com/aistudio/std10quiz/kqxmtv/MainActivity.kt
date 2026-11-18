@@ -60,13 +60,32 @@ private const val APP_HOST = "appassets.androidplatform.net"
 private const val START_URL = "https://$APP_HOST/index.html"
 
 class MainActivity : ComponentActivity() {
+    private var activeBridgeRef: NativeFirebaseBridge? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        AdminNotificationHelper.ensureChannels(this)
+        AdminNotificationHelper.extractDeepLinkFromIntent(intent)?.let { deepLink ->
+            AdminNotificationHelper.savePendingDeepLink(this, deepLink)
+        }
         setContent {
             Std10QuizTheme {
-                PortalWebContainer()
+                PortalWebContainer(
+                    onBridgeChanged = { bridge ->
+                        activeBridgeRef = bridge
+                    }
+                )
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        AdminNotificationHelper.extractDeepLinkFromIntent(intent)?.let { deepLink ->
+            AdminNotificationHelper.savePendingDeepLink(this, deepLink)
+            activeBridgeRef?.emitPendingDeepLink()
         }
     }
 }
@@ -361,7 +380,9 @@ private tailrec fun Context.findComponentActivity(): ComponentActivity? = when (
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-private fun PortalWebContainer() {
+private fun PortalWebContainer(
+    onBridgeChanged: (NativeFirebaseBridge?) -> Unit = {}
+) {
     val context = LocalContext.current
     val activity = remember(context) { context.findComponentActivity() }
     if (activity == null) return
@@ -371,6 +392,12 @@ private fun PortalWebContainer() {
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
     var firebaseBridgeRef by remember { mutableStateOf<NativeFirebaseBridge?>(null) }
     var pendingFileCallback by remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
+
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        firebaseBridgeRef?.onNotificationPermissionResult(granted)
+    }
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
@@ -389,6 +416,7 @@ private fun PortalWebContainer() {
             pendingFileCallback = null
             firebaseBridgeRef?.detach()
             firebaseBridgeRef = null
+            onBridgeChanged(null)
             webViewRef?.destroy()
             webViewRef = null
         }
@@ -422,8 +450,19 @@ private fun PortalWebContainer() {
 
                         addJavascriptInterface(AndroidExportBridge(activity), "AndroidBridge")
                         runCatching {
-                            val firebaseBridge = NativeFirebaseBridge(activity, this)
+                            val firebaseBridge = NativeFirebaseBridge(
+                                activity = activity,
+                                webView = this,
+                                onRequestPostNotificationsPermission = {
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                        notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                                    } else {
+                                        firebaseBridgeRef?.onNotificationPermissionResult(true)
+                                    }
+                                }
+                            )
                             firebaseBridgeRef = firebaseBridge
+                            onBridgeChanged(firebaseBridge)
                             addJavascriptInterface(firebaseBridge, "AndroidFirebaseBridge")
                             firebaseBridge.attach()
                         }.onFailure { err ->

@@ -282,3 +282,124 @@ export function studentHasAccessToSubject(student: StudentProfile, subjectId: Su
   }
   return false;
 }
+
+export type AdminNotificationCategory =
+  | 'registration'
+  | 'login'
+  | 'payment'
+  | 'code_redeem'
+  | 'quiz_activity'
+  | 'data_update'
+  | 'admin_chat';
+
+export type AdminNotificationRoute =
+  | 'admin_requests'
+  | 'admin_codes'
+  | 'admin_students'
+  | 'admin_updates'
+  | 'admin_notifications';
+
+export type AdminDeepLinkRoute = AdminNotificationRoute | 'admin_chat';
+
+export interface AdminNotificationPrefs {
+  registrations: boolean;
+  logins: boolean;
+  payments: boolean;
+  codeRedemptions: boolean;
+  quizActivity: boolean;
+  dataUpdates: boolean;
+  adminChat: boolean;
+}
+
+export const DEFAULT_ADMIN_NOTIFICATION_PREFS: AdminNotificationPrefs = {
+  registrations: true,
+  logins: true,
+  payments: true,
+  codeRedemptions: true,
+  quizActivity: true,
+  dataUpdates: true,
+  adminChat: true,
+};
+
+export interface AdminUser {
+  uid: string;
+  email: string;
+  displayName: string;
+  photoUrl: string;
+  role: 'super_admin' | 'admin';
+  isActive: boolean;
+  notificationPrefs: AdminNotificationPrefs;
+  fcmTokenRegistered?: boolean;
+  createdAt: Timestamp | null;
+  updatedAt: Timestamp | null;
+}
+
+export interface AdminInvite {
+  email: string;
+  displayName: string;
+  addedByUid: string;
+  createdAt: Timestamp | null;
+}
+
+export interface AdminNotificationItem {
+  id: string;
+  category: AdminNotificationCategory;
+  title: string;
+  body: string;
+  actorName: string;
+  actorMobile: string;
+  actorId: string;
+  targetRoute: AdminNotificationRoute;
+  referenceId: string;
+  isRead: boolean;
+  readBy: string[];
+  pushDispatched: boolean;
+  createdAt: Timestamp | null;
+  updatedAt: Timestamp | null;
+}
+
+export type ChatMessageStatus = 'sent' | 'delivered' | 'read';
+
+export interface AdminChatParticipantMeta {
+  displayName: string;
+  photoUrl: string;
+}
+
+export interface AdminChatThread {
+  id: string;
+  participants: string[];
+  participantMeta: Record<string, AdminChatParticipantMeta>;
+  lastMessageText: string;
+  lastMessageSenderUid: string;
+  lastMessageSenderName: string;
+  lastMessageStatus: ChatMessageStatus;
+  lastMessageAt: Timestamp | null;
+  unreadCounts: Record<string, number>;
+  createdAt: Timestamp | null;
+  updatedAt: Timestamp | null;
+}
+
+export interface AdminChatMessage {
+  id: string;
+  chatId: string;
+  senderUid: string;
+  senderName: string;
+  senderPhotoUrl: string;
+  recipientUid: string;
+  participantUids: string[];
+  text: string;
+  status: ChatMessageStatus;
+  deliveredAt: Timestamp | null;
+  readAt: Timestamp | null;
+  createdAt: Timestamp | null;
+  updatedAt: Timestamp | null;
+}
+
+export interface AdminDeepLinkPayload {
+  targetRoute: AdminDeepLinkRoute;
+  chatId?: string;
+  senderUid?: string;
+  notifId?: string;
+  referenceId?: string;
+}
+

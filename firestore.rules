@@ -22,6 +22,10 @@ service cloud.firestore {
       return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    function isValidEmailDocId(id) {
+      return id is string && id.size() >= 5 && id.size() <= 120 && id.matches('^[a-z0-9._%+\\-]+@[a-z0-9.\\-]+\\.[a-z]{2,}$');
+    }
+
     function isValidPublicUid(uid) {
       return uid is string && uid.matches('^pub_[a-f0-9]{32}$');
     }
@@ -38,13 +42,28 @@ service cloud.firestore {
       return utr is string && utr.size() >= 4 && utr.size() <= 64 && utr.matches('^[A-Z0-9_\\-]+$');
     }
 
-    // Strict admin check: ONLY admin account 9099592283 (+919099592283 / admin9099592283@std10quiz.app)
-    // or verified owner Google account (omsai3248@gmail.com)
-    function isAdmin() {
+    // Super Admin: owner Google verified email or primary admin phone account
+    function isSuperAdmin() {
       return isSignedIn() && (
         ('phone_number' in request.auth.token && request.auth.token.phone_number == '+919099592283') ||
         ('email' in request.auth.token && request.auth.token.email == 'admin9099592283@std10quiz.app') ||
         ('email' in request.auth.token && request.auth.token.email == 'omsai3248@gmail.com' && request.auth.token.email_verified == true)
+      );
+    }
+
+    // Verified Multi-Admin check: Super Admin, active /admins/{uid} record, or verified email in /admin_invites
+    function isAdmin() {
+      return isSuperAdmin() || (
+        isSignedIn() && (
+          exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+          (
+            'email' in request.auth.token &&
+            'email_verified' in request.auth.token &&
+            request.auth.token.email_verified == true &&
+            request.auth.token.email is string &&
+            exists(/databases/$(database)/documents/admin_invites/$(request.auth.token.email.lower()))
+          )
+        )
       );
     }
 
@@ -190,10 +209,307 @@ service cloud.firestore {
              data.createdAt is timestamp && data.createdAt <= request.time;
     }
 
-    // Read-only admin marker (kept for compatibility, never grants write/admin bypass)
+    function isValidNotificationPrefs(prefs) {
+      return prefs is map &&
+             prefs.keys().hasAll([
+               'registrations', 'logins', 'payments', 'codeRedemptions',
+               'quizActivity', 'dataUpdates', 'adminChat'
+             ]) &&
+             prefs.keys().hasOnly([
+               'registrations', 'logins', 'payments', 'codeRedemptions',
+               'quizActivity', 'dataUpdates', 'adminChat'
+             ]) &&
+             prefs.registrations is bool &&
+             prefs.logins is bool &&
+             prefs.payments is bool &&
+             prefs.codeRedemptions is bool &&
+             prefs.quizActivity is bool &&
+             prefs.dataUpdates is bool &&
+             prefs.adminChat is bool;
+    }
+
+    function isValidAdminUser(data) {
+      return data.keys().hasAll([
+               'uid', 'email', 'displayName', 'photoUrl', 'role',
+               'isActive', 'notificationPrefs', 'createdAt', 'updatedAt'
+             ]) &&
+             data.keys().hasOnly([
+               'uid', 'email', 'displayName', 'photoUrl', 'role',
+               'isActive', 'notificationPrefs', 'createdAt', 'updatedAt'
+             ]) &&
+             data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 &&
+             data.email is string && data.email.size() <= 120 &&
+             data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80 &&
+             data.photoUrl is string && data.photoUrl.size() <= 500 &&
+             data.role in ['super_admin', 'admin'] &&
+             data.isActive is bool &&
+             isValidNotificationPrefs(data.notificationPrefs) &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidAdminInvite(data) {
+      return data.keys().hasAll(['email', 'displayName', 'addedByUid', 'createdAt']) &&
+             data.keys().hasOnly(['email', 'displayName', 'addedByUid', 'createdAt']) &&
+             isValidEmailDocId(data.email) &&
+             data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80 &&
+             data.addedByUid is string && data.addedByUid.size() >= 1 && data.addedByUid.size() <= 128 &&
+             data.createdAt is timestamp && data.createdAt <= request.time;
+    }
+
+    function isValidAdminFcmToken(data) {
+      return data.keys().hasAll([
+               'adminUid', 'adminEmail', 'adminName', 'token', 'platform',
+               'deviceId', 'deviceName', 'appVersion', 'enabled', 'createdAt', 'updatedAt'
+             ]) &&
+             data.keys().hasOnly([
+               'adminUid', 'adminEmail', 'adminName', 'token', 'platform',
+               'deviceId', 'deviceName', 'appVersion', 'enabled', 'createdAt', 'updatedAt'
+             ]) &&
+             data.adminUid is string && data.adminUid.size() >= 1 && data.adminUid.size() <= 128 &&
+             data.adminEmail is string && data.adminEmail.size() <= 120 &&
+             data.adminName is string && data.adminName.size() >= 1 && data.adminName.size() <= 80 &&
+             data.token is string && data.token.size() >= 20 && data.token.size() <= 512 &&
+             data.platform in ['android', 'web'] &&
+             isValidId(data.deviceId) &&
+             data.deviceName is string && data.deviceName.size() >= 1 && data.deviceName.size() <= 120 &&
+             data.appVersion is string && data.appVersion.size() >= 1 && data.appVersion.size() <= 32 &&
+             data.enabled is bool &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidAdminNotification(data) {
+      return data.keys().hasAll([
+               'category', 'title', 'body', 'actorName', 'actorMobile', 'actorId',
+               'targetRoute', 'referenceId', 'isRead', 'readBy', 'pushDispatched',
+               'createdAt', 'updatedAt'
+             ]) &&
+             data.keys().hasOnly([
+               'category', 'title', 'body', 'actorName', 'actorMobile', 'actorId',
+               'targetRoute', 'referenceId', 'isRead', 'readBy', 'pushDispatched',
+               'createdAt', 'updatedAt'
+             ]) &&
+             data.category in ['registration', 'login', 'payment', 'code_redeem', 'quiz_activity', 'data_update', 'admin_chat'] &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
+             data.body is string && data.body.size() >= 1 && data.body.size() <= 400 &&
+             data.actorName is string && data.actorName.size() <= 80 &&
+             data.actorMobile is string && data.actorMobile.size() <= 15 &&
+             data.actorId is string && data.actorId.size() <= 128 &&
+             data.targetRoute in ['admin_requests', 'admin_codes', 'admin_students', 'admin_updates', 'admin_notifications'] &&
+             data.referenceId is string && data.referenceId.size() <= 128 &&
+             data.isRead is bool &&
+             data.readBy is list && data.readBy.size() <= 20 && (data.readBy.size() == 0 || data.readBy[0] is string) &&
+             data.pushDispatched is bool &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidAdminChat(data) {
+      return data.keys().hasAll([
+               'participants', 'lastMessageText', 'lastMessageSenderUid', 'lastMessageSenderName',
+               'lastMessageStatus', 'lastMessageAt', 'unreadCounts', 'createdAt', 'updatedAt'
+             ]) &&
+             data.keys().hasOnly([
+               'participants', 'participantMeta', 'lastMessageText', 'lastMessageSenderUid',
+               'lastMessageSenderName', 'lastMessageStatus', 'lastMessageAt', 'unreadCounts',
+               'createdAt', 'updatedAt'
+             ]) &&
+             data.participants is list && data.participants.size() == 2 &&
+             data.participants[0] is string && data.participants[1] is string &&
+             data.participants[0] != data.participants[1] &&
+             (!('participantMeta' in data) || data.participantMeta is map) &&
+             data.lastMessageText is string && data.lastMessageText.size() <= 500 &&
+             data.lastMessageSenderUid is string && data.lastMessageSenderUid.size() <= 128 &&
+             data.lastMessageSenderName is string && data.lastMessageSenderName.size() <= 80 &&
+             data.lastMessageStatus in ['sent', 'delivered', 'read'] &&
+             data.lastMessageAt is timestamp && data.lastMessageAt <= request.time &&
+             data.unreadCounts is map &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidAdminChatMessage(data) {
+      return data.keys().hasAll([
+               'chatId', 'senderUid', 'senderName', 'senderPhotoUrl', 'recipientUid',
+               'participantUids', 'text', 'status', 'createdAt', 'updatedAt'
+             ]) &&
+             data.keys().hasOnly([
+               'chatId', 'senderUid', 'senderName', 'senderPhotoUrl', 'recipientUid',
+               'participantUids', 'text', 'status', 'deliveredAt', 'readAt',
+               'createdAt', 'updatedAt'
+             ]) &&
+             isValidId(data.chatId) &&
+             data.senderUid is string && data.senderUid.size() >= 1 && data.senderUid.size() <= 128 &&
+             data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 80 &&
+             data.senderPhotoUrl is string && data.senderPhotoUrl.size() <= 500 &&
+             data.recipientUid is string && data.recipientUid.size() >= 1 && data.recipientUid.size() <= 128 &&
+             data.recipientUid != data.senderUid &&
+             data.participantUids is list && data.participantUids.size() == 2 &&
+             data.senderUid in data.participantUids &&
+             data.recipientUid in data.participantUids &&
+             data.text is string && data.text.size() >= 1 && data.text.size() <= 2000 &&
+             data.status in ['sent', 'delivered', 'read'] &&
+             (!('deliveredAt' in data) || data.deliveredAt == null || (data.deliveredAt is timestamp && data.deliveredAt <= request.time)) &&
+             (!('readAt' in data) || data.readAt == null || (data.readAt is timestamp && data.readAt <= request.time)) &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    // Verified Admin Directory Profiles & Notification Preferences
     match /admins/{adminUid} {
-      allow get: if isAdmin();
-      allow list, create, update, delete: if false;
+      allow get: if isSignedIn() && (isAdmin() || request.auth.uid == adminUid);
+      allow list: if isAdmin();
+
+      allow create: if isValidId(adminUid) &&
+                       isValidAdminUser(incoming()) &&
+                       incoming().uid == adminUid && (
+                         isSuperAdmin() ||
+                         (
+                           isAdmin() &&
+                           request.auth.uid == adminUid &&
+                           incoming().role == 'admin' &&
+                           incoming().isActive == true
+                         )
+                       );
+
+      allow update: if isValidId(adminUid) &&
+                       isValidAdminUser(incoming()) &&
+                       incoming().uid == existing().uid &&
+                       incoming().createdAt == existing().createdAt && (
+                         isSuperAdmin() ||
+                         (
+                           isAdmin() &&
+                           request.auth.uid == adminUid &&
+                           incoming().role == existing().role &&
+                           incoming().isActive == existing().isActive &&
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'displayName', 'email', 'photoUrl', 'notificationPrefs', 'updatedAt'
+                           ])
+                         )
+                       );
+
+      allow delete: if isSuperAdmin() && isValidId(adminUid) && adminUid != request.auth.uid;
+    }
+
+    // Super Admin Email Allowlist for Adding Extra Admins
+    match /admin_invites/{inviteEmail} {
+      allow get: if isSuperAdmin() || (
+        isSignedIn() &&
+        'email' in request.auth.token &&
+        'email_verified' in request.auth.token &&
+        request.auth.token.email_verified == true &&
+        request.auth.token.email is string &&
+        request.auth.token.email.lower() == inviteEmail
+      );
+      allow list: if isSuperAdmin();
+      allow create, update: if isSuperAdmin() &&
+                               isValidEmailDocId(inviteEmail) &&
+                               isValidAdminInvite(incoming()) &&
+                               incoming().email == inviteEmail &&
+                               incoming().addedByUid == request.auth.uid;
+      allow delete: if isSuperAdmin() && isValidEmailDocId(inviteEmail);
+    }
+
+    // Multi-device, Multi-admin FCM Registration Tokens (Strictly Admin-only)
+    match /admin_fcm_tokens/{tokenDocId} {
+      allow get, list: if isAdmin();
+      allow create: if isAdmin() &&
+                       isValidId(tokenDocId) &&
+                       isValidAdminFcmToken(incoming()) &&
+                       incoming().adminUid == request.auth.uid;
+      allow update: if isAdmin() &&
+                       isValidId(tokenDocId) &&
+                       isValidAdminFcmToken(incoming()) &&
+                       incoming().adminUid == request.auth.uid &&
+                       incoming().adminUid == existing().adminUid &&
+                       incoming().createdAt == existing().createdAt;
+      allow delete: if isAdmin() &&
+                       isValidId(tokenDocId) &&
+                       (existing().adminUid == request.auth.uid || isSuperAdmin());
+    }
+
+    // Persistent Admin Notification Center
+    match /admin_notifications/{notifId} {
+      allow get, list: if isAdmin();
+
+      // Authenticated Admins or public student events can log bounded, unread notifications;
+      // non-admins CANNOT forge admin_chat alerts, read any notifications, mark read, or delete.
+      allow create: if isValidId(notifId) &&
+                       isValidAdminNotification(incoming()) &&
+                       incoming().isRead == false &&
+                       incoming().readBy.size() == 0 &&
+                       incoming().pushDispatched == false && (
+                         isAdmin() ||
+                         incoming().category in ['registration', 'login', 'payment', 'code_redeem', 'quiz_activity', 'data_update']
+                       );
+
+      allow update: if isAdmin() &&
+                       isValidId(notifId) &&
+                       isValidAdminNotification(incoming()) &&
+                       incoming().category == existing().category &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['isRead', 'readBy', 'updatedAt']);
+
+      allow delete: if isAdmin() && isValidId(notifId);
+    }
+
+    // Real-time 1-to-1 Admin Personal Messaging (Strictly Authenticated Admins & Chat Participants Only)
+    match /admin_chats/{chatId} {
+      allow get: if isAdmin() && isValidId(chatId) && (resource == null || request.auth.uid in existing().participants);
+      allow list: if isAdmin() && request.auth.uid in existing().participants;
+
+      allow create: if isAdmin() &&
+                       isValidId(chatId) &&
+                       isValidAdminChat(incoming()) &&
+                       request.auth.uid in incoming().participants;
+
+      allow update: if isAdmin() &&
+                       isValidId(chatId) &&
+                       isValidAdminChat(incoming()) &&
+                       request.auth.uid in existing().participants &&
+                       incoming().participants == existing().participants &&
+                       incoming().createdAt == existing().createdAt;
+
+      allow delete: if false;
+
+      match /messages/{messageId} {
+        allow get: if isAdmin() && isValidId(messageId) && (resource == null || request.auth.uid in existing().participantUids);
+        allow list: if isAdmin() && request.auth.uid in existing().participantUids;
+
+        allow create: if isAdmin() &&
+                         isValidId(messageId) &&
+                         isValidAdminChatMessage(incoming()) &&
+                         incoming().chatId == chatId &&
+                         incoming().senderUid == request.auth.uid &&
+                         request.auth.uid in incoming().participantUids &&
+                         incoming().status == 'sent' &&
+                         !('deliveredAt' in incoming()) &&
+                         !('readAt' in incoming()) &&
+                         exists(/databases/$(database)/documents/admin_chats/$(chatId)) &&
+                         request.auth.uid in get(/databases/$(database)/documents/admin_chats/$(chatId)).data.participants &&
+                         incoming().recipientUid in get(/databases/$(database)/documents/admin_chats/$(chatId)).data.participants;
+
+        // Only the recipient Admin can advance status sent -> delivered -> read
+        allow update: if isAdmin() &&
+                         isValidId(messageId) &&
+                         isValidAdminChatMessage(incoming()) &&
+                         request.auth.uid in existing().participantUids &&
+                         incoming().senderUid == existing().senderUid &&
+                         incoming().recipientUid == existing().recipientUid &&
+                         incoming().chatId == existing().chatId &&
+                         incoming().participantUids == existing().participantUids &&
+                         incoming().text == existing().text &&
+                         incoming().createdAt == existing().createdAt &&
+                         request.auth.uid == existing().recipientUid &&
+                         (
+                           (existing().status == 'sent' && incoming().status in ['delivered', 'read']) ||
+                           (existing().status == 'delivered' && incoming().status == 'read')
+                         ) &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['status', 'deliveredAt', 'readAt', 'updatedAt']);
+
+        allow delete: if false;
+      }
     }
 
     // Students collection (tracks unlocked content, payment IDs & quiz stats per student ID or signed-in UID)

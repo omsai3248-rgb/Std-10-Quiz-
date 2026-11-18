@@ -639,3 +639,355 @@ test("New device login takes over single-device session (forcing old device auto
     adminDb.collection("admin_sessions").doc("primary").delete()
   );
 });
+
+function makeDefaultNotifPrefs(overrides = {}) {
+  return {
+    registrations: true,
+    logins: true,
+    payments: true,
+    codeRedemptions: true,
+    quizActivity: true,
+    dataUpdates: true,
+    adminChat: true,
+    ...overrides,
+  };
+}
+
+test("Multi-admin invites & /admins directory: Super Admin invites verified second admin; unverified email_verified=false is rejected", async () => {
+  const superAdminDb = testEnv.authenticatedContext("super_admin_uid", {
+    email: "omsai3248@gmail.com",
+    email_verified: true,
+  }).firestore();
+
+  const secondAdminEmail = "co.admin@example.com";
+  const secondAdminUid = "co_admin_uid_2";
+  const thirdUserDb = testEnv.authenticatedContext("random_uid", {
+    email: "random@example.com",
+    email_verified: true,
+  }).firestore();
+  const unverifiedInvitedDb = testEnv.authenticatedContext("spoof_uid", {
+    email: secondAdminEmail,
+    email_verified: false,
+  }).firestore();
+  const now = new Date();
+
+  // Random user cannot create invites
+  await assertFails(
+    thirdUserDb.collection("admin_invites").doc(secondAdminEmail).set({
+      email: secondAdminEmail,
+      displayName: "Co Admin",
+      addedByUid: "random_uid",
+      createdAt: now,
+    })
+  );
+
+  // Super Admin creates invite for co.admin@example.com
+  await assertSucceeds(
+    superAdminDb.collection("admin_invites").doc(secondAdminEmail).set({
+      email: secondAdminEmail,
+      displayName: "Co Admin",
+      addedByUid: "super_admin_uid",
+      createdAt: now,
+    })
+  );
+
+  // Unverified spoof attempt is rejected
+  await assertFails(unverifiedInvitedDb.collection("admin_notifications").get());
+  await assertFails(
+    unverifiedInvitedDb.collection("admins").doc("spoof_uid").set({
+      uid: "spoof_uid",
+      email: secondAdminEmail,
+      displayName: "Spoof",
+      photoUrl: "",
+      role: "admin",
+      isActive: true,
+      notificationPrefs: makeDefaultNotifPrefs(),
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  // Verified invited Admin creates their /admins profile (cannot self-promote to super_admin)
+  const secondAdminDb = testEnv.authenticatedContext(secondAdminUid, {
+    email: secondAdminEmail,
+    email_verified: true,
+  }).firestore();
+
+  await assertFails(
+    secondAdminDb.collection("admins").doc(secondAdminUid).set({
+      uid: secondAdminUid,
+      email: secondAdminEmail,
+      displayName: "Co Admin",
+      photoUrl: "",
+      role: "super_admin",
+      isActive: true,
+      notificationPrefs: makeDefaultNotifPrefs(),
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  await assertSucceeds(
+    secondAdminDb.collection("admins").doc(secondAdminUid).set({
+      uid: secondAdminUid,
+      email: secondAdminEmail,
+      displayName: "Co Admin",
+      photoUrl: "https://example.com/avatar.jpg",
+      role: "admin",
+      isActive: true,
+      notificationPrefs: makeDefaultNotifPrefs(),
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  // Invited Admin can update own notificationPrefs, read notifications, etc.
+  await assertSucceeds(
+    secondAdminDb.collection("admins").doc(secondAdminUid).update({
+      notificationPrefs: makeDefaultNotifPrefs({ quizActivity: false }),
+      updatedAt: now,
+    })
+  );
+  await assertSucceeds(secondAdminDb.collection("admin_notifications").get());
+});
+
+test("Admin FCM tokens: each admin manages only their own device token; non-admins are denied", async () => {
+  const superAdminDb = testEnv.authenticatedContext("super_admin_uid", {
+    email: "omsai3248@gmail.com",
+    email_verified: true,
+  }).firestore();
+  const secondAdminUid = "co_admin_uid_2";
+  const now = new Date();
+
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await ctx.firestore().collection("admins").doc(secondAdminUid).set({
+      uid: secondAdminUid,
+      email: "co.admin@example.com",
+      displayName: "Co Admin",
+      photoUrl: "",
+      role: "admin",
+      isActive: true,
+      notificationPrefs: makeDefaultNotifPrefs(),
+      createdAt: now,
+      updatedAt: now,
+    });
+  });
+
+  const secondAdminDb = testEnv.authenticatedContext(secondAdminUid, {
+    email: "co.admin@example.com",
+    email_verified: true,
+  }).firestore();
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+
+  const tokenPayload = {
+    adminUid: secondAdminUid,
+    adminEmail: "co.admin@example.com",
+    adminName: "Co Admin",
+    token: "fcm_token_example_1234567890_abcdef",
+    platform: "android",
+    deviceId: "and_dev_1",
+    deviceName: "Pixel 8",
+    appVersion: "1.0.0",
+    enabled: true,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  // Non-admin rejected
+  await assertFails(
+    aliceDb.collection("admin_fcm_tokens").doc(`${ALICE_UID}_dev1`).set({
+      ...tokenPayload,
+      adminUid: ALICE_UID,
+    })
+  );
+
+  // Second admin registers own token
+  await assertSucceeds(
+    secondAdminDb.collection("admin_fcm_tokens").doc(`${secondAdminUid}_and_dev_1`).set(tokenPayload)
+  );
+
+  // Second admin CANNOT overwrite super admin's token doc
+  await assertFails(
+    secondAdminDb.collection("admin_fcm_tokens").doc("super_admin_uid_dev").set({
+      ...tokenPayload,
+      adminUid: "super_admin_uid",
+    })
+  );
+
+  // Super Admin can read tokens & second admin can delete own token on logout
+  await assertSucceeds(superAdminDb.collection("admin_fcm_tokens").get());
+  await assertSucceeds(
+    secondAdminDb.collection("admin_fcm_tokens").doc(`${secondAdminUid}_and_dev_1`).delete()
+  );
+});
+
+test("Admin Notifications: student activity creates unread notifications; only admins read, mark read, or delete", async () => {
+  const unauthDb = testEnv.unauthenticatedContext().firestore();
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const adminDb = testEnv.authenticatedContext(ADMIN_UID, {
+    phone_number: ADMIN_PHONE,
+  }).firestore();
+  const now = new Date();
+
+  const notifDoc = {
+    category: "registration",
+    title: "નવું રજિસ્ટ્રેશન",
+    body: "Aarav Patel (9876543210) એ નવું એકાઉન્ટ બનાવ્યું.",
+    actorName: "Aarav Patel",
+    actorMobile: "9876543210",
+    actorId: "mob_9876543210",
+    targetRoute: "admin_students",
+    referenceId: "mob_9876543210",
+    isRead: false,
+    readBy: [],
+    pushDispatched: false,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  // Public student activity can create unread notification
+  await assertSucceeds(
+    unauthDb.collection("admin_notifications").doc("notif_reg_1").set(notifDoc)
+  );
+
+  // Non-admin CANNOT forge admin_chat notification, read, mark read, or delete
+  await assertFails(
+    aliceDb.collection("admin_notifications").doc("notif_chat_spoof").set({
+      ...notifDoc,
+      category: "admin_chat",
+    })
+  );
+  await assertFails(unauthDb.collection("admin_notifications").get());
+  await assertFails(aliceDb.collection("admin_notifications").doc("notif_reg_1").get());
+  await assertFails(
+    aliceDb.collection("admin_notifications").doc("notif_reg_1").update({
+      isRead: true,
+      readBy: [ALICE_UID],
+      updatedAt: now,
+    })
+  );
+  await assertFails(aliceDb.collection("admin_notifications").doc("notif_reg_1").delete());
+
+  // Admin can list, mark read, and delete
+  await assertSucceeds(adminDb.collection("admin_notifications").get());
+  await assertSucceeds(
+    adminDb.collection("admin_notifications").doc("notif_reg_1").update({
+      isRead: true,
+      readBy: [ADMIN_UID],
+      updatedAt: now,
+    })
+  );
+  await assertSucceeds(adminDb.collection("admin_notifications").doc("notif_reg_1").delete());
+});
+
+test("Admin Personal Messaging: 1-to-1 chat & messages strictly restricted to the 2 participant admins with delivery/read receipt progression", async () => {
+  const adminAUid = "admin_a_uid";
+  const adminBUid = "admin_b_uid";
+  const adminCUid = "admin_c_uid";
+  const now = new Date();
+
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    for (const [uid, email, name] of [
+      [adminAUid, "a@example.com", "Admin A"],
+      [adminBUid, "b@example.com", "Admin B"],
+      [adminCUid, "c@example.com", "Admin C"],
+    ]) {
+      await db.collection("admins").doc(uid).set({
+        uid,
+        email,
+        displayName: name,
+        photoUrl: "",
+        role: "admin",
+        isActive: true,
+        notificationPrefs: makeDefaultNotifPrefs(),
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+  });
+
+  const adminADb = testEnv.authenticatedContext(adminAUid, { email: "a@example.com", email_verified: true }).firestore();
+  const adminBDb = testEnv.authenticatedContext(adminBUid, { email: "b@example.com", email_verified: true }).firestore();
+  const adminCDb = testEnv.authenticatedContext(adminCUid, { email: "c@example.com", email_verified: true }).firestore();
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+
+  const chatId = "admin_a_uid__admin_b_uid";
+  const chatDoc = {
+    participants: [adminAUid, adminBUid],
+    participantMeta: {
+      [adminAUid]: { displayName: "Admin A", photoUrl: "" },
+      [adminBUid]: { displayName: "Admin B", photoUrl: "" },
+    },
+    lastMessageText: "Hello Admin B",
+    lastMessageSenderUid: adminAUid,
+    lastMessageSenderName: "Admin A",
+    lastMessageStatus: "sent",
+    lastMessageAt: now,
+    unreadCounts: { [adminAUid]: 0, [adminBUid]: 1 },
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  // Non-admin & uninvolved Admin C cannot create/read A<->B chat
+  await assertFails(aliceDb.collection("admin_chats").doc(chatId).set(chatDoc));
+  await assertSucceeds(adminADb.collection("admin_chats").doc(chatId).set(chatDoc));
+  await assertFails(adminCDb.collection("admin_chats").doc(chatId).get());
+
+  // Admin A sends message in chat
+  const msgDoc = {
+    chatId,
+    senderUid: adminAUid,
+    senderName: "Admin A",
+    senderPhotoUrl: "",
+    recipientUid: adminBUid,
+    participantUids: [adminAUid, adminBUid],
+    text: "Check pending payment from Raj.",
+    status: "sent",
+    createdAt: now,
+    updatedAt: now,
+  };
+  await assertSucceeds(
+    adminADb.collection("admin_chats").doc(chatId).collection("messages").doc("msg_1").set(msgDoc)
+  );
+
+  // Admin C cannot read A<->B messages (unfiltered list or querying A's chat messages)
+  await assertFails(
+    adminCDb.collection("admin_chats").doc(chatId).collection("messages").doc("msg_1").get()
+  );
+  await assertFails(
+    adminCDb.collection("admin_chats").doc(chatId).collection("messages").get()
+  );
+  await assertFails(
+    adminCDb.collection("admin_chats").doc(chatId).collection("messages").where("participantUids", "array-contains", adminAUid).get()
+  );
+
+  // Sender (Admin A) CANNOT fake recipient's delivered/read receipt or edit message text
+  await assertFails(
+    adminADb.collection("admin_chats").doc(chatId).collection("messages").doc("msg_1").update({
+      status: "read",
+      readAt: now,
+      updatedAt: now,
+    })
+  );
+
+  // Recipient (Admin B) CAN read and advance status sent -> delivered -> read
+  await assertSucceeds(
+    adminBDb.collection("admin_chats").doc(chatId).collection("messages").where("participantUids", "array-contains", adminBUid).get()
+  );
+  await assertSucceeds(
+    adminBDb.collection("admin_chats").doc(chatId).collection("messages").doc("msg_1").update({
+      status: "delivered",
+      deliveredAt: now,
+      updatedAt: now,
+    })
+  );
+  await assertSucceeds(
+    adminBDb.collection("admin_chats").doc(chatId).collection("messages").doc("msg_1").update({
+      status: "read",
+      readAt: now,
+      updatedAt: now,
+    })
+  );
+});
+

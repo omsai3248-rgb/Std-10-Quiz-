@@ -1,5 +1,6 @@
 import {
   Timestamp,
+  arrayUnion,
   collection,
   deleteDoc,
   doc,
@@ -17,6 +18,7 @@ import {
   updateDoc,
   where,
   writeBatch,
+  type FieldValue,
   type Unsubscribe,
 } from 'firebase/firestore';
 import { getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage';
@@ -27,17 +29,32 @@ import {
 } from 'firebase/auth';
 import { auth, db, googleProvider, storage } from '../firebase';
 import {
+  addNativeAdminInvite,
+  deleteNativeAdminNotification,
   forceRefreshNativeAdminListeners,
   getActiveFirebaseSummary,
   getNativeActiveStudentSnapshot,
   getNativeCurrentAuthUser,
+  getNativeNotificationPermissionStatus,
   hasNativeFirebaseBridge,
   invokeNativeBridgeCall,
   loadMoreNativeAdminCollection,
+  logNativeAdminNotificationEvent,
+  markAllNativeAdminNotificationsRead,
+  markNativeAdminNotificationRead,
+  markNativeChatMessagesRead,
   notifyNativeAuthUser,
   pauseNativeAdminListeners,
+  removeNativeAdminInvite,
+  requestNativeNotificationPermission,
   resumeNativeAdminListeners,
+  sendNativeAdminChatMessage,
   setNativeActiveStudentMobile,
+  subscribeNativeAdminChatMessages,
+  subscribeNativeAdminChats,
+  subscribeNativeAdminDirectory,
+  subscribeNativeAdminInvites,
+  subscribeNativeAdminNotifications,
   subscribeNativeAllCodes,
   subscribeNativeAllPayments,
   subscribeNativeAllStudents,
@@ -46,7 +63,9 @@ import {
   subscribeNativeMyPayments,
   subscribeNativeReleaseConfig,
   subscribeNativeStudentProfile,
+  syncNativeAdminProfileAndFcmToken,
   triggerNativeActiveSessionCheck,
+  updateNativeAdminNotificationPrefs,
   type AppAuthUser,
 } from './nativeFirebaseBridge';
 import {
@@ -71,13 +90,24 @@ import {
 } from './syncManager';
 import {
   ALL_SUBJECT_IDS,
+  DEFAULT_ADMIN_NOTIFICATION_PREFS,
   getFixedPlanPrice,
   getSubjectDisplayName,
   resolveCodeSubjectId,
   resolvePaymentSubjectId,
   type AccessCode,
   type AccessCodeUsedBy,
+  type AdminChatMessage,
+  type AdminChatParticipantMeta,
+  type AdminChatThread,
+  type AdminInvite,
+  type AdminNotificationCategory,
+  type AdminNotificationItem,
+  type AdminNotificationPrefs,
+  type AdminNotificationRoute,
+  type AdminUser,
   type AppReleaseConfig,
+  type ChatMessageStatus,
   type PaymentRequest,
   type QuizAttempt,
   type StudentProfile,
@@ -139,6 +169,8 @@ export function observeAppAuthState(cb: (user: AppAuthUser | null) => void): () 
       email: user.email ?? '',
       phoneNumber: user.phoneNumber ?? '',
       emailVerified: Boolean(user.emailVerified),
+      displayName: user.displayName ?? '',
+      photoUrl: user.photoURL ?? '',
     });
   });
 }
@@ -191,13 +223,49 @@ export async function verifyActiveSessionOnResume(
   return out;
 }
 
+const verifiedMultiAdminEmails = new Set<string>([ADMIN_OWNER_EMAIL, ADMIN_AUTH_EMAIL]);
+
+export function registerVerifiedAdminEmail(email = ''): void {
+  const clean = email.trim().toLowerCase();
+  if (clean) verifiedMultiAdminEmails.add(clean);
+}
+
+export function isSuperAdminEmail(email = ''): boolean {
+  const clean = email.trim().toLowerCase();
+  return clean === ADMIN_OWNER_EMAIL || clean === ADMIN_AUTH_EMAIL;
+}
+
 export function isAdminAccount(authPhone = '', authEmail = ''): boolean {
   const cleanEmail = (authEmail ?? '').trim().toLowerCase();
-  if (cleanEmail === ADMIN_AUTH_EMAIL || cleanEmail === ADMIN_OWNER_EMAIL) return true;
+  if (cleanEmail && verifiedMultiAdminEmails.has(cleanEmail)) return true;
   const clean = (authPhone ?? '').trim();
   if (clean === ADMIN_PHONE_E164) return true;
   const digits = clean.replace(/\D/g, '').slice(-10);
   return digits === ADMIN_PHONE_TEN_DIGITS && clean.startsWith('+91');
+}
+
+async function verifyAuthorizedAdminWeb(uid: string, email: string, emailVerified: boolean): Promise<boolean> {
+  const cleanEmail = email.trim().toLowerCase();
+  if (cleanEmail === ADMIN_OWNER_EMAIL || cleanEmail === ADMIN_AUTH_EMAIL) {
+    verifiedMultiAdminEmails.add(cleanEmail);
+    return true;
+  }
+  if (!emailVerified || !cleanEmail) return false;
+  try {
+    const adminDoc = await getDoc(doc(db, 'admins', uid));
+    if (adminDoc.exists() && adminDoc.data().isActive !== false) {
+      verifiedMultiAdminEmails.add(cleanEmail);
+      return true;
+    }
+    const inviteDoc = await getDoc(doc(db, 'admin_invites', cleanEmail));
+    if (inviteDoc.exists()) {
+      verifiedMultiAdminEmails.add(cleanEmail);
+      return true;
+    }
+  } catch {
+    // Ignore permission error if uninvited
+  }
+  return false;
 }
 
 export async function signInAdminWithGoogle(): Promise<AppAuthUser> {
@@ -206,6 +274,7 @@ export async function signInAdminWithGoogle(): Promise<AppAuthUser> {
       window.AndroidFirebaseBridge?.requestGoogleSignIn?.(callId);
     });
     if (user && user.uid) {
+      if (user.email) registerVerifiedAdminEmail(user.email);
       notifyNativeAuthUser(user);
     }
     return user;
@@ -216,7 +285,12 @@ export async function signInAdminWithGoogle(): Promise<AppAuthUser> {
   try {
     const cred = await signInWithPopup(auth, googleProvider);
     const email = (cred.user.email ?? '').trim().toLowerCase();
-    if (email !== ADMIN_OWNER_EMAIL) {
+    const ok = await verifyAuthorizedAdminWeb(
+      cred.user.uid,
+      email,
+      Boolean(cred.user.emailVerified)
+    );
+    if (!ok) {
       await signOut(auth);
       throw new Error('ONLY_ADMIN_GOOGLE_EMAIL');
     }
@@ -225,6 +299,8 @@ export async function signInAdminWithGoogle(): Promise<AppAuthUser> {
       email: cred.user.email ?? '',
       phoneNumber: cred.user.phoneNumber ?? '',
       emailVerified: Boolean(cred.user.emailVerified),
+      displayName: cred.user.displayName ?? '',
+      photoUrl: cred.user.photoURL ?? '',
     };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err ?? '');
@@ -512,7 +588,34 @@ export async function loginStudentByMobile(params: {
         })
       );
     });
-    knownSyncedStudentIds.add(profile.id || getStudentDocId(cleanMobile));
+    const stId = profile.id || getStudentDocId(cleanMobile);
+    knownSyncedStudentIds.add(stId);
+    const stName = profile.fullName || cleanName || 'Student';
+    if (profile.isReturningUser) {
+      void logAdminActivityNotification({
+        notifId: `login_${stId}_${Math.floor(Date.now() / 60_000)}`,
+        category: 'login',
+        title: `વિદ્યાર્થી લૉગિન: ${stName}`,
+        body: `+91 ${cleanMobile} એપમાં લૉગિન થયા છે.`,
+        actorName: stName,
+        actorMobile: cleanMobile,
+        actorId: stId,
+        targetRoute: 'admin_students',
+        referenceId: stId,
+      });
+    } else {
+      void logAdminActivityNotification({
+        notifId: `reg_${stId}`,
+        category: 'registration',
+        title: `નવો વિદ્યાર્થી: ${stName}`,
+        body: `+91 ${cleanMobile} • નવું રજિસ્ટ્રેશન થયું છે.`,
+        actorName: stName,
+        actorMobile: cleanMobile,
+        actorId: stId,
+        targetRoute: 'admin_students',
+        referenceId: stId,
+      });
+    }
     return profile;
   }
 
@@ -632,6 +735,31 @@ export async function loginStudentByMobile(params: {
     knownSyncedStudentIds.add(studentId);
     saveWebStudentBackup(profile, false);
     markServerSyncSuccess();
+    if (profile.isReturningUser) {
+      void logAdminActivityNotification({
+        notifId: `login_${studentId}_${Math.floor(Date.now() / 60_000)}`,
+        category: 'login',
+        title: `વિદ્યાર્થી લૉગિન: ${profile.fullName}`,
+        body: `+91 ${cleanMobile} એપમાં લૉગિન થયા છે.`,
+        actorName: profile.fullName,
+        actorMobile: cleanMobile,
+        actorId: studentId,
+        targetRoute: 'admin_students',
+        referenceId: studentId,
+      });
+    } else {
+      void logAdminActivityNotification({
+        notifId: `reg_${studentId}`,
+        category: 'registration',
+        title: `નવો વિદ્યાર્થી: ${profile.fullName}`,
+        body: `+91 ${cleanMobile} • નવું રજિસ્ટ્રેશન થયું છે.`,
+        actorName: profile.fullName,
+        actorMobile: cleanMobile,
+        actorId: studentId,
+        targetRoute: 'admin_students',
+        referenceId: studentId,
+      });
+    }
     return profile;
   } catch (error) {
     if (error instanceof Error && error.message === 'NAME_REQUIRED_FOR_NEW_USER') {
@@ -882,6 +1010,17 @@ export async function submitPaymentRequest(params: {
       );
     });
     saveMyPaymentRequestId(requestId, cleanMobile);
+    void logAdminActivityNotification({
+      notifId: `pay_${requestId}`,
+      category: 'payment',
+      title: `નવી પેમેન્ટ વિનંતી: ${cleanName}`,
+      body: `₹${cleanAmount} (${getSubjectDisplayName(normalizedSubject)}) • +91 ${cleanMobile}`,
+      actorName: cleanName,
+      actorMobile: cleanMobile,
+      actorId: studentId,
+      targetRoute: 'admin_requests',
+      referenceId: requestId,
+    });
     return requestId;
   }
 
@@ -986,6 +1125,17 @@ export async function submitPaymentRequest(params: {
 
     saveMyPaymentRequestId(requestId, cleanMobile);
     markServerSyncSuccess();
+    void logAdminActivityNotification({
+      notifId: `pay_${requestId}`,
+      category: 'payment',
+      title: `નવી પેમેન્ટ વિનંતી: ${cleanName}`,
+      body: `₹${cleanAmount} (${getSubjectDisplayName(normalizedSubject)}) • +91 ${cleanMobile}`,
+      actorName: cleanName,
+      actorMobile: cleanMobile,
+      actorId: studentId,
+      targetRoute: 'admin_requests',
+      referenceId: requestId,
+    });
     return requestId;
   } catch (error) {
     if (error instanceof Error && error.message === 'DUPLICATE_UTR') {
@@ -1186,7 +1336,7 @@ export async function redeemAccessCodePublic(params: {
   const deviceInfo = getDeviceBrowserInfo();
 
   if (hasNativeFirebaseBridge()) {
-    return invokeNativeBridgeCall<{ code: string; subjectId: string; amountRupees: number }>(
+    const res = await invokeNativeBridgeCall<{ code: string; subjectId: string; amountRupees: number }>(
       (callId) => {
         window.AndroidFirebaseBridge?.redeemAccessCode?.(
           callId,
@@ -1202,6 +1352,18 @@ export async function redeemAccessCodePublic(params: {
         );
       }
     );
+    void logAdminActivityNotification({
+      notifId: `redeem_${res.code}`,
+      category: 'code_redeem',
+      title: `કોડ વપરાયો: ${res.code}`,
+      body: `${cleanName} (+91 ${cleanMobile}) • ${getSubjectDisplayName(res.subjectId)}`,
+      actorName: cleanName,
+      actorMobile: cleanMobile,
+      actorId: studentId,
+      targetRoute: 'admin_codes',
+      referenceId: res.code,
+    });
+    return res;
   }
 
   const codeRef = doc(db, COLLECTION_ACCESS_CODES, cleanCode);
@@ -1332,11 +1494,35 @@ export async function redeemAccessCodePublic(params: {
       });
 
     try {
-      return await executeRedeemTx();
+      const result = await executeRedeemTx();
+      void logAdminActivityNotification({
+        notifId: `redeem_${result.code}`,
+        category: 'code_redeem',
+        title: `કોડ વપરાયો: ${result.code}`,
+        body: `${cleanName} (+91 ${cleanMobile}) • ${getSubjectDisplayName(result.subjectId)}`,
+        actorName: cleanName,
+        actorMobile: cleanMobile,
+        actorId: studentId,
+        targetRoute: 'admin_codes',
+        referenceId: result.code,
+      });
+      return result;
     } catch (innerErr) {
       if (innerErr instanceof Error && innerErr.message === 'STUDENT_DOC_MISSING_RETRY') {
         await ensureStudentExistsWeb();
-        return await executeRedeemTx();
+        const result = await executeRedeemTx();
+        void logAdminActivityNotification({
+          notifId: `redeem_${result.code}`,
+          category: 'code_redeem',
+          title: `કોડ વપરાયો: ${result.code}`,
+          body: `${cleanName} (+91 ${cleanMobile}) • ${getSubjectDisplayName(result.subjectId)}`,
+          actorName: cleanName,
+          actorMobile: cleanMobile,
+          actorId: studentId,
+          targetRoute: 'admin_codes',
+          referenceId: result.code,
+        });
+        return result;
       }
       throw innerErr;
     }
@@ -1790,7 +1976,7 @@ export async function recordQuizAttempt(params: {
   const existingCached = loadCachedMyAttempts(uid);
   saveCachedMyAttempts(uid, [localAttempt, ...existingCached].slice(0, 20));
 
-  if (hasNativeFirebaseBridge()) {
+    if (hasNativeFirebaseBridge()) {
     await invokeNativeBridgeCall((callId) => {
       window.AndroidFirebaseBridge?.recordQuizAttempt?.(
         callId,
@@ -1806,6 +1992,17 @@ export async function recordQuizAttempt(params: {
         })
       );
     }).catch(() => {});
+    void logAdminActivityNotification({
+      notifId: `quiz_${attemptId}`,
+      category: 'quiz_activity',
+      title: `ક્વિઝ પૂર્ણ: ${subjectTitle}`,
+      body: `${chapterTitle} • સ્કોર ${score}/${totalQuestions} (${percentage}%)`,
+      actorName: '',
+      actorMobile: uid.startsWith('mob_') ? uid.slice(4) : '',
+      actorId: uid,
+      targetRoute: 'admin_students',
+      referenceId: attemptId,
+    });
     return localAttempt;
   }
 
@@ -1848,6 +2045,17 @@ export async function recordQuizAttempt(params: {
       previousBestScore,
     });
     markServerSyncSuccess();
+    void logAdminActivityNotification({
+      notifId: `quiz_${attemptId}`,
+      category: 'quiz_activity',
+      title: `ક્વિઝ પૂર્ણ: ${subjectTitle}`,
+      body: `${chapterTitle} • સ્કોર ${score}/${totalQuestions} (${percentage}%)`,
+      actorName: '',
+      actorMobile: uid.startsWith('mob_') ? uid.slice(4) : '',
+      actorId: uid,
+      targetRoute: 'admin_students',
+      referenceId: attemptId,
+    });
   } catch (error) {
     const kind = markServerSyncError(error);
     if (kind === 'network' || kind === 'quota' || kind === 'unknown') {
@@ -2512,3 +2720,602 @@ export async function deleteStudentAdmin(student: StudentProfile): Promise<void>
 }
 
 export { classifyFirestoreError };
+
+// ============================================================================
+// Notification Center, Push Permission, Multi-Admin & 1-to-1 Admin Messaging
+// ============================================================================
+
+export const COLLECTION_ADMINS = 'admins';
+export const COLLECTION_ADMIN_INVITES = 'admin_invites';
+export const COLLECTION_ADMIN_NOTIFICATIONS = 'admin_notifications';
+export const COLLECTION_ADMIN_CHATS = 'admin_chats';
+export const SUBCOLLECTION_CHAT_MESSAGES = 'messages';
+
+export function getAdminChatId(uidA: string, uidB: string): string {
+  return [uidA.trim(), uidB.trim()]
+    .sort()
+    .join('__')
+    .replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+export function getNotificationPermissionState(): 'granted' | 'denied' | 'default' {
+  if (hasNativeFirebaseBridge()) {
+    return getNativeNotificationPermissionStatus();
+  }
+  if (typeof Notification !== 'undefined') {
+    return Notification.permission;
+  }
+  return 'default';
+}
+
+export async function requestAppNotificationPermission(): Promise<'granted' | 'denied'> {
+  if (hasNativeFirebaseBridge()) {
+    return requestNativeNotificationPermission();
+  }
+  if (typeof Notification !== 'undefined') {
+    const res = await Notification.requestPermission();
+    return res === 'granted' ? 'granted' : 'denied';
+  }
+  return 'denied';
+}
+
+export async function syncAdminProfileAndPushToken(): Promise<AdminUser | null> {
+  if (hasNativeFirebaseBridge()) {
+    return syncNativeAdminProfileAndFcmToken();
+  }
+  const user = auth.currentUser;
+  if (!user) return null;
+  const email = (user.email ?? '').trim().toLowerCase().slice(0, 120);
+  const displayName = (user.displayName || email.split('@')[0] || 'Admin').slice(0, 80);
+  const photoUrl = (user.photoURL ?? '').slice(0, 500);
+  const isSuper = isSuperAdminEmail(email);
+  const adminRef = doc(db, COLLECTION_ADMINS, user.uid);
+  const existing = await getDoc(adminRef).catch(() => null);
+  const prefs: AdminNotificationPrefs = existing?.exists()
+    ? normalizeNotificationPrefs(existing.data().notificationPrefs)
+    : { ...DEFAULT_ADMIN_NOTIFICATION_PREFS };
+
+  if (!existing || !existing.exists()) {
+    await setDoc(adminRef, {
+      uid: user.uid,
+      email,
+      displayName,
+      photoUrl,
+      role: isSuper ? 'super_admin' : 'admin',
+      isActive: true,
+      notificationPrefs: prefs,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } else {
+    await updateDoc(adminRef, {
+      email,
+      displayName,
+      photoUrl,
+      updatedAt: serverTimestamp(),
+    });
+  }
+
+  return {
+    uid: user.uid,
+    email,
+    displayName,
+    photoUrl,
+    role: isSuper ? 'super_admin' : 'admin',
+    isActive: true,
+    notificationPrefs: prefs,
+    fcmTokenRegistered: false,
+    createdAt: null,
+    updatedAt: null,
+  };
+}
+
+export async function updateAdminNotificationPrefs(prefs: AdminNotificationPrefs): Promise<void> {
+  if (hasNativeFirebaseBridge()) {
+    await updateNativeAdminNotificationPrefs(prefs);
+    return;
+  }
+  const uid = requireUserId();
+  await updateDoc(doc(db, COLLECTION_ADMINS, uid), {
+    notificationPrefs: normalizeNotificationPrefs(prefs),
+    updatedAt: serverTimestamp(),
+  });
+}
+
+export async function inviteAdminByEmail(email: string, displayName: string): Promise<void> {
+  const cleanEmail = email.trim().toLowerCase().slice(0, 120);
+  const cleanName = (displayName.trim() || cleanEmail.split('@')[0] || 'Co-Admin').slice(0, 80);
+  if (!/^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/.test(cleanEmail)) {
+    throw new Error('INVALID_EMAIL');
+  }
+  if (hasNativeFirebaseBridge()) {
+    await addNativeAdminInvite(cleanEmail, cleanName);
+    return;
+  }
+  const uid = requireUserId();
+  await setDoc(doc(db, COLLECTION_ADMIN_INVITES, cleanEmail), {
+    email: cleanEmail,
+    displayName: cleanName,
+    addedByUid: uid,
+    createdAt: serverTimestamp(),
+  });
+}
+
+export async function removeAdminInviteByEmail(email: string): Promise<void> {
+  const cleanEmail = email.trim().toLowerCase();
+  if (!cleanEmail) return;
+  if (hasNativeFirebaseBridge()) {
+    await removeNativeAdminInvite(cleanEmail);
+    return;
+  }
+  requireUserId();
+  await deleteDoc(doc(db, COLLECTION_ADMIN_INVITES, cleanEmail));
+}
+
+export async function logAdminActivityNotification(params: {
+  notifId?: string;
+  category: AdminNotificationCategory;
+  title: string;
+  body: string;
+  actorName?: string;
+  actorMobile?: string;
+  actorId?: string;
+  targetRoute?: AdminNotificationRoute;
+  referenceId?: string;
+}): Promise<void> {
+  if (hasNativeFirebaseBridge()) {
+    await logNativeAdminNotificationEvent(params);
+    return;
+  }
+  if (!canHitServer()) return;
+  const cleanId =
+    params.notifId?.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 120) ||
+    `evt_${randomHex32().slice(0, 20)}`;
+  const ref = doc(db, COLLECTION_ADMIN_NOTIFICATIONS, cleanId);
+  try {
+    await setDoc(ref, {
+      category: params.category,
+      title: (params.title || 'નવી સૂચના').slice(0, 120),
+      body: (params.body || 'એપ અપડેટ').slice(0, 400),
+      actorName: (params.actorName ?? '').slice(0, 80),
+      actorMobile: (params.actorMobile ?? '').slice(0, 15),
+      actorId: (params.actorId ?? '').slice(0, 128),
+      targetRoute: params.targetRoute ?? 'admin_notifications',
+      referenceId: (params.referenceId ?? '').slice(0, 128),
+      isRead: false,
+      readBy: [],
+      pushDispatched: false,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } catch {
+    // Non-fatal: e.g. deterministic doc already exists or offline
+  }
+}
+
+function normalizeNotificationPrefs(raw: unknown): AdminNotificationPrefs {
+  const obj = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  return {
+    registrations: obj.registrations !== false,
+    logins: obj.logins !== false,
+    payments: obj.payments !== false,
+    codeRedemptions: obj.codeRedemptions !== false,
+    quizActivity: obj.quizActivity !== false,
+    dataUpdates: obj.dataUpdates !== false,
+    adminChat: obj.adminChat !== false,
+  };
+}
+
+function mapAdminUserDoc(id: string, d: Record<string, unknown>): AdminUser {
+  const email = String(d.email ?? '').trim().toLowerCase();
+  return {
+    uid: String(d.uid ?? id),
+    email,
+    displayName: String(d.displayName ?? email.split('@')[0] ?? 'Admin'),
+    photoUrl: String(d.photoUrl ?? ''),
+    role: d.role === 'super_admin' || isSuperAdminEmail(email) ? 'super_admin' : 'admin',
+    isActive: d.isActive !== false,
+    notificationPrefs: normalizeNotificationPrefs(d.notificationPrefs),
+    createdAt: (d.createdAt as AdminUser['createdAt']) ?? null,
+    updatedAt: (d.updatedAt as AdminUser['updatedAt']) ?? null,
+  };
+}
+
+function mapAdminNotificationDoc(id: string, d: Record<string, unknown>): AdminNotificationItem {
+  return {
+    id,
+    category: (d.category as AdminNotificationCategory) ?? 'data_update',
+    title: String(d.title ?? ''),
+    body: String(d.body ?? ''),
+    actorName: String(d.actorName ?? ''),
+    actorMobile: String(d.actorMobile ?? ''),
+    actorId: String(d.actorId ?? ''),
+    targetRoute: (d.targetRoute as AdminNotificationRoute) ?? 'admin_notifications',
+    referenceId: String(d.referenceId ?? ''),
+    isRead: Boolean(d.isRead),
+    readBy: Array.isArray(d.readBy) ? d.readBy.map((x) => String(x)) : [],
+    pushDispatched: Boolean(d.pushDispatched),
+    createdAt: (d.createdAt as AdminNotificationItem['createdAt']) ?? null,
+    updatedAt: (d.updatedAt as AdminNotificationItem['updatedAt']) ?? null,
+  };
+}
+
+function mapAdminChatDoc(id: string, d: Record<string, unknown>): AdminChatThread {
+  const rawMeta = (d.participantMeta && typeof d.participantMeta === 'object'
+    ? d.participantMeta
+    : {}) as Record<string, Record<string, unknown>>;
+  const participantMeta: Record<string, AdminChatParticipantMeta> = {};
+  Object.entries(rawMeta).forEach(([uid, val]) => {
+    participantMeta[uid] = {
+      displayName: String(val?.displayName ?? 'Admin'),
+      photoUrl: String(val?.photoUrl ?? ''),
+    };
+  });
+
+  const rawUnread = (d.unreadCounts && typeof d.unreadCounts === 'object'
+    ? d.unreadCounts
+    : {}) as Record<string, unknown>;
+  const unreadCounts: Record<string, number> = {};
+  Object.entries(rawUnread).forEach(([uid, val]) => {
+    unreadCounts[uid] = Number(val ?? 0);
+  });
+
+  return {
+    id,
+    participants: Array.isArray(d.participants) ? d.participants.map((x) => String(x)) : [],
+    participantMeta,
+    lastMessageText: String(d.lastMessageText ?? ''),
+    lastMessageSenderUid: String(d.lastMessageSenderUid ?? ''),
+    lastMessageSenderName: String(d.lastMessageSenderName ?? ''),
+    lastMessageStatus: (d.lastMessageStatus as ChatMessageStatus) ?? 'sent',
+    lastMessageAt: (d.lastMessageAt as AdminChatThread['lastMessageAt']) ?? null,
+    unreadCounts,
+    createdAt: (d.createdAt as AdminChatThread['createdAt']) ?? null,
+    updatedAt: (d.updatedAt as AdminChatThread['updatedAt']) ?? null,
+  };
+}
+
+function mapAdminChatMessageDoc(id: string, d: Record<string, unknown>): AdminChatMessage {
+  return {
+    id,
+    chatId: String(d.chatId ?? ''),
+    senderUid: String(d.senderUid ?? ''),
+    senderName: String(d.senderName ?? 'Admin'),
+    senderPhotoUrl: String(d.senderPhotoUrl ?? ''),
+    recipientUid: String(d.recipientUid ?? ''),
+    participantUids: Array.isArray(d.participantUids)
+      ? d.participantUids.map((x) => String(x))
+      : [],
+    text: String(d.text ?? ''),
+    status: (d.status as ChatMessageStatus) ?? 'sent',
+    deliveredAt: (d.deliveredAt as AdminChatMessage['deliveredAt']) ?? null,
+    readAt: (d.readAt as AdminChatMessage['readAt']) ?? null,
+    createdAt: (d.createdAt as AdminChatMessage['createdAt']) ?? null,
+    updatedAt: (d.updatedAt as AdminChatMessage['updatedAt']) ?? null,
+  };
+}
+
+export function observeAdminDirectory(onData: (list: AdminUser[]) => void): Unsubscribe {
+  if (hasNativeFirebaseBridge()) {
+    return subscribeNativeAdminDirectory((list) => {
+      list.forEach((u) => {
+        if (u.isActive && u.email) registerVerifiedAdminEmail(u.email);
+      });
+      onData(list);
+    });
+  }
+  if (!canHitServer()) return () => {};
+  return onSnapshot(
+    collection(db, COLLECTION_ADMINS),
+    (snap) => {
+      const list = snap.docs.map((d) => mapAdminUserDoc(d.id, d.data()));
+      list.forEach((u) => {
+        if (u.isActive && u.email) registerVerifiedAdminEmail(u.email);
+      });
+      onData(list);
+    },
+    () => {}
+  );
+}
+
+export function observeAdminInvites(
+  isSuper: boolean,
+  onData: (list: AdminInvite[]) => void
+): Unsubscribe {
+  if (!isSuper) {
+    onData([]);
+    return () => {};
+  }
+  if (hasNativeFirebaseBridge()) {
+    return subscribeNativeAdminInvites(onData);
+  }
+  if (!canHitServer()) return () => {};
+  const q = query(collection(db, COLLECTION_ADMIN_INVITES), orderBy('createdAt', 'desc'));
+  return onSnapshot(
+    q,
+    (snap) => {
+      onData(
+        snap.docs.map((d) => ({
+          email: String(d.data().email ?? d.id),
+          displayName: String(d.data().displayName ?? ''),
+          addedByUid: String(d.data().addedByUid ?? ''),
+          createdAt: (d.data().createdAt as AdminInvite['createdAt']) ?? null,
+        }))
+      );
+    },
+    () => {}
+  );
+}
+
+export function observeAdminNotifications(
+  onData: (list: AdminNotificationItem[]) => void
+): Unsubscribe {
+  if (hasNativeFirebaseBridge()) {
+    return subscribeNativeAdminNotifications(onData);
+  }
+  if (!canHitServer()) return () => {};
+  const q = query(
+    collection(db, COLLECTION_ADMIN_NOTIFICATIONS),
+    orderBy('createdAt', 'desc'),
+    limit(80)
+  );
+  return onSnapshot(
+    q,
+    (snap) => {
+      onData(snap.docs.map((d) => mapAdminNotificationDoc(d.id, d.data())));
+    },
+    () => {}
+  );
+}
+
+export async function markAdminNotificationAsRead(notifId: string): Promise<void> {
+  if (!notifId.trim()) return;
+  if (hasNativeFirebaseBridge()) {
+    await markNativeAdminNotificationRead(notifId);
+    return;
+  }
+  const uid = requireUserId();
+  await updateDoc(doc(db, COLLECTION_ADMIN_NOTIFICATIONS, notifId.trim()), {
+    isRead: true,
+    readBy: arrayUnion(uid),
+    updatedAt: serverTimestamp(),
+  });
+}
+
+export async function markAllAdminNotificationsAsRead(): Promise<void> {
+  if (hasNativeFirebaseBridge()) {
+    await markAllNativeAdminNotificationsRead();
+    return;
+  }
+  const uid = requireUserId();
+  const snap = await getDocs(
+    query(
+      collection(db, COLLECTION_ADMIN_NOTIFICATIONS),
+      where('isRead', '==', false),
+      limit(100)
+    )
+  );
+  if (snap.empty) return;
+  const batch = writeBatch(db);
+  snap.docs.forEach((d) => {
+    batch.update(d.ref, {
+      isRead: true,
+      readBy: arrayUnion(uid),
+      updatedAt: serverTimestamp(),
+    });
+  });
+  await batch.commit();
+}
+
+export async function deleteAdminNotificationItem(notifId: string): Promise<void> {
+  if (!notifId.trim()) return;
+  if (hasNativeFirebaseBridge()) {
+    await deleteNativeAdminNotification(notifId);
+    return;
+  }
+  requireUserId();
+  await deleteDoc(doc(db, COLLECTION_ADMIN_NOTIFICATIONS, notifId.trim()));
+}
+
+export function observeAdminChats(
+  myUid: string,
+  onData: (list: AdminChatThread[]) => void
+): Unsubscribe {
+  if (!myUid.trim()) {
+    onData([]);
+    return () => {};
+  }
+  if (hasNativeFirebaseBridge()) {
+    return subscribeNativeAdminChats(onData);
+  }
+  if (!canHitServer()) return () => {};
+  const q = query(
+    collection(db, COLLECTION_ADMIN_CHATS),
+    where('participants', 'array-contains', myUid),
+    orderBy('lastMessageAt', 'desc'),
+    limit(40)
+  );
+  return onSnapshot(
+    q,
+    (snap) => {
+      onData(snap.docs.map((d) => mapAdminChatDoc(d.id, d.data())));
+    },
+    () => {}
+  );
+}
+
+export function observeAdminChatMessages(
+  chatId: string,
+  myUid: string,
+  onData: (list: AdminChatMessage[]) => void
+): Unsubscribe {
+  if (!chatId.trim() || !myUid.trim()) {
+    onData([]);
+    return () => {};
+  }
+  if (hasNativeFirebaseBridge()) {
+    return subscribeNativeAdminChatMessages(chatId, onData);
+  }
+  if (!canHitServer()) return () => {};
+  const q = query(
+    collection(db, COLLECTION_ADMIN_CHATS, chatId, SUBCOLLECTION_CHAT_MESSAGES),
+    where('participantUids', 'array-contains', myUid),
+    orderBy('createdAt', 'asc'),
+    limit(120)
+  );
+  return onSnapshot(
+    q,
+    (snap) => {
+      const items = snap.docs.map((d) => mapAdminChatMessageDoc(d.id, d.data()));
+      onData(items);
+
+      // Mark any incoming 'sent' messages as 'delivered'
+      const toDeliver = snap.docs.filter(
+        (d) => d.data().recipientUid === myUid && d.data().status === 'sent'
+      );
+      if (toDeliver.length > 0) {
+        const batch = writeBatch(db);
+        const now = serverTimestamp();
+        toDeliver.forEach((d) => {
+          batch.update(d.ref, { status: 'delivered', deliveredAt: now, updatedAt: now });
+        });
+        batch.commit().catch(() => {});
+      }
+    },
+    () => {}
+  );
+}
+
+export async function sendAdminChatMessage(params: {
+  recipientUid: string;
+  recipientName: string;
+  recipientPhotoUrl?: string;
+  text: string;
+}): Promise<{ chatId: string; messageId: string }> {
+  const cleanText = params.text.trim().slice(0, 2000);
+  if (!params.recipientUid.trim() || !cleanText) {
+    throw new Error('EMPTY_MESSAGE');
+  }
+  if (hasNativeFirebaseBridge()) {
+    return sendNativeAdminChatMessage({
+      recipientUid: params.recipientUid.trim(),
+      recipientName: params.recipientName.trim(),
+      recipientPhotoUrl: (params.recipientPhotoUrl ?? '').trim(),
+      text: cleanText,
+    });
+  }
+  const user = auth.currentUser;
+  if (!user) throw new Error('Authentication session not ready.');
+  const recipientUid = params.recipientUid.trim();
+  const participants = [user.uid, recipientUid].sort();
+  const chatId = getAdminChatId(user.uid, recipientUid);
+  const myName = (user.displayName || user.email?.split('@')[0] || 'Admin').slice(0, 80);
+  const myPhoto = (user.photoURL ?? '').slice(0, 500);
+  const recipientName = (params.recipientName.trim() || 'Admin').slice(0, 80);
+  const recipientPhoto = (params.recipientPhotoUrl ?? '').trim().slice(0, 500);
+
+  const chatRef = doc(db, COLLECTION_ADMIN_CHATS, chatId);
+  const msgId = `msg_${Date.now()}_${randomHex32().slice(0, 8)}`;
+  const msgRef = doc(db, COLLECTION_ADMIN_CHATS, chatId, SUBCOLLECTION_CHAT_MESSAGES, msgId);
+
+  const existingChat = await getDoc(chatRef).catch(() => null);
+  const existingUnread = Number(existingChat?.data()?.unreadCounts?.[recipientUid] ?? 0);
+  const now = serverTimestamp();
+  const chatPayload = {
+    participants,
+    participantMeta: {
+      [user.uid]: { displayName: myName, photoUrl: myPhoto },
+      [recipientUid]: { displayName: recipientName, photoUrl: recipientPhoto },
+    },
+    lastMessageText: cleanText.slice(0, 500),
+    lastMessageSenderUid: user.uid,
+    lastMessageSenderName: myName,
+    lastMessageStatus: 'sent',
+    lastMessageAt: now,
+    unreadCounts: {
+      [user.uid]: 0,
+      [recipientUid]: existingUnread + 1,
+    },
+    updatedAt: now,
+  };
+
+  if (!existingChat || !existingChat.exists()) {
+    await setDoc(chatRef, { ...chatPayload, createdAt: now });
+  } else {
+    await updateDoc(chatRef, chatPayload);
+  }
+
+  await setDoc(msgRef, {
+    chatId,
+    senderUid: user.uid,
+    senderName: myName,
+    senderPhotoUrl: myPhoto,
+    recipientUid,
+    participantUids: participants,
+    text: cleanText,
+    status: 'sent',
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  return { chatId, messageId: msgId };
+}
+
+export async function markAdminChatMessagesRead(chatId: string): Promise<void> {
+  if (!chatId.trim()) return;
+  if (hasNativeFirebaseBridge()) {
+    await markNativeChatMessagesRead(chatId);
+    return;
+  }
+  const user = auth.currentUser;
+  if (!user) return;
+  const chatRef = doc(db, COLLECTION_ADMIN_CHATS, chatId.trim());
+  const msgsSnap = await getDocs(
+    query(
+      collection(db, COLLECTION_ADMIN_CHATS, chatId.trim(), SUBCOLLECTION_CHAT_MESSAGES),
+      where('participantUids', 'array-contains', user.uid),
+      where('recipientUid', '==', user.uid),
+      limit(100)
+    )
+  );
+
+  const batch = writeBatch(db);
+  const now = serverTimestamp();
+  let hasChanges = false;
+  msgsSnap.docs.forEach((d) => {
+    const data = d.data();
+    if (data.status !== 'read') {
+      hasChanges = true;
+      batch.update(d.ref, {
+        status: 'read',
+        ...(data.deliveredAt ? {} : { deliveredAt: now }),
+        readAt: now,
+        updatedAt: now,
+      });
+    }
+  });
+
+  const chatSnap = await getDoc(chatRef).catch(() => null);
+  if (chatSnap && chatSnap.exists()) {
+    const data = chatSnap.data();
+    const unreadCounts = { ...(data.unreadCounts ?? {}), [user.uid]: 0 };
+    const hadUnread = Number(data.unreadCounts?.[user.uid] ?? 0) > 0;
+    const chatUpdates: Record<string, FieldValue | string | Record<string, number>> = {
+      unreadCounts,
+      updatedAt: now,
+    };
+    if (data.lastMessageSenderUid !== user.uid && data.lastMessageStatus !== 'read') {
+      chatUpdates.lastMessageStatus = 'read';
+      hasChanges = true;
+    }
+    if (hadUnread || hasChanges) {
+      batch.update(chatRef, chatUpdates);
+      hasChanges = true;
+    }
+  }
+
+  if (hasChanges) {
+    await batch.commit();
+  }
+}
+

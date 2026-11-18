@@ -213,6 +213,47 @@ export interface Translations {
   quotaCooldownBanner: string;
   offlineModeBanner: string;
   pendingSyncSavedNote: string;
+
+  // Admin Notifications Center & Personal Messaging
+  tabNotifications: string;
+  tabAdminChat: string;
+  notifCenterTitle: string;
+  notifFilterAll: string;
+  notifFilterUnread: string;
+  notifMarkAllRead: string;
+  notifMarkRead: string;
+  notifNoItems: string;
+  notifPrefsTitle: string;
+  notifPrefRegistrations: string;
+  notifPrefLogins: string;
+  notifPrefPayments: string;
+  notifPrefCodes: string;
+  notifPrefQuiz: string;
+  notifPrefDataUpdates: string;
+  notifPrefChat: string;
+  pushPermissionEnableTitle: string;
+  pushPermissionEnableDesc: string;
+  pushPermissionEnableBtn: string;
+  pushPermissionActiveBadge: string;
+  adminChatTitle: string;
+  adminChatSubtitle: string;
+  adminDirectoryTitle: string;
+  adminInviteTitle: string;
+  adminInviteEmailPlaceholder: string;
+  adminInviteNamePlaceholder: string;
+  adminInviteBtn: string;
+  adminInviteSuccess: string;
+  adminChatEmptyDirectory: string;
+  adminChatNoMessages: string;
+  adminChatComposerPlaceholder: string;
+  adminChatSendBtn: string;
+  adminChatBackToList: string;
+  adminChatSuperBadge: string;
+  adminChatCoAdminBadge: string;
+  chatStatusSent: string;
+  chatStatusDelivered: string;
+  chatStatusRead: string;
+  openNotifAction: string;
 }
 
 const GU: Translations = {
@@ -426,6 +467,46 @@ const GU: Translations = {
   offlineModeBanner:
     'ઇન્ટરનેટ બંધ છે — તમારો ડેટા સ્થાનિક સ્ટોરેજમાં સુરક્ષિત છે અને ઇન્ટરનેટ આવતા જ આપમેળે સિંક થઈ જશે.',
   pendingSyncSavedNote: 'સ્થાનિક સ્ટોરેજમાં સુરક્ષિત (ઓનલાઇન થતા આપમેળે સિંક થશે)',
+
+  tabNotifications: 'સૂચનાઓ',
+  tabAdminChat: 'ચેટ',
+  notifCenterTitle: 'એડમિન નોટિફિકેશન સેન્ટર',
+  notifFilterAll: 'બધી સૂચનાઓ',
+  notifFilterUnread: 'ન વાંચેલી',
+  notifMarkAllRead: 'બધી વંચાયેલી માર્ક કરો',
+  notifMarkRead: 'વંચાયેલું',
+  notifNoItems: 'કોઈ નવી સૂચના નથી.',
+  notifPrefsTitle: 'નોટિફિકેશન કેટેગરી સેટિંગ્સ',
+  notifPrefRegistrations: 'નવું રજિસ્ટ્રેશન',
+  notifPrefLogins: 'વિદ્યાર્થી લૉગિન',
+  notifPrefPayments: 'નવું પેમેન્ટ અને મંજૂરી',
+  notifPrefCodes: 'કોડ વપરાશ (Redeem)',
+  notifPrefQuiz: 'ક્વિઝ પ્રવૃત્તિ',
+  notifPrefDataUpdates: 'ડેટા અપડેટ્સ',
+  notifPrefChat: 'એડમિન ચેટ મેસેજ',
+  pushPermissionEnableTitle: 'WhatsApp જેવી Push નોટિફિકેશન ચાલુ કરો',
+  pushPermissionEnableDesc: 'એપ બંધ હોય કે બેકગ્રાઉન્ડમાં હોય ત્યારે પણ અવાજ અને વાઇબ્રેશન સાથે તરત નોટિફિકેશન મેળવો.',
+  pushPermissionEnableBtn: 'નોટિફિકેશન પરવાનગી આપો',
+  pushPermissionActiveBadge: 'Push ચાલુ છે',
+  adminChatTitle: 'એડમિન પર્સનલ ચેટ (1-to-1)',
+  adminChatSubtitle: 'સાથી એડમિન્સ સાથે રીઅલ-ટાઇમ સુરક્ષિત ચેટ અને ડબલ-ટિક સ્ટેટસ',
+  adminDirectoryTitle: 'અધિકૃત એડમિન્સ',
+  adminInviteTitle: 'નવો કો-એડમિન ઉમેરો (Super Admin)',
+  adminInviteEmailPlaceholder: 'કો-એડમિન Gmail ID (દા.ત. name@gmail.com)',
+  adminInviteNamePlaceholder: 'એડમિનનું નામ',
+  adminInviteBtn: 'એડમિન આમંત્રિત કરો',
+  adminInviteSuccess: 'કો-એડમિન સફળતાપૂર્વક ઉમેરાયા! તેઓ તેમના Google એકાઉન્ટથી લૉગિન કરી શકશે.',
+  adminChatEmptyDirectory: 'ચેટ શરૂ કરવા માટે Super Admin દ્વારા અન્ય કો-એડમિન Gmail ઉમેરો અથવા બીજા ડિવાઇસથી લૉગિન કરો.',
+  adminChatNoMessages: 'હજી કોઈ મેસેજ નથી. વાતચીત શરૂ કરવા નીચે મેસેજ લખો.',
+  adminChatComposerPlaceholder: 'મેસેજ લખો...',
+  adminChatSendBtn: 'મોકલો',
+  adminChatBackToList: 'બધી ચેટ્સ',
+  adminChatSuperBadge: 'Super Admin',
+  adminChatCoAdminBadge: 'Admin',
+  chatStatusSent: 'મોકલાયું',
+  chatStatusDelivered: 'પહોંચ્યું',
+  chatStatusRead: 'વંચાયું',
+  openNotifAction: 'વિગત ખોલો',
 };
 
 const EN: Translations = {
@@ -640,6 +721,46 @@ const EN: Translations = {
   offlineModeBanner:
     'Internet is offline — your data is safely stored locally and will sync automatically when online.',
   pendingSyncSavedNote: 'Saved locally (will auto-sync when online)',
+
+  tabNotifications: 'Notifications',
+  tabAdminChat: 'Chat',
+  notifCenterTitle: 'Admin Notification Center',
+  notifFilterAll: 'All',
+  notifFilterUnread: 'Unread',
+  notifMarkAllRead: 'Mark All Read',
+  notifMarkRead: 'Mark Read',
+  notifNoItems: 'No notifications yet.',
+  notifPrefsTitle: 'Notification Category Settings',
+  notifPrefRegistrations: 'New Registrations',
+  notifPrefLogins: 'User Logins',
+  notifPrefPayments: 'Payments & Approvals',
+  notifPrefCodes: 'Code Redemptions',
+  notifPrefQuiz: 'Quiz Activity',
+  notifPrefDataUpdates: 'Data Updates',
+  notifPrefChat: 'Admin Chat Messages',
+  pushPermissionEnableTitle: 'Enable WhatsApp-Style Push Notifications',
+  pushPermissionEnableDesc: 'Receive instant heads-up alerts with sound & vibration even when the app is closed or in the background.',
+  pushPermissionEnableBtn: 'Allow Push Notifications',
+  pushPermissionActiveBadge: 'Push Active',
+  adminChatTitle: 'Admin Personal Chat (1-to-1)',
+  adminChatSubtitle: 'Real-time encrypted Firestore chat with Sent / Delivered / Read ticks',
+  adminDirectoryTitle: 'Authorized Admins',
+  adminInviteTitle: 'Add Co-Admin (Super Admin)',
+  adminInviteEmailPlaceholder: 'Co-Admin Gmail ID (e.g. name@gmail.com)',
+  adminInviteNamePlaceholder: 'Admin Display Name',
+  adminInviteBtn: 'Invite Admin',
+  adminInviteSuccess: 'Co-Admin added! They can now sign in with their verified Google account.',
+  adminChatEmptyDirectory: 'Add a Co-Admin Gmail above (Super Admin) or sign in as another Admin to start 1-to-1 messaging.',
+  adminChatNoMessages: 'No messages yet. Type below to start chatting.',
+  adminChatComposerPlaceholder: 'Type a message...',
+  adminChatSendBtn: 'Send',
+  adminChatBackToList: 'All Chats',
+  adminChatSuperBadge: 'Super Admin',
+  adminChatCoAdminBadge: 'Admin',
+  chatStatusSent: 'Sent',
+  chatStatusDelivered: 'Delivered',
+  chatStatusRead: 'Read',
+  openNotifAction: 'Open',
 };
 
 interface LanguageContextValue {

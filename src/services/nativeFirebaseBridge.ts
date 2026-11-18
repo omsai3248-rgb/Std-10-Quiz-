@@ -1,6 +1,13 @@
 import firebaseConfig from '../../firebase-applet-config.json';
 import type {
   AccessCode,
+  AdminChatMessage,
+  AdminChatThread,
+  AdminDeepLinkPayload,
+  AdminInvite,
+  AdminNotificationItem,
+  AdminNotificationPrefs,
+  AdminUser,
   AppReleaseConfig,
   PaymentRequest,
   QuizAttempt,
@@ -18,6 +25,8 @@ export interface AppAuthUser {
   email: string;
   phoneNumber: string;
   emailVerified: boolean;
+  displayName?: string;
+  photoUrl?: string;
 }
 
 interface AndroidFirebaseBridgeApi {
@@ -56,6 +65,23 @@ interface AndroidFirebaseBridgeApi {
   pauseAdminListeners?: () => void;
   resumeAdminListeners?: () => void;
   loadMoreAdminCollection?: (callId: string, collectionName: string, cursorSeconds: number) => void;
+  getNotificationPermissionStatus?: () => string;
+  requestNotificationPermission?: (callId: string) => void;
+  consumePendingDeepLink?: () => string;
+  syncAdminProfileAndFcmToken?: (callId: string) => void;
+  updateAdminNotificationPrefs?: (callId: string, prefsJson: string) => void;
+  addAdminInvite?: (callId: string, payloadJson: string) => void;
+  removeAdminInvite?: (callId: string, emailRaw: string) => void;
+  logAdminNotificationEvent?: (callId: string, payloadJson: string) => void;
+  startAdminNotificationsAndChatListeners?: () => void;
+  stopAdminNotificationsAndChatListeners?: () => void;
+  markAdminNotificationRead?: (callId: string, notifId: string) => void;
+  markAllAdminNotificationsRead?: (callId: string) => void;
+  deleteAdminNotification?: (callId: string, notifId: string) => void;
+  startAdminChatThreadListener?: (chatId: string) => void;
+  stopAdminChatThreadListener?: () => void;
+  sendAdminChatMessage?: (callId: string, payloadJson: string) => void;
+  markChatMessagesRead?: (callId: string, chatIdRaw: string) => void;
 }
 
 declare global {
@@ -73,6 +99,13 @@ declare global {
     __onNativeAdminError?: (message: string) => void;
     __onNativeSyncState?: (state: Partial<SyncStatusSnapshot>) => void;
     __onNativeNetworkStateChanged?: (isOnline: boolean) => void;
+    __onNativeNotificationPermissionChanged?: (status: string) => void;
+    __onNativeAdminDeepLink?: (payload: AdminDeepLinkPayload) => void;
+    __onNativeAdminDirectory?: (list: AdminUser[]) => void;
+    __onNativeAdminInvites?: (list: AdminInvite[]) => void;
+    __onNativeAdminNotifications?: (list: AdminNotificationItem[]) => void;
+    __onNativeAdminChats?: (list: AdminChatThread[]) => void;
+    __onNativeAdminChatMessages?: (list: AdminChatMessage[]) => void;
   }
 }
 
@@ -143,6 +176,13 @@ const allPaymentListeners = new Set<(list: PaymentRequest[]) => void>();
 const allCodeListeners = new Set<(list: AccessCode[]) => void>();
 const allStudentListeners = new Set<(list: StudentProfile[]) => void>();
 const adminErrorListeners = new Set<(err: Error) => void>();
+const adminDirectoryListeners = new Set<(list: AdminUser[]) => void>();
+const adminInvitesListeners = new Set<(list: AdminInvite[]) => void>();
+const adminNotifListeners = new Set<(list: AdminNotificationItem[]) => void>();
+const adminChatsListeners = new Set<(list: AdminChatThread[]) => void>();
+const adminChatMessageListeners = new Set<(list: AdminChatMessage[]) => void>();
+const notifPermissionListeners = new Set<(status: 'granted' | 'denied') => void>();
+const adminDeepLinkListeners = new Set<(payload: AdminDeepLinkPayload) => void>();
 
 let latestAuthUser: AppAuthUser | null | undefined;
 let latestReleaseConfig: AppReleaseConfig | null | undefined;
@@ -152,6 +192,11 @@ let latestMyAttempts: QuizAttempt[] | undefined;
 let latestAllPayments: PaymentRequest[] | undefined;
 let latestAllCodes: AccessCode[] | undefined;
 let latestAllStudents: StudentProfile[] | undefined;
+let latestAdminDirectory: AdminUser[] | undefined;
+let latestAdminInvites: AdminInvite[] | undefined;
+let latestAdminNotifications: AdminNotificationItem[] | undefined;
+let latestAdminChats: AdminChatThread[] | undefined;
+let latestAdminChatMessages: AdminChatMessage[] | undefined;
 
 if (typeof window !== 'undefined') {
   window.__resolveNativeFirebaseCall = (callId, ok, payload) => {
@@ -167,6 +212,13 @@ if (typeof window !== 'undefined') {
 
   window.__onNativeAuthStateChanged = (user) => {
     latestAuthUser = user ?? null;
+    if (!user) {
+      latestAdminDirectory = undefined;
+      latestAdminInvites = undefined;
+      latestAdminNotifications = undefined;
+      latestAdminChats = undefined;
+      latestAdminChatMessages = undefined;
+    }
     authListeners.forEach((cb) => cb(latestAuthUser ?? null));
   };
 
@@ -218,6 +270,42 @@ if (typeof window !== 'undefined') {
 
   window.__onNativeNetworkStateChanged = (online) => {
     setOnlineState(Boolean(online));
+  };
+
+  window.__onNativeNotificationPermissionChanged = (status) => {
+    const norm = status === 'granted' ? 'granted' : 'denied';
+    notifPermissionListeners.forEach((cb) => cb(norm));
+  };
+
+  window.__onNativeAdminDeepLink = (payload) => {
+    if (payload && typeof payload === 'object' && payload.targetRoute) {
+      adminDeepLinkListeners.forEach((cb) => cb(payload));
+    }
+  };
+
+  window.__onNativeAdminDirectory = (list) => {
+    latestAdminDirectory = Array.isArray(list) ? list : [];
+    adminDirectoryListeners.forEach((cb) => cb(latestAdminDirectory!));
+  };
+
+  window.__onNativeAdminInvites = (list) => {
+    latestAdminInvites = Array.isArray(list) ? list : [];
+    adminInvitesListeners.forEach((cb) => cb(latestAdminInvites!));
+  };
+
+  window.__onNativeAdminNotifications = (list) => {
+    latestAdminNotifications = Array.isArray(list) ? list : [];
+    adminNotifListeners.forEach((cb) => cb(latestAdminNotifications!));
+  };
+
+  window.__onNativeAdminChats = (list) => {
+    latestAdminChats = Array.isArray(list) ? list : [];
+    adminChatsListeners.forEach((cb) => cb(latestAdminChats!));
+  };
+
+  window.__onNativeAdminChatMessages = (list) => {
+    latestAdminChatMessages = Array.isArray(list) ? list : [];
+    adminChatMessageListeners.forEach((cb) => cb(latestAdminChatMessages!));
   };
 }
 
@@ -444,3 +532,232 @@ export function subscribeNativeAllStudents(
     maybeStopNativeAdminListeners();
   };
 }
+
+// =========================================================================
+// Native Notification Center, FCM Push, Multi-Admin & 1-to-1 Chat Bridges
+// =========================================================================
+
+let adminMessagingListenersStarted = false;
+let activeNativeChatThreadId = '';
+
+function ensureNativeMessagingListenersStarted(): void {
+  if (adminMessagingListenersStarted) return;
+  adminMessagingListenersStarted = true;
+  window.AndroidFirebaseBridge?.startAdminNotificationsAndChatListeners?.();
+}
+
+function maybeStopNativeMessagingListeners(): void {
+  if (
+    adminDirectoryListeners.size === 0 &&
+    adminInvitesListeners.size === 0 &&
+    adminNotifListeners.size === 0 &&
+    adminChatsListeners.size === 0
+  ) {
+    adminMessagingListenersStarted = false;
+    window.AndroidFirebaseBridge?.stopAdminNotificationsAndChatListeners?.();
+  }
+}
+
+export function getNativeNotificationPermissionStatus(): 'granted' | 'denied' {
+  if (!hasNativeFirebaseBridge()) return 'granted';
+  try {
+    return window.AndroidFirebaseBridge?.getNotificationPermissionStatus?.() === 'granted'
+      ? 'granted'
+      : 'denied';
+  } catch {
+    return 'denied';
+  }
+}
+
+export async function requestNativeNotificationPermission(): Promise<'granted' | 'denied'> {
+  if (!hasNativeFirebaseBridge()) return 'granted';
+  const status = await invokeNativeBridgeCall<string>((callId) => {
+    window.AndroidFirebaseBridge?.requestNotificationPermission?.(callId);
+  });
+  return status === 'granted' ? 'granted' : 'denied';
+}
+
+export function subscribeNativeNotificationPermission(
+  cb: (status: 'granted' | 'denied') => void
+): () => void {
+  notifPermissionListeners.add(cb);
+  return () => {
+    notifPermissionListeners.delete(cb);
+  };
+}
+
+export function consumeNativePendingDeepLink(): AdminDeepLinkPayload | null {
+  if (!hasNativeFirebaseBridge()) return null;
+  try {
+    const raw = window.AndroidFirebaseBridge?.consumePendingDeepLink?.();
+    if (!raw || raw === 'null') return null;
+    const parsed = JSON.parse(raw) as AdminDeepLinkPayload | null;
+    return parsed?.targetRoute ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+export function subscribeNativeAdminDeepLink(
+  cb: (payload: AdminDeepLinkPayload) => void
+): () => void {
+  adminDeepLinkListeners.add(cb);
+  return () => {
+    adminDeepLinkListeners.delete(cb);
+  };
+}
+
+export async function syncNativeAdminProfileAndFcmToken(): Promise<AdminUser> {
+  return invokeNativeBridgeCall<AdminUser>((callId) => {
+    window.AndroidFirebaseBridge?.syncAdminProfileAndFcmToken?.(callId);
+  });
+}
+
+export async function updateNativeAdminNotificationPrefs(
+  prefs: AdminNotificationPrefs
+): Promise<void> {
+  await invokeNativeBridgeCall((callId) => {
+    window.AndroidFirebaseBridge?.updateAdminNotificationPrefs?.(callId, JSON.stringify(prefs));
+  });
+}
+
+export async function addNativeAdminInvite(email: string, displayName: string): Promise<void> {
+  await invokeNativeBridgeCall((callId) => {
+    window.AndroidFirebaseBridge?.addAdminInvite?.(
+      callId,
+      JSON.stringify({ email, displayName })
+    );
+  });
+}
+
+export async function removeNativeAdminInvite(email: string): Promise<void> {
+  await invokeNativeBridgeCall((callId) => {
+    window.AndroidFirebaseBridge?.removeAdminInvite?.(callId, email);
+  });
+}
+
+export async function logNativeAdminNotificationEvent(payload: {
+  notifId?: string;
+  category: string;
+  title: string;
+  body: string;
+  actorName?: string;
+  actorMobile?: string;
+  actorId?: string;
+  targetRoute?: string;
+  referenceId?: string;
+}): Promise<void> {
+  if (!hasNativeFirebaseBridge()) return;
+  await invokeNativeBridgeCall((callId) => {
+    window.AndroidFirebaseBridge?.logAdminNotificationEvent?.(callId, JSON.stringify(payload));
+  }).catch(() => {});
+}
+
+export function subscribeNativeAdminDirectory(
+  cb: (list: AdminUser[]) => void
+): () => void {
+  adminDirectoryListeners.add(cb);
+  if (latestAdminDirectory !== undefined) cb(latestAdminDirectory);
+  ensureNativeMessagingListenersStarted();
+  return () => {
+    adminDirectoryListeners.delete(cb);
+    maybeStopNativeMessagingListeners();
+  };
+}
+
+export function subscribeNativeAdminInvites(
+  cb: (list: AdminInvite[]) => void
+): () => void {
+  adminInvitesListeners.add(cb);
+  if (latestAdminInvites !== undefined) cb(latestAdminInvites);
+  ensureNativeMessagingListenersStarted();
+  return () => {
+    adminInvitesListeners.delete(cb);
+    maybeStopNativeMessagingListeners();
+  };
+}
+
+export function subscribeNativeAdminNotifications(
+  cb: (list: AdminNotificationItem[]) => void
+): () => void {
+  adminNotifListeners.add(cb);
+  if (latestAdminNotifications !== undefined) cb(latestAdminNotifications);
+  ensureNativeMessagingListenersStarted();
+  return () => {
+    adminNotifListeners.delete(cb);
+    maybeStopNativeMessagingListeners();
+  };
+}
+
+export function subscribeNativeAdminChats(
+  cb: (list: AdminChatThread[]) => void
+): () => void {
+  adminChatsListeners.add(cb);
+  if (latestAdminChats !== undefined) cb(latestAdminChats);
+  ensureNativeMessagingListenersStarted();
+  return () => {
+    adminChatsListeners.delete(cb);
+    maybeStopNativeMessagingListeners();
+  };
+}
+
+export function subscribeNativeAdminChatMessages(
+  chatId: string,
+  cb: (list: AdminChatMessage[]) => void
+): () => void {
+  if (!chatId.trim()) {
+    cb([]);
+    return () => {};
+  }
+  if (activeNativeChatThreadId !== chatId) {
+    latestAdminChatMessages = undefined;
+    activeNativeChatThreadId = chatId;
+    window.AndroidFirebaseBridge?.startAdminChatThreadListener?.(chatId);
+  }
+  adminChatMessageListeners.add(cb);
+  if (latestAdminChatMessages !== undefined) cb(latestAdminChatMessages);
+  return () => {
+    adminChatMessageListeners.delete(cb);
+    if (adminChatMessageListeners.size === 0) {
+      activeNativeChatThreadId = '';
+      latestAdminChatMessages = undefined;
+      window.AndroidFirebaseBridge?.stopAdminChatThreadListener?.();
+    }
+  };
+}
+
+export async function markNativeAdminNotificationRead(notifId: string): Promise<void> {
+  await invokeNativeBridgeCall((callId) => {
+    window.AndroidFirebaseBridge?.markAdminNotificationRead?.(callId, notifId);
+  });
+}
+
+export async function markAllNativeAdminNotificationsRead(): Promise<void> {
+  await invokeNativeBridgeCall((callId) => {
+    window.AndroidFirebaseBridge?.markAllAdminNotificationsRead?.(callId);
+  });
+}
+
+export async function deleteNativeAdminNotification(notifId: string): Promise<void> {
+  await invokeNativeBridgeCall((callId) => {
+    window.AndroidFirebaseBridge?.deleteAdminNotification?.(callId, notifId);
+  });
+}
+
+export async function sendNativeAdminChatMessage(payload: {
+  recipientUid: string;
+  recipientName: string;
+  recipientPhotoUrl?: string;
+  text: string;
+}): Promise<{ chatId: string; messageId: string }> {
+  return invokeNativeBridgeCall<{ chatId: string; messageId: string }>((callId) => {
+    window.AndroidFirebaseBridge?.sendAdminChatMessage?.(callId, JSON.stringify(payload));
+  });
+}
+
+export async function markNativeChatMessagesRead(chatId: string): Promise<void> {
+  await invokeNativeBridgeCall((callId) => {
+    window.AndroidFirebaseBridge?.markChatMessagesRead?.(callId, chatId);
+  });
+}
+

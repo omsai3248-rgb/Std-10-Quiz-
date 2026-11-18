@@ -67,7 +67,7 @@
     },
     "PaymentRequest": {
       "title": "PaymentRequest",
-      "description": "Public payment submission with UTR ID and screenshot stored in Firebase Storage.",
+      "description": "Public payment submission with UTR ID and screenshot.",
       "type": "object",
       "properties": {
         "userId": { "type": "string" },
@@ -105,22 +105,128 @@
       },
       "required": ["utrNormalized", "requestId", "createdAt"]
     },
-    "AdminSession": {
-      "title": "AdminSession",
-      "description": "Tracks the currently active Admin device ID so logging in on a new device auto-logs out older devices.",
+    "AdminUser": {
+      "title": "AdminUser",
+      "description": "Verified Admin directory entry storing display name, avatar photo URL, role, and notification category preferences.",
       "type": "object",
       "properties": {
-        "activeDeviceId": { "type": "string" },
-        "activeDeviceName": { "type": "string" },
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "photoUrl": { "type": "string" },
+        "role": { "type": "string", "enum": ["super_admin", "admin"] },
+        "isActive": { "type": "boolean" },
+        "notificationPrefs": {
+          "type": "object",
+          "properties": {
+            "registrations": { "type": "boolean" },
+            "logins": { "type": "boolean" },
+            "payments": { "type": "boolean" },
+            "codeRedemptions": { "type": "boolean" },
+            "quizActivity": { "type": "boolean" },
+            "dataUpdates": { "type": "boolean" },
+            "adminChat": { "type": "boolean" }
+          }
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["activeDeviceId", "activeDeviceName", "updatedAt"]
+      "required": ["uid", "email", "displayName", "photoUrl", "role", "isActive", "notificationPrefs", "createdAt", "updatedAt"]
+    },
+    "AdminInvite": {
+      "title": "AdminInvite",
+      "description": "Super-admin allowlist authorizing additional Admin Google accounts by verified email.",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "addedByUid": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["email", "displayName", "addedByUid", "createdAt"]
+    },
+    "AdminFcmToken": {
+      "title": "AdminFcmToken",
+      "description": "Per-device FCM registration token for an authenticated Admin supporting multi-admin and multi-device push delivery.",
+      "type": "object",
+      "properties": {
+        "adminUid": { "type": "string" },
+        "adminEmail": { "type": "string" },
+        "adminName": { "type": "string" },
+        "token": { "type": "string" },
+        "platform": { "type": "string", "enum": ["android", "web"] },
+        "deviceId": { "type": "string" },
+        "deviceName": { "type": "string" },
+        "appVersion": { "type": "string" },
+        "enabled": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["adminUid", "adminEmail", "adminName", "token", "platform", "deviceId", "deviceName", "appVersion", "enabled", "createdAt", "updatedAt"]
+    },
+    "AdminNotification": {
+      "title": "AdminNotification",
+      "description": "Persistent Admin Notification Center item tracking key app events with read/unread state and category metadata.",
+      "type": "object",
+      "properties": {
+        "category": { "type": "string", "enum": ["registration", "login", "payment", "code_redeem", "quiz_activity", "data_update", "admin_chat"] },
+        "title": { "type": "string" },
+        "body": { "type": "string" },
+        "actorName": { "type": "string" },
+        "actorMobile": { "type": "string" },
+        "actorId": { "type": "string" },
+        "targetRoute": { "type": "string", "enum": ["admin_requests", "admin_codes", "admin_students", "admin_updates", "admin_notifications"] },
+        "referenceId": { "type": "string" },
+        "isRead": { "type": "boolean" },
+        "readBy": { "type": "array", "items": { "type": "string" } },
+        "pushDispatched": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["category", "title", "body", "actorName", "actorMobile", "actorId", "targetRoute", "referenceId", "isRead", "readBy", "pushDispatched", "createdAt", "updatedAt"]
+    },
+    "AdminChat": {
+      "title": "AdminChat",
+      "description": "Real-time one-to-one Admin conversation metadata including participant profiles, last message preview, and per-admin unread counts.",
+      "type": "object",
+      "properties": {
+        "participants": { "type": "array", "items": { "type": "string" } },
+        "lastMessageText": { "type": "string" },
+        "lastMessageSenderUid": { "type": "string" },
+        "lastMessageSenderName": { "type": "string" },
+        "lastMessageStatus": { "type": "string", "enum": ["sent", "delivered", "read"] },
+        "lastMessageAt": { "type": "string", "format": "date-time" },
+        "unreadCounts": { "type": "object" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["participants", "lastMessageText", "lastMessageSenderUid", "lastMessageSenderName", "lastMessageStatus", "lastMessageAt", "unreadCounts", "createdAt", "updatedAt"]
+    },
+    "AdminChatMessage": {
+      "title": "AdminChatMessage",
+      "description": "Individual one-to-one Admin personal message supporting sent/delivered/read receipts and FCM push alerts.",
+      "type": "object",
+      "properties": {
+        "chatId": { "type": "string" },
+        "senderUid": { "type": "string" },
+        "senderName": { "type": "string" },
+        "senderPhotoUrl": { "type": "string" },
+        "recipientUid": { "type": "string" },
+        "participantUids": { "type": "array", "items": { "type": "string" } },
+        "text": { "type": "string" },
+        "status": { "type": "string", "enum": ["sent", "delivered", "read"] },
+        "deliveredAt": { "type": "string", "format": "date-time" },
+        "readAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["chatId", "senderUid", "senderName", "senderPhotoUrl", "recipientUid", "participantUids", "text", "status", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
     "/students/{userId}": {
       "schema": { "$ref": "#/entities/StudentProfile" },
-      "description": "Unlocked subject tracking and active device session per user UID."
+      "description": "Unlocked subject tracking and quiz stats per student ID."
     },
     "/payment_requests/{requestId}": {
       "schema": { "$ref": "#/entities/PaymentRequest" },
@@ -134,9 +240,29 @@
       "schema": { "$ref": "#/entities/AccessCode" },
       "description": "Permanent 8-character codes (unused -> used)."
     },
-    "/admin_sessions/{sessionId}": {
-      "schema": { "$ref": "#/entities/AdminSession" },
-      "description": "Single-device admin session lock for automatic logout across devices."
+    "/admins/{adminUid}": {
+      "schema": { "$ref": "#/entities/AdminUser" },
+      "description": "Verified Admin directory profiles & category notification preferences."
+    },
+    "/admin_invites/{inviteEmail}": {
+      "schema": { "$ref": "#/entities/AdminInvite" },
+      "description": "Super-admin allowlist authorizing additional Admin Google accounts."
+    },
+    "/admin_fcm_tokens/{tokenDocId}": {
+      "schema": { "$ref": "#/entities/AdminFcmToken" },
+      "description": "Per-device FCM tokens scoped to verified Admin accounts."
+    },
+    "/admin_notifications/{notifId}": {
+      "schema": { "$ref": "#/entities/AdminNotification" },
+      "description": "Admin Notification Center log of registrations, logins, payments, code redemptions, quiz completions, and updates."
+    },
+    "/admin_chats/{chatId}": {
+      "schema": { "$ref": "#/entities/AdminChat" },
+      "description": "One-to-one Admin personal conversation metadata."
+    },
+    "/admin_chats/{chatId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/AdminChatMessage" },
+      "description": "One-to-one Admin personal chat messages with sent/delivered/read status."
     }
   }
 }

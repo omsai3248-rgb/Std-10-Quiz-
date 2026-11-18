@@ -10,28 +10,46 @@ import { UpdateAvailableModal } from './components/AppUpdateComponents';
 import { useTranslation } from './i18n/translations';
 import { StudentMobileLoginScreen } from './screens/StudentMobileLoginScreen';
 import { UseCodeScreen } from './screens/UseCodeScreen';
-import type { AdminLiveAlert } from './screens/AdminPanelScreen';
+import type { AdminLiveAlert, AdminTabId } from './screens/AdminPanelScreen';
 import { quizAudioPlayer } from './services/audioPlayer';
 import { extractReadableErrorMessage } from './services/firestoreErrorHandler';
+import {
+  consumeNativePendingDeepLink,
+  subscribeNativeAdminDeepLink,
+  subscribeNativeNotificationPermission,
+} from './services/nativeFirebaseBridge';
 import {
   ADMIN_PAGE_SIZE,
   approvePaymentAndAssignCode,
   deleteAccessCodeAdmin,
+  deleteAdminNotificationItem,
   deletePaymentRequestAdmin,
   deleteStudentAdmin,
   flushPendingSyncOperations,
   forceRefreshNativeAdminListeners,
   generateBulkAccessCodes,
   generateDirectCodeForMobile,
+  getAdminChatId,
   getNativeActiveStudentSnapshot,
+  getNotificationPermissionState,
   getStudentDocId,
   hasNativeFirebaseBridge,
+  inviteAdminByEmail,
   isAdminAccount,
+  isSuperAdminEmail,
   loadMoreAdminCodes,
   loadMoreAdminPayments,
   loadMoreAdminStudents,
   loadMyPaymentRequestIds,
   loginStudentByMobile,
+  markAdminChatMessagesRead,
+  markAdminNotificationAsRead,
+  markAllAdminNotificationsAsRead,
+  observeAdminChatMessages,
+  observeAdminChats,
+  observeAdminDirectory,
+  observeAdminInvites,
+  observeAdminNotifications,
   observeAllAccessCodes,
   observeAllPaymentRequests,
   observeAllStudents,
@@ -45,14 +63,19 @@ import {
   recordQuizAttempt,
   redeemAccessCodePublic,
   rejectPaymentRequest,
+  removeAdminInviteByEmail,
+  requestAppNotificationPermission,
   resumeNativeAdminListeners,
   saveMyPaymentRequestId,
   saveReleaseConfig,
+  sendAdminChatMessage,
   setNativeActiveStudentMobile,
   signOutAdminSession,
   submitPaymentRequest,
   syncAdminDeltaSince,
+  syncAdminProfileAndPushToken,
   toggleStudentQuizAccess,
+  updateAdminNotificationPrefs,
   updateStudentSubjectAccess,
   verifyActiveSessionOnResume,
   type AdminPasscodeAuthResult,
@@ -79,6 +102,14 @@ import {
   resolvePaymentSubjectId,
   type AccessCode,
   type ActionBanner,
+  type AdminChatMessage,
+  type AdminChatThread,
+  type AdminDeepLinkPayload,
+  type AdminInvite,
+  type AdminNotificationCategory,
+  type AdminNotificationItem,
+  type AdminNotificationPrefs,
+  type AdminUser,
   type AppReleaseConfig,
   type GitHubReleaseInfo,
   type PaymentRequest,
@@ -266,11 +297,38 @@ export const App: React.FC = () => {
 
   const [availableUpdate, setAvailableUpdate] = useState<GitHubReleaseInfo | null>(null);
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
+
+  // Admin Notifications Center, Push Permission & 1-to-1 Messaging
+  const [adminSelectedTab, setAdminSelectedTab] = useState<AdminTabId>('requests');
+  const [adminProfile, setAdminProfile] = useState<AdminUser | null>(null);
+  const [adminDirectory, setAdminDirectory] = useState<AdminUser[]>([]);
+  const [adminInvites, setAdminInvites] = useState<AdminInvite[]>([]);
+  const [adminNotifications, setAdminNotifications] = useState<AdminNotificationItem[]>([]);
+  const [adminChats, setAdminChats] = useState<AdminChatThread[]>([]);
+  const [activeAdminChatId, setActiveAdminChatId] = useState('');
+  const [activeAdminChatMessages, setActiveAdminChatMessages] = useState<AdminChatMessage[]>([]);
+  const [notificationPermissionStatus, setNotificationPermissionStatus] = useState<
+    'granted' | 'denied' | 'default'
+  >(() => getNotificationPermissionState());
+  const [bannerTargetAction, setBannerTargetAction] = useState<{
+    tab: AdminTabId;
+    chatId?: string;
+  } | null>(null);
+
   const lastCheckedConfigKeyRef = useRef<string>('');
   const knownPendingIdsRef = useRef<Set<string> | null>(null);
   const knownUsedCodesRef = useRef<Set<string> | null>(null);
+  const knownNotifIdsRef = useRef<Set<string> | null>(null);
+  const knownChatSigRef = useRef<Map<string, string> | null>(null);
+  const hasAutoRequestedPushRef = useRef(false);
+  const pendingDeepLinkRef = useRef<AdminDeepLinkPayload | null>(null);
   const isSoundEnabledRef = useRef(isSoundEnabled);
   const langRef = useRef(lang);
+  const currentNotificationPrefsRef = useRef<AdminNotificationPrefs | null>(null);
+  const activeAdminChatIdRef = useRef(activeAdminChatId);
+  const adminSelectedTabRef = useRef(adminSelectedTab);
+  const routeRef = useRef(route);
+  const isDocumentVisibleRef = useRef(isDocumentVisible);
 
   useEffect(() => {
     isSoundEnabledRef.current = isSoundEnabled;
@@ -279,6 +337,22 @@ export const App: React.FC = () => {
   useEffect(() => {
     langRef.current = lang;
   }, [lang]);
+
+  useEffect(() => {
+    activeAdminChatIdRef.current = activeAdminChatId;
+  }, [activeAdminChatId]);
+
+  useEffect(() => {
+    adminSelectedTabRef.current = adminSelectedTab;
+  }, [adminSelectedTab]);
+
+  useEffect(() => {
+    routeRef.current = route;
+  }, [route]);
+
+  useEffect(() => {
+    isDocumentVisibleRef.current = isDocumentVisible;
+  }, [isDocumentVisible]);
 
   const hasValidMobile = useMemo(
     () => /^[0-9]{10}$/.test(savedUserMeta.mobile),
@@ -360,8 +434,17 @@ export const App: React.FC = () => {
         setAllPayments([]);
         setAllCodes([]);
         setAllStudents([]);
+        setAdminProfile(null);
+        setAdminDirectory([]);
+        setAdminInvites([]);
+        setAdminNotifications([]);
+        setAdminChats([]);
+        setActiveAdminChatId('');
+        setActiveAdminChatMessages([]);
         knownPendingIdsRef.current = null;
         knownUsedCodesRef.current = null;
+        knownNotifIdsRef.current = null;
+        knownChatSigRef.current = null;
       } else {
         setAuthUser(user);
       }
@@ -372,10 +455,223 @@ export const App: React.FC = () => {
 
   const isFirebaseAdmin = useMemo(() => {
     if (!authUser) return false;
-    return isAdminAccount(authUser.phoneNumber ?? '', authUser.email ?? '');
-  }, [authUser]);
+    if (isAdminAccount(authUser.phoneNumber ?? '', authUser.email ?? '')) return true;
+    if (adminProfile?.isActive) return true;
+    return adminDirectory.some((a) => a.uid === authUser.uid && a.isActive);
+  }, [adminDirectory, adminProfile, authUser]);
+
+  const isSuperAdmin = useMemo(() => {
+    if (!authUser) return false;
+    return isSuperAdminEmail(authUser.email ?? '') || adminProfile?.role === 'super_admin';
+  }, [adminProfile?.role, authUser]);
 
   const isAdmin = isFirebaseAdmin;
+
+  const currentNotificationPrefs = useMemo<AdminNotificationPrefs | null>(() => {
+    if (!authUser) return null;
+    const fromDir = adminDirectory.find((a) => a.uid === authUser.uid);
+    return fromDir?.notificationPrefs ?? adminProfile?.notificationPrefs ?? null;
+  }, [adminDirectory, adminProfile, authUser]);
+
+  useEffect(() => {
+    currentNotificationPrefsRef.current = currentNotificationPrefs;
+  }, [currentNotificationPrefs]);
+
+  const applyAdminDeepLink = useCallback(
+    (payload: AdminDeepLinkPayload) => {
+      setRoute({ name: 'public', tab: 'admin' });
+      switch (payload.targetRoute) {
+        case 'admin_chat': {
+          setAdminSelectedTab('chat');
+          const resolvedChatId =
+            payload.chatId?.trim() ||
+            (payload.senderUid && authUser?.uid
+              ? getAdminChatId(authUser.uid, payload.senderUid)
+              : '');
+          if (resolvedChatId) {
+            setActiveAdminChatId(resolvedChatId);
+            void markAdminChatMessagesRead(resolvedChatId);
+          }
+          break;
+        }
+        case 'admin_requests':
+          setAdminSelectedTab('requests');
+          break;
+        case 'admin_codes':
+          setAdminSelectedTab('used_codes');
+          break;
+        case 'admin_students':
+          setAdminSelectedTab('students');
+          break;
+        case 'admin_updates':
+          setAdminSelectedTab('updates');
+          break;
+        default:
+          setAdminSelectedTab('notifications');
+          break;
+      }
+      if (payload.notifId) {
+        void markAdminNotificationAsRead(payload.notifId).catch(() => {});
+      }
+    },
+    [authUser?.uid]
+  );
+
+  // Sync Admin Profile + FCM Token, Notification Center, Multi-Admin Directory & 1-to-1 Chat Listeners
+  useEffect(() => {
+    if (!hasNativeFirebaseBridge()) return undefined;
+    const unsubPerm = subscribeNativeNotificationPermission((status) => {
+      setNotificationPermissionStatus(status);
+    });
+    const unsubDeepLink = subscribeNativeAdminDeepLink((payload) => {
+      if (isFirebaseAdmin) {
+        applyAdminDeepLink(payload);
+      } else {
+        pendingDeepLinkRef.current = payload;
+      }
+    });
+    const initialDeepLink = consumeNativePendingDeepLink();
+    if (initialDeepLink) {
+      pendingDeepLinkRef.current = initialDeepLink;
+    }
+    return () => {
+      unsubPerm();
+      unsubDeepLink();
+    };
+  }, [applyAdminDeepLink, isFirebaseAdmin]);
+
+  useEffect(() => {
+    if (!isFirebaseAdmin || !authUser?.uid) return undefined;
+
+    if (pendingDeepLinkRef.current) {
+      const pending = pendingDeepLinkRef.current;
+      pendingDeepLinkRef.current = null;
+      applyAdminDeepLink(pending);
+    }
+
+    void syncAdminProfileAndPushToken()
+      .then((profile) => {
+        if (profile) setAdminProfile(profile);
+      })
+      .catch(() => {});
+
+    if (
+      hasNativeFirebaseBridge() &&
+      getNotificationPermissionState() !== 'granted' &&
+      !hasAutoRequestedPushRef.current
+    ) {
+      hasAutoRequestedPushRef.current = true;
+      void requestAppNotificationPermission()
+        .then((status) => setNotificationPermissionStatus(status))
+        .catch(() => {});
+    }
+
+    const unsubs = [
+      observeAdminDirectory(setAdminDirectory),
+      observeAdminInvites(isSuperAdmin, setAdminInvites),
+      observeAdminNotifications((items) => {
+        setAdminNotifications(items);
+        const ids = new Set(items.map((n) => n.id));
+        if (knownNotifIdsRef.current === null) {
+          knownNotifIdsRef.current = ids;
+          return;
+        }
+        const newlyAdded = items.filter((n) => !knownNotifIdsRef.current?.has(n.id));
+        knownNotifIdsRef.current = ids;
+          if (newlyAdded.length > 0) {
+          const latest = newlyAdded[0];
+          const prefs = currentNotificationPrefsRef.current;
+          const catPrefMap: Record<AdminNotificationCategory, keyof AdminNotificationPrefs> = {
+            registration: 'registrations',
+            login: 'logins',
+            payment: 'payments',
+            code_redeem: 'codeRedemptions',
+            quiz_activity: 'quizActivity',
+            data_update: 'dataUpdates',
+            admin_chat: 'adminChat',
+          };
+          const prefKey = catPrefMap[latest.category];
+          const allowed = prefs ? prefs[prefKey] !== false : true;
+          if (allowed && !latest.isRead) {
+            if (isSoundEnabledRef.current) quizAudioPlayer.playAdminAlertChime();
+            const targetTabMap: Record<string, AdminTabId> = {
+              admin_requests: 'requests',
+              admin_codes: 'used_codes',
+              admin_students: 'students',
+              admin_updates: 'updates',
+              admin_notifications: 'notifications',
+            };
+            setBannerTargetAction({
+              tab: targetTabMap[latest.targetRoute] ?? 'notifications',
+            });
+            setBanner({
+              isError: false,
+              message: `${latest.title} — ${latest.body}`,
+            });
+          }
+        }
+      }),
+      observeAdminChats(authUser.uid, (chats) => {
+        setAdminChats(chats);
+        const nextMap = new Map<string, string>();
+        chats.forEach((c) => {
+          const sig = `${c.lastMessageSenderUid}_${c.lastMessageAt?.seconds ?? 0}`;
+          nextMap.set(c.id, sig);
+        });
+        if (knownChatSigRef.current === null) {
+          knownChatSigRef.current = nextMap;
+          return;
+        }
+        const incomingChat = chats.find((c) => {
+          const prevSig = knownChatSigRef.current?.get(c.id);
+          const curSig = nextMap.get(c.id);
+          return (
+            curSig &&
+            prevSig !== curSig &&
+            c.lastMessageSenderUid &&
+            c.lastMessageSenderUid !== authUser.uid
+          );
+        });
+        knownChatSigRef.current = nextMap;
+
+        if (incomingChat) {
+          const prefs = currentNotificationPrefsRef.current;
+          const allowed = prefs ? prefs.adminChat !== false : true;
+          const curRoute = routeRef.current;
+          const alreadyViewingThisThread =
+            curRoute.name === 'public' &&
+            curRoute.tab === 'admin' &&
+            adminSelectedTabRef.current === 'chat' &&
+            activeAdminChatIdRef.current === incomingChat.id &&
+            isDocumentVisibleRef.current;
+          if (allowed && !alreadyViewingThisThread) {
+            if (isSoundEnabledRef.current) quizAudioPlayer.playAdminAlertChime();
+            setBannerTargetAction({ tab: 'chat', chatId: incomingChat.id });
+            setBanner({
+              isError: false,
+              message: `💬 ${incomingChat.lastMessageSenderName || 'Admin'}: ${incomingChat.lastMessageText}`,
+            });
+          }
+        }
+      }),
+    ];
+
+    return () => {
+      unsubs.forEach((u) => u());
+    };
+  }, [applyAdminDeepLink, authUser?.uid, isFirebaseAdmin, isSuperAdmin]);
+
+  useEffect(() => {
+    if (!isFirebaseAdmin || !authUser?.uid || !activeAdminChatId) {
+      setActiveAdminChatMessages([]);
+      return undefined;
+    }
+    return observeAdminChatMessages(
+      activeAdminChatId,
+      authUser.uid,
+      setActiveAdminChatMessages
+    );
+  }, [activeAdminChatId, authUser?.uid, isFirebaseAdmin]);
 
   const studentDocId = useMemo(() => {
     if (hasValidMobile) {
@@ -731,7 +1027,10 @@ export const App: React.FC = () => {
   useEffect(() => {
     if (!banner) return;
     const timeoutMs = isAdmin ? 6500 : 5000;
-    const timer = window.setTimeout(() => setBanner(null), timeoutMs);
+    const timer = window.setTimeout(() => {
+      setBanner(null);
+      setBannerTargetAction(null);
+    }, timeoutMs);
     return () => window.clearTimeout(timer);
   }, [banner, isAdmin]);
 
@@ -1324,6 +1623,62 @@ export const App: React.FC = () => {
           onDeleteCode={handleDeleteCode}
           onDeleteStudent={handleDeleteStudent}
           onNotify={(msg, isErr) => setBanner({ isError: Boolean(isErr), message: msg })}
+          currentAdminUid={authUser?.uid ?? ''}
+          currentAdminEmail={authUser?.email ?? ''}
+          isSuperAdmin={isSuperAdmin}
+          adminDirectory={adminDirectory}
+          adminInvites={adminInvites}
+          adminNotifications={adminNotifications}
+          adminChats={adminChats}
+          notificationPrefs={currentNotificationPrefs}
+          notificationPermissionStatus={notificationPermissionStatus}
+          activeChatId={activeAdminChatId}
+          activeChatMessages={activeAdminChatMessages}
+          controlledTab={adminSelectedTab}
+          onSelectTab={setAdminSelectedTab}
+          onSelectChat={setActiveAdminChatId}
+          onRequestNotificationPermission={async () => {
+            const st = await requestAppNotificationPermission();
+            setNotificationPermissionStatus(st);
+          }}
+          onUpdateNotificationPrefs={async (next) => {
+            try {
+              await updateAdminNotificationPrefs(next);
+            } catch (err) {
+              setBanner({ isError: true, message: formatAppError(err, 'Save failed') });
+            }
+          }}
+          onMarkNotificationRead={async (nid) => {
+            await markAdminNotificationAsRead(nid).catch(() => {});
+          }}
+          onMarkAllNotificationsRead={async () => {
+            await markAllAdminNotificationsAsRead().catch(() => {});
+          }}
+          onDeleteNotification={async (nid) => {
+            await deleteAdminNotificationItem(nid).catch(() => {});
+          }}
+          onSendChatMessage={async (payload) => {
+            try {
+              const sent = await sendAdminChatMessage(payload);
+              if (sent.chatId && activeAdminChatId !== sent.chatId) {
+                setActiveAdminChatId(sent.chatId);
+              }
+            } catch (err) {
+              setBanner({ isError: true, message: formatAppError(err, 'Failed to send') });
+              throw err;
+            }
+          }}
+          onMarkChatRead={async (cid) => {
+            await markAdminChatMessagesRead(cid).catch(() => {});
+          }}
+          onInviteAdmin={async (email, displayName) => {
+            await inviteAdminByEmail(email, displayName);
+          }}
+          onRemoveAdminInvite={async (email) => {
+            await removeAdminInviteByEmail(email).catch((err) => {
+              setBanner({ isError: true, message: formatAppError(err, 'Remove failed') });
+            });
+          }}
         />
       </Suspense>
     );
@@ -1404,6 +1759,13 @@ export const App: React.FC = () => {
     }
   } else {
     const pendingBadge = allPayments.filter((p) => p.status === 'pending').length;
+    const unreadNotifBadge = adminNotifications.filter(
+      (n) => !n.isRead && (!authUser?.uid || !n.readBy.includes(authUser.uid))
+    ).length;
+    const unreadChatBadge = adminChats.reduce(
+      (sum, c) => sum + (authUser?.uid ? Number(c.unreadCounts?.[authUser.uid] ?? 0) : 0),
+      0
+    );
 
     bodyNode = (
       <div className="min-h-screen bg-[#FAF9F5] dark:bg-[#0B1120] text-[#0F172A] dark:text-[#F8FAFC] flex flex-col">
@@ -1413,7 +1775,7 @@ export const App: React.FC = () => {
           studentName={effectiveStudentName}
           studentMobile={savedUserMeta.mobile}
           isAdmin={isAdmin}
-          adminBadgeCount={liveAlerts.length || pendingBadge}
+          adminBadgeCount={unreadNotifBadge + unreadChatBadge + pendingBadge || liveAlerts.length}
           isDarkTheme={isDarkTheme}
           onSelectTab={(tab) => setRoute({ name: 'public', tab })}
           onStudentLogout={handleStudentLogout}
@@ -1502,23 +1864,39 @@ export const App: React.FC = () => {
               <p className="text-xs sm:text-sm font-bold leading-snug break-words">
                 {banner.message}
               </p>
-              {(route.name !== 'public' || route.tab !== 'admin') && (
+              {(route.name !== 'public' || route.tab !== 'admin' || bannerTargetAction) && (
                 <button
                   type="button"
                   onClick={() => {
                     setRoute({ name: 'public', tab: 'admin' });
+                    if (bannerTargetAction) {
+                      setAdminSelectedTab(bannerTargetAction.tab);
+                      if (bannerTargetAction.chatId) {
+                        setActiveAdminChatId(bannerTargetAction.chatId);
+                      }
+                      setBannerTargetAction(null);
+                    }
                     setBanner(null);
                   }}
                   className="mt-1 inline-flex items-center rounded-lg bg-[#1E3A8A] hover:bg-[#172554] dark:bg-[#2563EB] text-white px-2.5 py-1 text-[11px] font-extrabold cursor-pointer"
                 >
-                  {lang === 'en' ? 'Open Admin Panel' : 'એડમિન પેનલ ખોલો'}
+                  {bannerTargetAction?.tab === 'chat'
+                    ? lang === 'en'
+                      ? 'Reply in Chat'
+                      : 'ચેટમાં જવાબ આપો'
+                    : lang === 'en'
+                      ? 'Open Admin Panel'
+                      : 'એડમિન પેનલ ખોલો'}
                 </button>
               )}
             </div>
 
             <button
               type="button"
-              onClick={() => setBanner(null)}
+              onClick={() => {
+                setBannerTargetAction(null);
+                setBanner(null);
+              }}
               aria-label={t.closeBtn}
               className="h-9 w-9 rounded-xl hover:bg-black/10 dark:hover:bg-white/10 flex items-center justify-center cursor-pointer shrink-0"
             >
