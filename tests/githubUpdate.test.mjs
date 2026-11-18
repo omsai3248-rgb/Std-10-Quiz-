@@ -211,3 +211,14 @@ test('fetchLatestRelease parses GitHub Releases API and falls back to version.js
     globalThis.fetch = originalFetch;
   }
 });
+
+test('AppUpdateComponents renders update notification in full screen without clipping or text truncation', () => {
+  const source = fs.readFileSync(path.resolve('src/components/AppUpdateComponents.tsx'), 'utf8');
+  assert.equal(source.includes('h-[100dvh]'), true);
+  assert.equal(source.includes('fixed inset-0 z-[90] flex flex-col w-full h-[100dvh]'), true);
+  assert.equal(source.includes('max-h-[90vh]'), false);
+  assert.equal(source.includes('max-h-36'), false);
+  assert.equal(source.includes('max-h-28'), false);
+  assert.equal(source.includes('line-clamp-2'), false);
+});
+
