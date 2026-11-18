@@ -36,6 +36,7 @@ class QuizFirebaseMessagingService : FirebaseMessagingService() {
             val title = data["title"].orEmpty().ifBlank { message.notification?.title.orEmpty() }
             val body = data["body"].orEmpty().ifBlank { message.notification?.body.orEmpty() }
             val isMandatory = data["isMandatory"] == "true"
+            val apkDownloadUrl = data["apkDownloadUrl"].orEmpty()
 
             AdminNotificationHelper.showAppUpdateNotification(
                 context = applicationContext,
@@ -45,7 +46,8 @@ class QuizFirebaseMessagingService : FirebaseMessagingService() {
                 versionCode = versionCode,
                 title = title,
                 body = body,
-                isMandatory = isMandatory
+                isMandatory = isMandatory,
+                apkDownloadUrl = apkDownloadUrl
             )
             return
         }

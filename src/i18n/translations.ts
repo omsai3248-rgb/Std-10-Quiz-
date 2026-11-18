@@ -341,6 +341,12 @@ export interface Translations {
   adminUpdateActiveReleaseTitle: string;
   adminUpdateNoActiveRelease: string;
   adminUpdatePushSentCount: string;
+  githubAutoUpdateTitle: string;
+  githubAutoUpdateDesc: string;
+  githubRepoLabel: string;
+  githubRepoSaveBtn: string;
+  githubRepoSavedMsg: string;
+  webUpdateApplyingLabel: string;
 }
 
 const GU: Translations = {
@@ -644,11 +650,11 @@ const GU: Translations = {
   appUpdateMandatoryBadge: 'જરૂરી (Mandatory)',
   appUpdateCurrentVersionLabel: 'હાલનું વર્ઝન',
   appUpdateNewVersionLabel: 'નવું વર્ઝન',
-  appUpdateNowBtn: 'હમણાં અપડેટ કરો (Update Now)',
+  appUpdateNowBtn: 'Update Now (હમણાં અપડેટ કરો)',
   appUpdateDownloadingBtn: 'ડાઉનલોડ થઈ રહ્યું છે...',
   appUpdateVerifyingLabel: 'APK સુરક્ષા ચકાસણી થઈ રહી છે...',
   appUpdateInstallingLabel: 'Android ઇન્સ્ટોલર ખુલી રહ્યું છે...',
-  appUpdateLaterBtn: 'પછીથી',
+  appUpdateLaterBtn: 'Update Later (પછીથી)',
   appUpdateRetryBtn: 'ફરી પ્રયાસ કરો (Retry)',
   appUpdatePermissionRequiredDesc: 'સીધું એપ અપડેટ ઇન્સ્ટોલ કરવા માટે "Install unknown apps" પરવાનગી ચાલુ કરો. પરવાનગી પછી તરત ઇન્સ્ટોલ થશે.',
   appUpdateGrantInstallPermBtn: 'પરવાનગી આપી ઇન્સ્ટોલ કરો',
@@ -679,6 +685,12 @@ const GU: Translations = {
   adminUpdateActiveReleaseTitle: 'હાલનું લાઇવ Firebase અપડેટ',
   adminUpdateNoActiveRelease: 'હજી સુધી કોઈ Firebase APK અપડેટ પબ્લિશ કરવામાં આવ્યું નથી.',
   adminUpdatePushSentCount: 'પબ્લિશ અને Push નોટિફિકેશન મોકલાયું',
+  githubAutoUpdateTitle: 'GitHub Main Branch ઓટો અપડેટ સિંક',
+  githubAutoUpdateDesc: 'GitHub ના main branch માં નવો code push થાય ત્યારે નવું વર્ઝન અને Release Notes આપમેળે બધા યુઝર્સને દેખાશે.',
+  githubRepoLabel: 'GitHub Repository (owner/repo)',
+  githubRepoSaveBtn: 'Repo સેવ કરો',
+  githubRepoSavedMsg: 'GitHub Repository ઓટો અપડેટ માટે સેવ થઈ ગઈ છે!',
+  webUpdateApplyingLabel: 'નવું Web વર્ઝન તૈયાર થઈ રહ્યું છે...',
 };
 
 const EN: Translations = {
@@ -987,7 +999,7 @@ const EN: Translations = {
   appUpdateDownloadingBtn: 'Downloading Update...',
   appUpdateVerifyingLabel: 'Verifying APK security & signature...',
   appUpdateInstallingLabel: 'Launching Android System Installer...',
-  appUpdateLaterBtn: 'Later',
+  appUpdateLaterBtn: 'Update Later',
   appUpdateRetryBtn: 'Retry Download',
   appUpdatePermissionRequiredDesc: 'Please enable "Install unknown apps" permission for this app so the update can install directly.',
   appUpdateGrantInstallPermBtn: 'Grant Permission & Install',
@@ -1018,6 +1030,12 @@ const EN: Translations = {
   adminUpdateActiveReleaseTitle: 'Active Firebase Release',
   adminUpdateNoActiveRelease: 'No Firebase APK release has been published yet.',
   adminUpdatePushSentCount: 'Published & Push Dispatched',
+  githubAutoUpdateTitle: 'GitHub Main Branch Auto-Update Sync',
+  githubAutoUpdateDesc: 'Automatically checks new releases and commit notes whenever code is pushed to GitHub main branch.',
+  githubRepoLabel: 'GitHub Repository (owner/repo)',
+  githubRepoSaveBtn: 'Save Repo',
+  githubRepoSavedMsg: 'GitHub Repository saved for automatic update checks!',
+  webUpdateApplyingLabel: 'Installing Web Update...',
 };
 
 interface LanguageContextValue {

@@ -25,6 +25,55 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Compute automatic version & commit release notes
+        id: release_meta
+        run: |
+          BASE_OFFSET=1
+          RUN_NUM="${GITHUB_RUN_NUMBER:-1}"
+          VERSION_CODE=$((BASE_OFFSET + RUN_NUM))
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            TAG="${GITHUB_REF_NAME}"
+            VERSION_NAME="${TAG#v}"
+          else
+            VERSION_NAME="1.0.${VERSION_CODE}"
+            TAG="v${VERSION_NAME}"
+          fi
+
+          PREV_TAG="$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || true)"
+          if [ -n "$PREV_TAG" ]; then
+            COMMIT_NOTES="$(git log "${PREV_TAG}..HEAD" --no-merges --max-count=12 --pretty=format:"• %s (%h)" || true)"
+          else
+            COMMIT_NOTES="$(git log -n 8 --no-merges --pretty=format:"• %s (%h)" || true)"
+          fi
+          if [ -z "$COMMIT_NOTES" ]; then
+            COMMIT_NOTES="• નવા સુધારા અને પર્ફોર્મન્સ અપડેટ (${GITHUB_SHA::7})"
+          fi
+
+          printf 'VERSION_CODE=%s\n' "$VERSION_CODE" >> "$GITHUB_ENV"
+          printf 'VERSION_NAME=%s\n' "$VERSION_NAME" >> "$GITHUB_ENV"
+          printf 'RELEASE_TAG=%s\n' "$TAG" >> "$GITHUB_ENV"
+
+          RELEASE_NOTES="નવું અપડેટ v${VERSION_NAME} (Build #${VERSION_CODE}) તૈયાર છે:\n${COMMIT_NOTES}"
+          {
+            echo "notes<<__EOF_NOTES__"
+            printf '%b\n' "$RELEASE_NOTES"
+            echo "__EOF_NOTES__"
+          } >> "$GITHUB_OUTPUT"
+
+          printf 'VITE_APP_VERSION_CODE=%s\n' "$VERSION_CODE" >> "$GITHUB_ENV"
+          printf 'VITE_APP_VERSION_NAME=%s\n' "$VERSION_NAME" >> "$GITHUB_ENV"
+          printf 'VITE_GITHUB_REPO=%s\n' "${GITHUB_REPOSITORY}" >> "$GITHUB_ENV"
+          printf 'VITE_BUILD_COMMIT_SHA=%s\n' "${GITHUB_SHA}" >> "$GITHUB_ENV"
+          {
+            echo "VITE_BUILD_RELEASE_NOTES<<__EOF_VITE_NOTES__"
+            printf '%b\n' "$COMMIT_NOTES"
+            echo "__EOF_VITE_NOTES__"
+          } >> "$GITHUB_ENV"
+
+          echo "Resolved release version: $VERSION_NAME (code $VERSION_CODE, tag $TAG)"
 
       - name: Setup Node.js
         uses: actions/setup-node@v5
@@ -100,6 +149,8 @@ jobs:
               -dname "CN=Android Debug,O=Android,C=US"
           fi
           echo "KEYSTORE_SOURCE=$KEYSTORE_SOURCE" >> "$GITHUB_ENV"
+          SIGNING_SHA256="$(keytool -list -v -keystore debug.keystore -storepass android -alias androiddebugkey | grep -m1 'SHA256:' | sed -E 's/.*SHA256:\s*//' | tr -d ':' | tr '[:upper:]' '[:lower:]' || true)"
+          echo "SIGNING_CERT_SHA256=$SIGNING_SHA256" >> "$GITHUB_ENV"
           keytool -list -v -keystore debug.keystore -storepass android -alias androiddebugkey | grep -E "SHA1:|SHA256:" || true
 
       - name: Prepare Google Services configuration
@@ -132,18 +183,41 @@ jobs:
           fi
 
       - name: Build Final Android APK
-        run: gradle :app:assembleRelease -x lintVitalRelease -x lintVitalAnalyzeRelease -x lintVitalReportRelease --no-daemon --max-workers=1 --console=plain --stacktrace
+        run: gradle :app:assembleRelease -PappVersionCode="${VERSION_CODE}" -PappVersionName="${VERSION_NAME}" -x lintVitalRelease -x lintVitalAnalyzeRelease -x lintVitalReportRelease --no-daemon --max-workers=1 --console=plain --stacktrace
 
-      - name: Stage final APK output
+      - name: Stage final APK & release metadata
         run: |
           mkdir -p build-artifacts
-          rm -f build-artifacts/*.apk
+          rm -f build-artifacts/*.apk build-artifacts/*.json
           if [ ! -f app/build/outputs/apk/release/app-release.apk ]; then
             echo "ERROR: Signed release APK not found at app/build/outputs/apk/release/app-release.apk" >&2
             exit 1
           fi
           cp app/build/outputs/apk/release/app-release.apk build-artifacts/Std10-Quiz.apk
-          ls -lh build-artifacts/
+          APK_SHA256="$(sha256sum build-artifacts/Std10-Quiz.apk | awk '{print $1}')"
+          APK_SIZE_BYTES="$(wc -c < build-artifacts/Std10-Quiz.apk | tr -d ' ')"
+          echo "APK_SHA256=$APK_SHA256" >> "$GITHUB_ENV"
+          echo "APK_SIZE_BYTES=$APK_SIZE_BYTES" >> "$GITHUB_ENV"
+
+          node -e '
+            const fs = require("fs");
+            const existing = JSON.parse(fs.readFileSync("dist/version.json", "utf8"));
+            const enriched = {
+              ...existing,
+              tagName: process.env.RELEASE_TAG,
+              releaseTitle: `Quick Quiz v${process.env.VERSION_NAME}`,
+              releaseNotes: process.env.RELEASE_NOTES_TEXT || existing.releaseNotes || "",
+              apkFileName: "Std10-Quiz.apk",
+              apkDownloadUrl: `https://github.com/${process.env.GITHUB_REPOSITORY}/releases/download/${process.env.RELEASE_TAG}/Std10-Quiz.apk`,
+              apkSizeBytes: Number(process.env.APK_SIZE_BYTES || 0),
+              apkSha256: process.env.APK_SHA256 || "",
+              signingCertSha256: process.env.SIGNING_CERT_SHA256 || "",
+              isMandatory: false,
+            };
+            fs.writeFileSync("build-artifacts/version.json", JSON.stringify(enriched, null, 2));
+          '
+        env:
+          RELEASE_NOTES_TEXT: ${{ steps.release_meta.outputs.notes }}
 
       - name: Upload Android APK artifact
         uses: actions/upload-artifact@v6
@@ -165,20 +239,37 @@ jobs:
         if: github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASE_NOTES: ${{ steps.release_meta.outputs.notes }}
         run: |
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            TAG="${GITHUB_REF_NAME}"
-          else
-            TAG="v1.0.${GITHUB_RUN_NUMBER}"
-          fi
-          NOTES="Final Android APK for commit ${GITHUB_SHA::7} (Run #${GITHUB_RUN_NUMBER}). Tap Std10-Quiz.apk below to install."
+          TAG="${RELEASE_TAG}"
+          FULL_NOTES="${BASE_NOTES}
+
+          <!-- versionCode:${VERSION_CODE} -->
+          <!-- apkSha256:${APK_SHA256} -->"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" build-artifacts/Std10-Quiz.apk --clobber
-            gh release edit "$TAG" --title "Std 10 Quiz Android App ($TAG)" --notes "$NOTES" --latest
+            gh release upload "$TAG" build-artifacts/Std10-Quiz.apk build-artifacts/version.json --clobber
+            gh release edit "$TAG" --title "Quick Quiz v${VERSION_NAME} ($TAG)" --notes "$FULL_NOTES" --latest
           else
-            gh release create "$TAG" build-artifacts/Std10-Quiz.apk \
+            gh release create "$TAG" build-artifacts/Std10-Quiz.apk build-artifacts/version.json \
               --target "$GITHUB_SHA" \
-              --title "Std 10 Quiz Android App ($TAG)" \
-              --notes "$NOTES" \
+              --title "Quick Quiz v${VERSION_NAME} ($TAG)" \
+              --notes "$FULL_NOTES" \
               --latest
           fi
+
+      - name: Dispatch Closed-App FCM Push Notification (optional webhook)
+        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+        continue-on-error: true
+        env:
+          FIREBASE_UPDATE_WEBHOOK_URL: ${{ secrets.FIREBASE_UPDATE_WEBHOOK_URL }}
+          FIREBASE_UPDATE_WEBHOOK_SECRET: ${{ secrets.FIREBASE_UPDATE_WEBHOOK_SECRET }}
+        run: |
+          if [ -z "${FIREBASE_UPDATE_WEBHOOK_URL:-}" ]; then
+            echo "INFO: FIREBASE_UPDATE_WEBHOOK_URL secret is not configured; skipping push dispatch. App still detects this GitHub release automatically via in-app version check."
+            exit 0
+          fi
+          curl -sSf -X POST "$FIREBASE_UPDATE_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${FIREBASE_UPDATE_WEBHOOK_SECRET:-}" \
+            -d @build-artifacts/version.json
+          echo "Push webhook notification dispatched for v${VERSION_NAME}."

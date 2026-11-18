@@ -165,7 +165,7 @@ export interface GitHubReleaseInfo {
   signingCertSha256?: string;
   packageName?: string;
   isMandatory?: boolean;
-  source?: 'firebase' | 'github';
+  source?: 'firebase' | 'github' | 'web_sw';
   isUpdateAvailable: boolean;
 }
 
@@ -519,5 +519,11 @@ export interface AdminDeepLinkPayload {
   senderUid?: string;
   notifId?: string;
   referenceId?: string;
+  versionName?: string;
+  versionCode?: number;
+  updateTitle?: string;
+  releaseNotes?: string;
+  apkDownloadUrl?: string;
+  isMandatory?: boolean;
 }
 

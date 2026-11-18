@@ -40,6 +40,12 @@ object AdminNotificationHelper {
     const val EXTRA_SENDER_UID = "extra_sender_uid"
     const val EXTRA_NOTIF_ID = "extra_notif_id"
     const val EXTRA_REFERENCE_ID = "extra_reference_id"
+    const val EXTRA_UPDATE_VERSION_NAME = "extra_update_version_name"
+    const val EXTRA_UPDATE_VERSION_CODE = "extra_update_version_code"
+    const val EXTRA_UPDATE_TITLE = "extra_update_title"
+    const val EXTRA_UPDATE_BODY = "extra_update_body"
+    const val EXTRA_UPDATE_APK_URL = "extra_update_apk_url"
+    const val EXTRA_UPDATE_MANDATORY = "extra_update_mandatory"
 
     private const val PREFS_NAME = "std10_admin_fcm_prefs"
     private const val KEY_IS_ADMIN_ACTIVE = "is_admin_active"
@@ -254,6 +260,23 @@ object AdminNotificationHelper {
             put("senderUid", intent.getStringExtra(EXTRA_SENDER_UID) ?: intent.getStringExtra("senderUid").orEmpty())
             put("notifId", intent.getStringExtra(EXTRA_NOTIF_ID) ?: intent.getStringExtra("notifId").orEmpty())
             put("referenceId", intent.getStringExtra(EXTRA_REFERENCE_ID) ?: intent.getStringExtra("referenceId").orEmpty())
+            val verName = intent.getStringExtra(EXTRA_UPDATE_VERSION_NAME)
+                ?: intent.getStringExtra("versionName").orEmpty()
+            if (verName.isNotBlank()) put("versionName", verName)
+            val verCode = intent.getLongExtra(EXTRA_UPDATE_VERSION_CODE, 0L)
+            if (verCode > 0L) put("versionCode", verCode)
+            val updTitle = intent.getStringExtra(EXTRA_UPDATE_TITLE)
+                ?: intent.getStringExtra("title").orEmpty()
+            if (updTitle.isNotBlank()) put("updateTitle", updTitle)
+            val updBody = intent.getStringExtra(EXTRA_UPDATE_BODY)
+                ?: intent.getStringExtra("body").orEmpty()
+            if (updBody.isNotBlank()) put("releaseNotes", updBody)
+            val apkUrl = intent.getStringExtra(EXTRA_UPDATE_APK_URL)
+                ?: intent.getStringExtra("apkDownloadUrl").orEmpty()
+            if (apkUrl.isNotBlank()) put("apkDownloadUrl", apkUrl)
+            if (intent.hasExtra(EXTRA_UPDATE_MANDATORY)) {
+                put("isMandatory", intent.getBooleanExtra(EXTRA_UPDATE_MANDATORY, false))
+            }
         }
     }
 
@@ -353,7 +376,8 @@ object AdminNotificationHelper {
         versionCode: Long,
         title: String,
         body: String,
-        isMandatory: Boolean
+        isMandatory: Boolean,
+        apkDownloadUrl: String = ""
     ) {
         ensureChannels(context)
         if (!hasNotificationPermission(context)) return
@@ -365,6 +389,12 @@ object AdminNotificationHelper {
             putExtra(EXTRA_TARGET_ROUTE, "app_update")
             putExtra(EXTRA_NOTIF_ID, releaseId)
             putExtra(EXTRA_REFERENCE_ID, releaseId)
+            putExtra(EXTRA_UPDATE_VERSION_NAME, versionName)
+            putExtra(EXTRA_UPDATE_VERSION_CODE, versionCode)
+            putExtra(EXTRA_UPDATE_TITLE, title)
+            putExtra(EXTRA_UPDATE_BODY, body)
+            putExtra(EXTRA_UPDATE_APK_URL, apkDownloadUrl)
+            putExtra(EXTRA_UPDATE_MANDATORY, isMandatory)
         }
         val reqCode = ("app_update_${versionCode}_$versionName").hashCode()
         val pendingIntent = PendingIntent.getActivity(

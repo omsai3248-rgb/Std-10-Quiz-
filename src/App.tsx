@@ -7,7 +7,7 @@ import {
 } from './data/curriculum/std10Curriculum';
 import { buildBoardExamMockTestChapter } from './data/curriculum/mockTestBuilder';
 import { TopNavHeader, type PublicTabId } from './components/TopNavHeader';
-import { UpdateAvailableModal } from './components/AppUpdateComponents';
+import { UpdateAvailableBanner, UpdateAvailableModal } from './components/AppUpdateComponents';
 import { DisplaySettingsModal } from './components/DisplaySettingsModal';
 import { AdaptiveDisplayProvider } from './context/AdaptiveDisplayContext';
 import { useTranslation } from './i18n/translations';
@@ -76,6 +76,7 @@ import {
   requestAppNotificationPermission,
   resumeNativeAdminListeners,
   saveMyPaymentRequestId,
+  saveReleaseConfig,
   sendAdminChatMessage,
   setNativeActiveStudentMobile,
   signOutAdminSession,
@@ -100,11 +101,19 @@ import {
   type SyncStatusSnapshot,
 } from './services/syncManager';
 import {
+  APP_VERSION_CODE,
   APP_VERSION_NAME,
+  chooseNewestAvailableUpdate,
   fetchLatestRelease,
-  isNewerVersion,
+  isReleaseVersionNewer,
+  resolveEffectiveGithubRepo,
   sanitizeOwnerRepo,
+  saveGithubOwnerRepoPreference,
 } from './services/githubUpdateChecker';
+import {
+  checkWebSwForUpdateNow,
+  subscribeWebSwUpdates,
+} from './services/webSwUpdateService';
 import {
   ALL_SUBJECT_IDS,
   getSubjectDisplayName,
@@ -350,7 +359,9 @@ const AppContent: React.FC = () => {
   const [isSoundEnabled, setIsSoundEnabled] = useState(true);
   const [approvedConfirmation, setApprovedConfirmation] = useState<PaymentRequest | null>(null);
 
-  const [availableUpdate, setAvailableUpdate] = useState<GitHubReleaseInfo | null>(null);
+  const [githubAvailableUpdate, setGithubAvailableUpdate] = useState<GitHubReleaseInfo | null>(null);
+  const [webSwAvailableUpdate, setWebSwAvailableUpdate] = useState<GitHubReleaseInfo | null>(null);
+  const [deepLinkUpdateFallback, setDeepLinkUpdateFallback] = useState<GitHubReleaseInfo | null>(null);
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
   const [dismissedOptionalVersionKey, setDismissedOptionalVersionKey] = useState<string>('');
   const [updateNotifications, setUpdateNotifications] = useState<UpdateNotificationRecord[]>([]);
@@ -375,6 +386,8 @@ const AppContent: React.FC = () => {
   } | null>(null);
 
   const lastCheckedConfigKeyRef = useRef<string>('');
+  const lastUpdateCheckAtRef = useRef<number>(0);
+  const checkInFlightRef = useRef<boolean>(false);
   const knownPendingIdsRef = useRef<Set<string> | null>(null);
   const knownUsedCodesRef = useRef<Set<string> | null>(null);
   const knownNotifIdsRef = useRef<Set<string> | null>(null);
@@ -601,6 +614,59 @@ const AppContent: React.FC = () => {
     }
   }, [isStudentLoggedIn]);
 
+  // Subscribe to Web Service Worker update notifications (browser / PWA only)
+  useEffect(() => {
+    return subscribeWebSwUpdates((swRelease) => {
+      setWebSwAvailableUpdate(swRelease);
+    });
+  }, []);
+
+  const currentVersionName = installedAppInfo?.versionName || APP_VERSION_NAME;
+  const currentVersionCode = installedAppInfo?.versionCode || APP_VERSION_CODE || 1;
+
+  const handleIncomingAppUpdateDeepLink = useCallback(
+    (payload: AdminDeepLinkPayload) => {
+      const remoteName = (payload.versionName ?? '').replace(/^v/i, '').trim();
+      const remoteCode = payload.versionCode;
+      if (
+        remoteName &&
+        isReleaseVersionNewer(remoteName, remoteCode, currentVersionName, currentVersionCode)
+      ) {
+        setDeepLinkUpdateFallback({
+          tagName: `v${remoteName}`,
+          versionName: remoteName,
+          versionCode: remoteCode,
+          releaseTitle: payload.updateTitle?.trim() || `Quick Quiz v${remoteName}`,
+          releaseNotes: payload.releaseNotes?.trim() || '',
+          apkDownloadUrl: (payload.apkDownloadUrl ?? '').trim(),
+          htmlUrl: '',
+          apkSizeBytes: 0,
+          isMandatory: Boolean(payload.isMandatory),
+          source: 'firebase',
+          isUpdateAvailable: true,
+        });
+        setIsUpdateModalOpen(true);
+      } else if (!remoteName && payload.apkDownloadUrl?.trim()) {
+        setDeepLinkUpdateFallback({
+          tagName: '',
+          versionName: currentVersionName,
+          versionCode: currentVersionCode + 1,
+          releaseTitle: payload.updateTitle?.trim() || t.appUpdateAvailableTitle,
+          releaseNotes: payload.releaseNotes?.trim() || '',
+          apkDownloadUrl: payload.apkDownloadUrl.trim(),
+          htmlUrl: '',
+          apkSizeBytes: 0,
+          isMandatory: Boolean(payload.isMandatory),
+          source: 'firebase',
+          isUpdateAvailable: true,
+        });
+        setIsUpdateModalOpen(true);
+      }
+      lastUpdateCheckAtRef.current = 0;
+    },
+    [currentVersionCode, currentVersionName, t.appUpdateAvailableTitle]
+  );
+
   // Sync Admin Profile + FCM Token, Notification Center, Multi-Admin Directory & 1-to-1 Chat Listeners
   useEffect(() => {
     if (!hasNativeFirebaseBridge()) return undefined;
@@ -609,7 +675,7 @@ const AppContent: React.FC = () => {
     });
     const unsubDeepLink = subscribeNativeAdminDeepLink((payload) => {
       if (payload.targetRoute === 'app_update') {
-        setIsUpdateModalOpen(true);
+        handleIncomingAppUpdateDeepLink(payload);
         return;
       }
       if (isFirebaseAdmin) {
@@ -621,7 +687,7 @@ const AppContent: React.FC = () => {
     const initialDeepLink = consumeNativePendingDeepLink();
     if (initialDeepLink) {
       if (initialDeepLink.targetRoute === 'app_update') {
-        setIsUpdateModalOpen(true);
+        handleIncomingAppUpdateDeepLink(initialDeepLink);
       } else {
         pendingDeepLinkRef.current = initialDeepLink;
       }
@@ -630,7 +696,7 @@ const AppContent: React.FC = () => {
       unsubPerm();
       unsubDeepLink();
     };
-  }, [applyAdminDeepLink, isFirebaseAdmin]);
+  }, [applyAdminDeepLink, handleIncomingAppUpdateDeepLink, isFirebaseAdmin]);
 
   useEffect(() => {
     if (!isFirebaseAdmin || !authUser?.uid) return undefined;
@@ -1162,12 +1228,20 @@ const AppContent: React.FC = () => {
     return () => window.clearTimeout(timer);
   }, [banner, isAdmin]);
 
-  const currentVersionName = installedAppInfo?.versionName || APP_VERSION_NAME;
-  const currentVersionCode = installedAppInfo?.versionCode || 1;
+  const configuredGithubRepo = useMemo(
+    () => sanitizeOwnerRepo(releaseConfig?.githubOwnerRepo ?? ''),
+    [releaseConfig?.githubOwnerRepo]
+  );
+
+  useEffect(() => {
+    if (configuredGithubRepo) {
+      saveGithubOwnerRepoPreference(configuredGithubRepo);
+    }
+  }, [configuredGithubRepo]);
 
   const effectiveGithubRepo = useMemo(
-    () => sanitizeOwnerRepo(releaseConfig?.githubOwnerRepo ?? ''),
-    [releaseConfig]
+    () => resolveEffectiveGithubRepo(configuredGithubRepo),
+    [configuredGithubRepo]
   );
 
   const firebaseAvailableUpdate = useMemo<GitHubReleaseInfo | null>(() => {
@@ -1176,10 +1250,9 @@ const AppContent: React.FC = () => {
     const remoteVerCode = Number(releaseConfig?.latestVersionCode ?? 0);
     if (!apkUrl.startsWith('https://') || !remoteVerName) return null;
 
-    const isUpdateNewer =
-      remoteVerCode > currentVersionCode ||
-      (remoteVerCode === currentVersionCode && isNewerVersion(remoteVerName, currentVersionName));
-    if (!isUpdateNewer) return null;
+    if (!isReleaseVersionNewer(remoteVerName, remoteVerCode, currentVersionName, currentVersionCode)) {
+      return null;
+    }
 
     return {
       tagName: `v${remoteVerName}`,
@@ -1199,16 +1272,17 @@ const AppContent: React.FC = () => {
     };
   }, [currentVersionCode, currentVersionName, installedAppInfo?.packageName, releaseConfig]);
 
-  useEffect(() => {
-    if (!firebaseAvailableUpdate) return;
-    setAvailableUpdate(firebaseAvailableUpdate);
-    const key = `${firebaseAvailableUpdate.versionName}_${firebaseAvailableUpdate.versionCode ?? 0}`;
-    if (firebaseAvailableUpdate.isMandatory) {
-      setIsUpdateModalOpen(true);
-    } else if (dismissedOptionalVersionKey !== key) {
-      setIsUpdateModalOpen(true);
-    }
-  }, [dismissedOptionalVersionKey, firebaseAvailableUpdate]);
+  const bestCandidateUpdate = useMemo(
+    () =>
+      chooseNewestAvailableUpdate(
+        [firebaseAvailableUpdate, githubAvailableUpdate, webSwAvailableUpdate],
+        currentVersionName,
+        currentVersionCode
+      ),
+    [currentVersionCode, currentVersionName, firebaseAvailableUpdate, githubAvailableUpdate, webSwAvailableUpdate]
+  );
+
+  const availableUpdate = bestCandidateUpdate ?? deepLinkUpdateFallback;
 
   const releaseConfigKey = useMemo(
     () => `${effectiveGithubRepo}|${releaseConfig?.updatedAt?.seconds ?? 0}`,
@@ -1216,39 +1290,60 @@ const AppContent: React.FC = () => {
   );
 
   const checkForUpdates = useCallback(
-    async (manual = false) => {
-      if (firebaseAvailableUpdate) {
-        setAvailableUpdate(firebaseAvailableUpdate);
-        if (manual) {
-          setIsUpdateModalOpen(true);
-        }
+    async (manual = false, force = false, repoOverride?: string) => {
+      if (checkInFlightRef.current) return;
+
+      const repoToCheck = sanitizeOwnerRepo(repoOverride ?? '') || effectiveGithubRepo;
+      const now = Date.now();
+      const configChanged = lastCheckedConfigKeyRef.current !== releaseConfigKey;
+
+      if (!manual && !force && !configChanged && now - lastUpdateCheckAtRef.current < 120_000) {
         return;
       }
 
-      if (!effectiveGithubRepo) {
-        if (manual) {
-          setBanner({
-            isError: false,
-            message: `${t.appUpdateUpToDateMsg} (v${currentVersionName})`,
-          });
-        }
-        return;
-      }
-
-      if (!manual && lastCheckedConfigKeyRef.current === releaseConfigKey) return;
       lastCheckedConfigKeyRef.current = releaseConfigKey;
-
+      lastUpdateCheckAtRef.current = now;
+      checkInFlightRef.current = true;
       setIsCheckingUpdate(true);
+
       try {
-        const release = await fetchLatestRelease(effectiveGithubRepo, currentVersionName);
-        if (release.isUpdateAvailable) {
-          setAvailableUpdate({ ...release, source: 'github' });
-          setIsUpdateModalOpen(true);
-        } else if (manual) {
-          setBanner({
-            isError: false,
-            message: `${t.appUpdateUpToDateMsg} (v${currentVersionName})`,
-          });
+        const [ghResult, swResult] = await Promise.all([
+          repoToCheck
+            ? fetchLatestRelease(repoToCheck, currentVersionName, currentVersionCode).catch((err) => {
+                if (manual) throw err;
+                return null;
+              })
+            : Promise.resolve(null),
+          checkWebSwForUpdateNow(currentVersionName, currentVersionCode).catch(() => null),
+        ]);
+
+        const nextGithub = ghResult && ghResult.isUpdateAvailable ? { ...ghResult, source: 'github' as const } : null;
+        setGithubAvailableUpdate(nextGithub);
+        if (swResult) {
+          setWebSwAvailableUpdate(swResult);
+        }
+
+        const winner = chooseNewestAvailableUpdate(
+          [firebaseAvailableUpdate, nextGithub, swResult ?? webSwAvailableUpdate],
+          currentVersionName,
+          currentVersionCode
+        );
+
+        if (winner) {
+          setDeepLinkUpdateFallback(null);
+          if (manual || winner.isMandatory || routeRef.current.name !== 'quiz') {
+            setIsUpdateModalOpen(true);
+          }
+        } else {
+          // Ensure no update dialog appears when already on the latest version
+          setDeepLinkUpdateFallback(null);
+          setIsUpdateModalOpen(false);
+          if (manual) {
+            setBanner({
+              isError: false,
+              message: `${t.appUpdateUpToDateMsg} (v${currentVersionName})`,
+            });
+          }
         }
       } catch (err) {
         if (manual) {
@@ -1258,23 +1353,82 @@ const AppContent: React.FC = () => {
           });
         }
       } finally {
+        checkInFlightRef.current = false;
         setIsCheckingUpdate(false);
       }
     },
     [
+      currentVersionCode,
       currentVersionName,
       effectiveGithubRepo,
       firebaseAvailableUpdate,
       releaseConfigKey,
       t.appUpdateUpToDateMsg,
+      webSwAvailableUpdate,
     ]
   );
 
+  // Auto-present update modal or clear stale dialogs whenever the resolved candidate changes
   useEffect(() => {
-    if (!firebaseAvailableUpdate && effectiveGithubRepo) {
-      void checkForUpdates(false);
+    if (!availableUpdate) {
+      setIsUpdateModalOpen(false);
+      return;
     }
-  }, [checkForUpdates, effectiveGithubRepo, firebaseAvailableUpdate]);
+    const key = `${availableUpdate.versionName}_${availableUpdate.versionCode ?? 0}`;
+    if (availableUpdate.isMandatory) {
+      setIsUpdateModalOpen(true);
+    } else if (dismissedOptionalVersionKey !== key && routeRef.current.name !== 'quiz') {
+      setIsUpdateModalOpen(true);
+    }
+  }, [availableUpdate, dismissedOptionalVersionKey]);
+
+  // Automatic update check on startup, foreground resume, and 15-minute intervals
+  useEffect(() => {
+    void checkForUpdates(false, true);
+
+    const onResumeCheck = () => {
+      if (document.visibilityState === 'visible') {
+        void checkForUpdates(false, false);
+      }
+    };
+
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        void checkForUpdates(false, true);
+      }
+    }, 15 * 60 * 1000);
+
+    document.addEventListener('visibilitychange', onResumeCheck);
+    window.addEventListener('focus', onResumeCheck);
+    return () => {
+      window.clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', onResumeCheck);
+      window.removeEventListener('focus', onResumeCheck);
+    };
+  }, [checkForUpdates]);
+
+  const handleSaveGithubRepo = useCallback(
+    async (repo: string) => {
+      const cleanRepo = sanitizeOwnerRepo(repo);
+      saveGithubOwnerRepoPreference(cleanRepo);
+      setIsBusy(true);
+      try {
+        await saveReleaseConfig(cleanRepo, releaseConfig?.releaseNotes ?? '');
+        if (cleanRepo) {
+          void checkForUpdates(true, true, cleanRepo);
+        }
+      } catch (err) {
+        setBanner({
+          isError: true,
+          message: formatAppError(err, 'Save failed'),
+        });
+        throw err;
+      } finally {
+        setIsBusy(false);
+      }
+    },
+    [checkForUpdates, formatAppError, releaseConfig?.releaseNotes]
+  );
 
   const persistUserMeta = useCallback((name: string, mobile: string) => {
     const cleanMobile = normalizeIndianMobileInput(mobile);
@@ -1898,7 +2052,8 @@ const AppContent: React.FC = () => {
           }
           onPublishAppUpdate={handlePublishAppUpdate}
           onDeleteReleaseHistory={handleDeleteReleaseHistory}
-          onTestUpdateCheck={() => void checkForUpdates(true)}
+          onSaveGithubRepo={handleSaveGithubRepo}
+          onTestUpdateCheck={() => void checkForUpdates(true, true)}
           onDeletePayment={handleDeletePayment}
           onDeleteCode={handleDeleteCode}
           onDeleteStudent={handleDeleteStudent}
@@ -2247,6 +2402,23 @@ const AppContent: React.FC = () => {
           </div>
         </div>
       )}
+
+      {availableUpdate &&
+        !isUpdateModalOpen &&
+        route.name === 'quiz' &&
+        !availableUpdate.isMandatory &&
+        dismissedOptionalVersionKey !==
+          `${availableUpdate.versionName}_${availableUpdate.versionCode ?? 0}` && (
+          <UpdateAvailableBanner
+            release={availableUpdate}
+            onUpdateNow={() => setIsUpdateModalOpen(true)}
+            onUpdateLater={() => {
+              setDismissedOptionalVersionKey(
+                `${availableUpdate.versionName}_${availableUpdate.versionCode ?? 0}`
+              );
+            }}
+          />
+        )}
 
       {isUpdateModalOpen && availableUpdate && (
         <UpdateAvailableModal

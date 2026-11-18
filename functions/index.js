@@ -1,11 +1,13 @@
 const { initializeApp } = require("firebase-admin/app");
 const { getFirestore, FieldValue } = require("firebase-admin/firestore");
 const { getMessaging } = require("firebase-admin/messaging");
+const crypto = require("crypto");
 const {
   onDocumentCreated,
   onDocumentUpdated,
   onDocumentWritten,
 } = require("firebase-functions/v2/firestore");
+const { onRequest } = require("firebase-functions/v2/https");
 const logger = require("firebase-functions/logger");
 
 initializeApp();
@@ -571,4 +573,106 @@ exports.onAppReleaseCreated = onDocumentCreated(
     });
   }
 );
+
+// 10. GitHub CI Main-Branch Push Webhook -> automatically registers release & broadcasts closed-app FCM push
+exports.onGitHubReleasePush = onRequest(
+  {
+    region: REGION,
+    cors: false,
+  },
+  async (req, res) => {
+    if (req.method !== "POST") {
+      res.status(405).json({ error: "Method Not Allowed" });
+      return;
+    }
+
+    const configuredSecret = (process.env.GITHUB_RELEASE_WEBHOOK_SECRET || "").trim();
+    if (!configuredSecret) {
+      res.status(503).json({ error: "GITHUB_RELEASE_WEBHOOK_SECRET is not configured" });
+      return;
+    }
+
+    const authHeader = String(req.headers.authorization || "");
+    const bearerToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+    const providedBuf = Buffer.from(bearerToken, "utf8");
+    const expectedBuf = Buffer.from(configuredSecret, "utf8");
+    if (
+      providedBuf.length !== expectedBuf.length ||
+      !crypto.timingSafeEqual(providedBuf, expectedBuf)
+    ) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const versionName = safeString(body.versionName, 32);
+    const versionCode = Number(body.versionCode || 0);
+    const apkDownloadUrl = safeString(body.apkDownloadUrl, 2000);
+    if (!versionName || !Number.isFinite(versionCode) || versionCode < 1 || !apkDownloadUrl.startsWith("https://")) {
+      res.status(400).json({ error: "Invalid release payload" });
+      return;
+    }
+
+    const releaseTitle = safeString(body.releaseTitle || `Quick Quiz v${versionName}`, 120);
+    const releaseNotes = safeString(body.releaseNotes, 1000) || `નવું વર્ઝન v${versionName} ઉપલબ્ધ છે.`;
+    const apkFileName = safeString(body.apkFileName || "Std10-Quiz.apk", 160);
+    const apkSizeBytes = Math.max(1, Math.min(262144000, Number(body.apkSizeBytes || 0)));
+    const apkSha256 = safeString(body.apkSha256, 64);
+    const signingCertSha256 = safeString(body.signingCertSha256, 64);
+    const packageName = safeString(body.packageName || "com.aistudio.std10quiz.kqxmtv", 120);
+    const githubOwnerRepo = safeString(body.githubOwnerRepo, 120);
+    const isMandatory = body.isMandatory === true;
+    const releaseId = `gh_${versionCode}_${safeString(String(body.commitSha || Date.now()), 12)}`;
+    const now = FieldValue.serverTimestamp();
+
+    const batch = db.batch();
+    batch.set(
+      db.collection("app_releases").doc(releaseId),
+      {
+        versionName,
+        versionCode,
+        updateTitle: releaseTitle,
+        releaseNotes,
+        apkDownloadUrl,
+        apkStoragePath: `github_releases/${releaseId}/${apkFileName}`,
+        apkFileName,
+        apkSizeBytes,
+        apkSha256,
+        signingCertSha256,
+        packageName,
+        isMandatory,
+        publishedByUid: "github_actions_ci",
+        createdAt: now,
+        updatedAt: now,
+      },
+      { merge: true }
+    );
+    batch.set(
+      db.collection("app_config").doc("release"),
+      {
+        githubOwnerRepo,
+        releaseNotes,
+        latestVersionName: versionName,
+        latestVersionCode: versionCode,
+        updateTitle: releaseTitle,
+        apkDownloadUrl,
+        apkStoragePath: `github_releases/${releaseId}/${apkFileName}`,
+        apkFileName,
+        apkSizeBytes,
+        apkSha256,
+        signingCertSha256,
+        packageName,
+        isMandatory,
+        publishedByUid: "github_actions_ci",
+        publishedAt: now,
+        updatedAt: now,
+      },
+      { merge: true }
+    );
+    await batch.commit();
+
+    res.status(200).json({ ok: true, releaseId, versionName, versionCode });
+  }
+);
+
 

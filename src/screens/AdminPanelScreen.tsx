@@ -137,6 +137,7 @@ interface AdminPanelScreenProps {
     input: PublishAppUpdateInput
   ) => Promise<{ releaseId: string; apkDownloadUrl: string; versionName: string; versionCode: number }>;
   onDeleteReleaseHistory?: (releaseId: string) => Promise<void>;
+  onSaveGithubRepo?: (repo: string) => Promise<void>;
   onTestUpdateCheck: () => void;
   onDeletePayment: (req: PaymentRequest) => Promise<void> | void;
   onDeleteCode: (code: AccessCode) => Promise<void> | void;
@@ -219,6 +220,7 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
   onUpdateStudentSubjectAccess,
   onPublishAppUpdate,
   onDeleteReleaseHistory,
+  onSaveGithubRepo,
   onTestUpdateCheck,
   onDeletePayment,
   onDeleteCode,
@@ -892,6 +894,7 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
             notificationPermissionStatus={notificationPermissionStatus}
             onPublishAppUpdate={onPublishAppUpdate}
             onDeleteReleaseHistory={onDeleteReleaseHistory}
+            onSaveGithubRepo={onSaveGithubRepo}
             onTestUpdateCheck={onTestUpdateCheck}
             onRequestNotificationPermission={onRequestNotificationPermission}
             onNotify={onNotify}

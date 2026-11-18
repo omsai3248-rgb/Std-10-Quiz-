@@ -302,10 +302,10 @@ object AppUpdateManager {
                         val pct = if (totalBytes > 0L) {
                             ((downloaded * 100L) / totalBytes).toInt().coerceIn(0, 99)
                         } else {
-                            0
+                            ((downloaded / (256L * 1024L)) % 95L).toInt().coerceIn(5, 95)
                         }
                         val now = System.currentTimeMillis()
-                        if (pct != lastPct && (now - lastEmitMs >= 120L || pct == 99)) {
+                        if ((pct != lastPct && now - lastEmitMs >= 100L) || now - lastEmitMs >= 250L || pct == 99) {
                             lastPct = pct
                             lastEmitMs = now
                             onProgress(pct, downloaded, totalBytes)

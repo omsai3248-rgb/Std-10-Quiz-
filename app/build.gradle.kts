@@ -12,12 +12,22 @@ android {
     namespace = "com.aistudio.std10quiz.kqxmtv"
     compileSdk = 36
 
+    val resolvedVersionCode = (project.findProperty("appVersionCode") as? String)
+        ?.trim()
+        ?.toIntOrNull()
+        ?.coerceAtLeast(1)
+        ?: 1
+    val resolvedVersionName = (project.findProperty("appVersionName") as? String)
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+        ?: "1.0.0"
+
     defaultConfig {
         applicationId = "com.aistudio.std10quiz.kqxmtv"
         minSdk = 24
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = resolvedVersionCode
+        versionName = resolvedVersionName
     }
 
     val keystoreFile = rootProject.file("debug.keystore")

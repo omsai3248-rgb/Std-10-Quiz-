@@ -5,7 +5,9 @@ import {
   CheckCircle2,
   CloudUpload,
   FileArchive,
+  GitBranch,
   RefreshCw,
+  Save,
   Send,
   ShieldAlert,
   ShieldCheck,
@@ -14,6 +16,10 @@ import {
 } from 'lucide-react';
 import { useAdaptiveDisplay } from '../context/AdaptiveDisplayContext';
 import { useTranslation } from '../i18n/translations';
+import {
+  resolveEffectiveGithubRepo,
+  sanitizeOwnerRepo,
+} from '../services/githubUpdateChecker';
 import {
   hasNativeFirebaseBridge,
   pickAndInspectNativeApk,
@@ -41,6 +47,7 @@ interface AdminUpdateSettingsTabProps {
     input: PublishAppUpdateInput
   ) => Promise<{ releaseId: string; apkDownloadUrl: string; versionName: string; versionCode: number }>;
   onDeleteReleaseHistory?: (releaseId: string) => Promise<void>;
+  onSaveGithubRepo?: (repo: string) => Promise<void>;
   onTestUpdateCheck: () => void;
   onRequestNotificationPermission?: () => Promise<void> | void;
   onNotify?: (msg: string, isError?: boolean) => void;
@@ -57,6 +64,7 @@ export const AdminUpdateSettingsTab: React.FC<AdminUpdateSettingsTabProps> = ({
   notificationPermissionStatus,
   onPublishAppUpdate,
   onDeleteReleaseHistory,
+  onSaveGithubRepo,
   onTestUpdateCheck,
   onRequestNotificationPermission,
   onNotify,
@@ -87,12 +95,48 @@ export const AdminUpdateSettingsTab: React.FC<AdminUpdateSettingsTabProps> = ({
 
   const [isUploading, setIsUploading] = useState(false);
   const [uploadPercent, setUploadPercent] = useState(0);
+  const [githubRepoInput, setGithubRepoInput] = useState(() =>
+    resolveEffectiveGithubRepo(releaseConfig?.githubOwnerRepo ?? '')
+  );
+  const [isSavingGithubRepo, setIsSavingGithubRepo] = useState(false);
+
+  useEffect(() => {
+    const resolved = resolveEffectiveGithubRepo(releaseConfig?.githubOwnerRepo ?? '');
+    if (resolved && !githubRepoInput) {
+      setGithubRepoInput(resolved);
+    }
+  }, [githubRepoInput, releaseConfig?.githubOwnerRepo]);
 
   useEffect(() => {
     if (!updateTitleInput && versionNameInput) {
       setUpdateTitleInput(`Quick Quiz v${versionNameInput}`);
     }
   }, [updateTitleInput, versionNameInput]);
+
+  const handleSaveGithubRepo = async () => {
+    if (!onSaveGithubRepo) return;
+    const raw = githubRepoInput.trim();
+    const clean = sanitizeOwnerRepo(raw);
+    if (raw.length > 0 && !clean) {
+      onNotify?.(
+        lang === 'en'
+          ? 'Enter a valid GitHub repo in owner/repo format.'
+          : 'માન્ય GitHub repository (owner/repo) લખો.',
+        true
+      );
+      return;
+    }
+    setIsSavingGithubRepo(true);
+    try {
+      await onSaveGithubRepo(clean);
+      setGithubRepoInput(clean);
+      onNotify?.(t.githubRepoSavedMsg);
+    } catch {
+      // Parent handler surfaces error banner
+    } finally {
+      setIsSavingGithubRepo(false);
+    }
+  };
 
   const handlePickApk = async () => {
     if (hasNativeFirebaseBridge()) {
@@ -492,8 +536,58 @@ export const AdminUpdateSettingsTab: React.FC<AdminUpdateSettingsTabProps> = ({
         </button>
       </div>
 
-      {/* Right / Secondary Column: Active Live Release & Notification History */}
+      {/* Right / Secondary Column: GitHub Auto-Sync, Active Live Release & Notification History */}
       <div className={`${useSplitLayout ? 'lg:col-span-5' : ''} space-y-4`}>
+        {/* GitHub Main Branch Auto-Update Repo Sync Card */}
+        <div className="rounded-2xl bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] p-5 space-y-3 shadow-sm">
+          <div className="flex items-start gap-2.5">
+            <div className="h-9 w-9 rounded-xl bg-[#DBEAFE] dark:bg-[#1E3A8A] text-[#1E3A8A] dark:text-[#93C5FD] flex items-center justify-center shrink-0">
+              <GitBranch className="h-4.5 w-4.5" />
+            </div>
+            <div className="min-w-0">
+              <h3 className="text-sm font-extrabold text-[#0F172A] dark:text-[#F8FAFC]">
+                {t.githubAutoUpdateTitle}
+              </h3>
+              <p className="text-xs text-[#475569] dark:text-[#94A3B8] mt-0.5 leading-relaxed">
+                {t.githubAutoUpdateDesc}
+              </p>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <label
+              htmlFor="admin-github-repo-input"
+              className="block text-xs font-bold text-[#0F172A] dark:text-[#E2E8F0]"
+            >
+              {t.githubRepoLabel}
+            </label>
+            <div className="flex flex-wrap sm:flex-nowrap gap-2">
+              <input
+                id="admin-github-repo-input"
+                data-testid="github_repo_input"
+                type="text"
+                maxLength={120}
+                value={githubRepoInput}
+                onChange={(e) => setGithubRepoInput(e.target.value)}
+                placeholder="owner/quick-quiz"
+                className="flex-1 min-w-0 h-12 rounded-xl border border-[#CBD5E1] dark:border-[#475569] bg-slate-50 dark:bg-[#0F172A] text-[#0F172A] dark:text-[#F8FAFC] px-3.5 text-sm outline-none"
+              />
+              {onSaveGithubRepo && (
+                <button
+                  type="button"
+                  data-testid="save_github_repo_btn"
+                  disabled={isSavingGithubRepo || isBusy}
+                  onClick={() => void handleSaveGithubRepo()}
+                  className="min-h-[48px] px-4 rounded-xl bg-[#1E3A8A] hover:bg-[#172554] text-white text-xs font-extrabold inline-flex items-center justify-center gap-1.5 disabled:opacity-50 cursor-pointer shrink-0"
+                >
+                  <Save className="h-4 w-4" />
+                  <span>{t.githubRepoSaveBtn}</span>
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+
         <div className="rounded-2xl bg-[#DBEAFE]/60 dark:bg-[#1E3A5F] border border-[#BFDBFE] dark:border-[#1E40AF] p-5 space-y-2.5">
           <div className="flex items-center justify-between gap-2">
             <h3 className="text-sm font-extrabold text-[#1E3A8A] dark:text-[#DBEAFE]">

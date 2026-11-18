@@ -16,6 +16,7 @@ import {
   retryNativePendingApkInstall,
   subscribeNativeAppUpdateProgress,
 } from '../services/nativeFirebaseBridge';
+import { applyWebSwUpdateWithProgress } from '../services/webSwUpdateService';
 import type {
   AppUpdateProgressEvent,
   GitHubReleaseInfo,
@@ -120,6 +121,7 @@ export const UpdateAvailableModal: React.FC<UpdateAvailableModalProps> = ({
   const { t, lang } = useTranslation();
   const isMandatory = Boolean(release.isMandatory);
   const isNative = hasNativeFirebaseBridge();
+  const isWebSwUpdate = release.source === 'web_sw';
   const [progressState, setProgressState] = useState<AppUpdateProgressEvent>({
     status: 'idle',
     progressPercent: 0,
@@ -141,6 +143,23 @@ export const UpdateAvailableModal: React.FC<UpdateAvailableModalProps> = ({
     progressState.status === 'installing';
 
   const handleStartInAppUpdate = async () => {
+    if (isWebSwUpdate) {
+      try {
+        await applyWebSwUpdateWithProgress((evt) => {
+          setProgressState(evt);
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Web update failed';
+        setProgressState((prev) => ({
+          ...prev,
+          status: 'error',
+          message: msg,
+        }));
+        onNotify?.(msg, true);
+      }
+      return;
+    }
+
     if (!release.apkDownloadUrl) {
       onNotify?.(
         lang === 'en'
@@ -203,8 +222,12 @@ export const UpdateAvailableModal: React.FC<UpdateAvailableModalProps> = ({
     }
   };
 
-  const totalMbText = formatApkSizeMb(progressState.totalBytes || release.apkSizeBytes);
-  const downloadedMbText = formatApkSizeMb(progressState.bytesDownloaded);
+  const totalMbText = isWebSwUpdate
+    ? ''
+    : formatApkSizeMb(progressState.totalBytes || release.apkSizeBytes);
+  const downloadedMbText = isWebSwUpdate
+    ? ''
+    : formatApkSizeMb(progressState.bytesDownloaded);
 
   return (
     <div
@@ -317,11 +340,13 @@ export const UpdateAvailableModal: React.FC<UpdateAvailableModalProps> = ({
               <>
                 <div className="flex items-center justify-between text-xs font-bold text-[#1E3A8A] dark:text-[#93C5FD]">
                   <span>
-                    {progressState.status === 'verifying'
-                      ? t.appUpdateVerifyingLabel
-                      : progressState.status === 'installing'
-                        ? t.appUpdateInstallingLabel
-                        : t.appUpdateDownloadingBtn}
+                    {isWebSwUpdate
+                      ? t.webUpdateApplyingLabel
+                      : progressState.status === 'verifying'
+                        ? t.appUpdateVerifyingLabel
+                        : progressState.status === 'installing'
+                          ? t.appUpdateInstallingLabel
+                          : t.appUpdateDownloadingBtn}
                   </span>
                   <span className="tabular-nums">
                     {progressState.progressPercent}%
@@ -437,3 +462,73 @@ export const UpdateAvailableModal: React.FC<UpdateAvailableModalProps> = ({
     </div>
   );
 };
+
+interface UpdateAvailableBannerProps {
+  release: GitHubReleaseInfo;
+  onUpdateNow: () => void;
+  onUpdateLater: () => void;
+}
+
+export const UpdateAvailableBanner: React.FC<UpdateAvailableBannerProps> = ({
+  release,
+  onUpdateNow,
+  onUpdateLater,
+}) => {
+  const { t } = useTranslation();
+
+  return (
+    <div
+      className="fixed top-3 inset-x-0 z-[75] flex justify-center px-3 pt-[env(safe-area-inset-top)] pointer-events-none"
+      data-testid="app_update_banner"
+    >
+      <div
+        role="region"
+        aria-label={t.appUpdateAvailableTitle}
+        className="pointer-events-auto max-w-xl w-full rounded-2xl bg-white/95 dark:bg-[#0F172A]/95 backdrop-blur-md border-2 border-[#1E3A8A] dark:border-[#3B82F6] shadow-2xl p-3.5 sm:p-4 flex flex-wrap items-center justify-between gap-3"
+      >
+        <div className="flex items-start gap-3 min-w-0 flex-1">
+          <div className="h-10 w-10 rounded-xl bg-[#DBEAFE] dark:bg-[#1E3A8A] text-[#1E3A8A] dark:text-[#93C5FD] flex items-center justify-center shrink-0">
+            <Sparkles className="h-5 w-5" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-xs sm:text-sm font-extrabold text-[#0F172A] dark:text-[#F8FAFC] truncate">
+                {t.appUpdateAvailableTitle}
+              </p>
+              <span className="rounded-full bg-[#DCFCE7] dark:bg-[#064E3B] text-[#047857] dark:text-[#6EE7B7] px-2 py-0.5 text-[10px] font-extrabold tabular-nums shrink-0">
+                v{release.versionName}
+                {release.versionCode ? ` (${release.versionCode})` : ''}
+              </span>
+            </div>
+            {(release.releaseNotes || release.releaseTitle) && (
+              <p className="text-[11px] sm:text-xs text-[#475569] dark:text-[#CBD5E1] line-clamp-2 mt-0.5">
+                {release.releaseNotes || release.releaseTitle}
+              </p>
+            )}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto justify-end">
+          <button
+            type="button"
+            data-testid="banner_update_later_btn"
+            onClick={onUpdateLater}
+            className="min-h-[44px] px-3.5 py-2 rounded-xl text-xs font-bold text-[#475569] dark:text-[#CBD5E1] hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+          >
+            {t.appUpdateLaterBtn}
+          </button>
+          <button
+            type="button"
+            data-testid="banner_update_now_btn"
+            onClick={onUpdateNow}
+            className="min-h-[44px] inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#1E3A8A] hover:bg-[#172554] dark:bg-[#2563EB] text-white text-xs font-extrabold transition-colors cursor-pointer"
+          >
+            <Download className="h-3.5 w-3.5" />
+            <span>{t.appUpdateNowBtn}</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
