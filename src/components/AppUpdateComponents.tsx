@@ -245,14 +245,14 @@ export const UpdateAvailableModal: React.FC<UpdateAvailableModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-[90] flex flex-col w-full h-[100dvh] bg-[#FAF9F5] dark:bg-[#0B1120] text-[#0F172A] dark:text-[#F8FAFC]"
+      className="fixed inset-0 z-[90] flex flex-col w-full h-full min-h-[100dvh] overflow-hidden bg-[#FAF9F5] dark:bg-[#0B1120] text-[#0F172A] dark:text-[#F8FAFC]"
       role="dialog"
       aria-modal="true"
       aria-label={isMandatory ? t.appUpdateMandatoryTitle : t.appUpdateAvailableTitle}
       data-testid="app_update_modal"
     >
       {/* Full-Screen Sticky Header */}
-      <header className="shrink-0 pt-[env(safe-area-inset-top)] bg-white/95 dark:bg-[#1E293B]/95 backdrop-blur border-b border-[#E2E8F0] dark:border-[#334155]">
+      <header className="shrink-0 w-full pt-[env(safe-area-inset-top)] bg-white dark:bg-[#1E293B] border-b border-[#E2E8F0] dark:border-[#334155]">
         <div
           className={`${containerWidthCls} mx-auto px-4 sm:px-6 py-3.5 flex items-start justify-between gap-3`}
         >
@@ -456,7 +456,7 @@ export const UpdateAvailableModal: React.FC<UpdateAvailableModalProps> = ({
       </div>
 
       {/* Pinned Bottom Action Bar (Always Accessible, Zero Clipping) */}
-      <footer className="shrink-0 pb-[max(env(safe-area-inset-bottom),0.75rem)] pt-3 px-4 sm:px-6 bg-white/95 dark:bg-[#1E293B]/95 backdrop-blur border-t border-[#E2E8F0] dark:border-[#334155]">
+      <footer className="shrink-0 w-full pb-[max(env(safe-area-inset-bottom),0.75rem)] pt-3 px-4 sm:px-6 bg-white dark:bg-[#1E293B] border-t border-[#E2E8F0] dark:border-[#334155]">
         <div
           className={`${containerWidthCls} mx-auto flex flex-col-reverse sm:flex-row sm:items-center sm:justify-end gap-3`}
         >
@@ -521,7 +521,7 @@ export const UpdateAvailableBanner: React.FC<UpdateAvailableBannerProps> = ({
       <div
         role="region"
         aria-label={t.appUpdateAvailableTitle}
-        className="pointer-events-auto max-w-2xl w-full max-h-[45dvh] overflow-y-auto rounded-2xl bg-white/95 dark:bg-[#0F172A]/95 backdrop-blur-md border-2 border-[#1E3A8A] dark:border-[#3B82F6] shadow-2xl p-3.5 sm:p-4 flex flex-wrap items-center justify-between gap-3"
+        className="pointer-events-auto max-w-2xl w-full max-h-[45dvh] overflow-y-auto rounded-2xl bg-white dark:bg-[#0F172A] border-2 border-[#1E3A8A] dark:border-[#3B82F6] shadow-2xl p-3.5 sm:p-4 flex flex-wrap items-center justify-between gap-3"
       >
         <div className="flex items-start gap-3 min-w-0 flex-1">
           <div className="h-10 w-10 rounded-xl bg-[#DBEAFE] dark:bg-[#1E3A8A] text-[#1E3A8A] dark:text-[#93C5FD] flex items-center justify-center shrink-0">
