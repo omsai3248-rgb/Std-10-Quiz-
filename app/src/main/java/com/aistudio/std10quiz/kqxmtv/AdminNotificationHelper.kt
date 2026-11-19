@@ -15,7 +15,6 @@ import android.graphics.Paint
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
-import android.graphics.RectF
 import android.media.AudioAttributes
 import android.media.RingtoneManager
 import android.os.Build
@@ -25,14 +24,13 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.Person
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.IconCompat
-import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.Collections
 import java.util.UUID
 
 object AdminNotificationHelper {
-    const val CHANNEL_GENERAL_PUSH = "quick_quiz_push_high"
     const val CHANNEL_ADMIN_ALERTS = "admin_alerts_high"
     const val CHANNEL_ADMIN_CHAT = "admin_chat_messages"
     const val CHANNEL_APP_UPDATES = "app_updates_high"
@@ -42,9 +40,6 @@ object AdminNotificationHelper {
     const val EXTRA_SENDER_UID = "extra_sender_uid"
     const val EXTRA_NOTIF_ID = "extra_notif_id"
     const val EXTRA_REFERENCE_ID = "extra_reference_id"
-    const val EXTRA_BROADCAST_CATEGORY = "extra_broadcast_category"
-    const val EXTRA_BROADCAST_TITLE = "extra_broadcast_title"
-    const val EXTRA_BROADCAST_BODY = "extra_broadcast_body"
     const val EXTRA_UPDATE_VERSION_NAME = "extra_update_version_name"
     const val EXTRA_UPDATE_VERSION_CODE = "extra_update_version_code"
     const val EXTRA_UPDATE_TITLE = "extra_update_title"
@@ -61,15 +56,9 @@ object AdminNotificationHelper {
     private const val KEY_FCM_TOKEN = "fcm_token"
     private const val KEY_DEVICE_ID = "device_id"
     private const val KEY_PENDING_DEEP_LINK = "pending_deep_link_json"
-    private const val KEY_SHOWN_DEDUPE_KEYS = "shown_dedupe_keys_v2"
-    private const val MAX_PERSISTED_DEDUPE_KEYS = 250
 
-    private val dedupeLock = Any()
-    private var shownKeysLoaded = false
-    private val shownKeys: LinkedHashSet<String> = linkedSetOf()
-
-    @Volatile
-    private var cachedAppLogoBitmap: Bitmap? = null
+    private val shownKeys: MutableSet<String> =
+        Collections.synchronizedSet(linkedSetOf<String>())
 
     private val VIBRATION_PATTERN = longArrayOf(0L, 220L, 110L, 220L)
 
@@ -81,20 +70,6 @@ object AdminNotificationHelper {
             .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
             .setUsage(AudioAttributes.USAGE_NOTIFICATION)
             .build()
-
-        val generalPushChannel = NotificationChannel(
-            CHANNEL_GENERAL_PUSH,
-            "Quick Quiz Alerts & Exam Notices",
-            NotificationManager.IMPORTANCE_HIGH
-        ).apply {
-            description = "Real-time WhatsApp-style banners for exam notices, admin announcements, and study alerts"
-            enableLights(true)
-            enableVibration(true)
-            vibrationPattern = VIBRATION_PATTERN
-            setSound(soundUri, audioAttrs)
-            setShowBadge(true)
-            lockscreenVisibility = Notification.VISIBILITY_PUBLIC
-        }
 
         val alertsChannel = NotificationChannel(
             CHANNEL_ADMIN_ALERTS,
@@ -138,7 +113,6 @@ object AdminNotificationHelper {
             lockscreenVisibility = Notification.VISIBILITY_PUBLIC
         }
 
-        nm.createNotificationChannel(generalPushChannel)
         nm.createNotificationChannel(alertsChannel)
         nm.createNotificationChannel(chatChannel)
         nm.createNotificationChannel(updatesChannel)
@@ -251,7 +225,7 @@ object AdminNotificationHelper {
      * Purges any previously persisted `subscribeToTopic("app_updates")` entries from
      * FirebaseMessaging's SharedPreferences queue so GMS does not keep retrying a failed
      * `INVALID_PARAMETERS` topic sync RPC (`E/FirebaseMessaging: Failed to sync topics`).
-     * Push notifications are delivered via direct multicast in Cloud Functions instead.
+     * App update notifications are delivered via direct multicast in Cloud Functions instead.
      */
     fun clearStaleFcmTopicQueue(context: Context) {
         runCatching {
@@ -274,100 +248,34 @@ object AdminNotificationHelper {
         }
     }
 
-    /**
-     * Extracts deep-link routing data from BOTH:
-     * 1) In-app / FCM-service-built PendingIntents (typed extras)
-     * 2) Terminated/background system-tray FCM notifications tapped by the user
-     *    (where Google Play Services delivers every `data` payload key as a String extra).
-     */
     fun extractDeepLinkFromIntent(intent: Intent?): JSONObject? {
         if (intent == null) return null
-        val extras = intent.extras ?: return null
-        val pushType = intent.getStringExtra("type").orEmpty().trim()
-        val rawRoute = intent.getStringExtra(EXTRA_TARGET_ROUTE)
+        val targetRoute = intent.getStringExtra(EXTRA_TARGET_ROUTE)
             ?: intent.getStringExtra("targetRoute")
-            ?: when (pushType) {
-                "app_update" -> "app_update"
-                "push_broadcast" -> "home"
-                "admin_chat" -> "admin_chat"
-                "admin_activity" -> "admin_notifications"
-                else -> null
-            }
             ?: return null
-        val targetRoute = rawRoute.trim()
         if (targetRoute.isBlank()) return null
-
-        val broadcastId = intent.getStringExtra("broadcastId").orEmpty()
-        val notifId = (intent.getStringExtra(EXTRA_NOTIF_ID)
-            ?: intent.getStringExtra("notifId")
-            ?: intent.getStringExtra("releaseId")
-            ?: broadcastId).orEmpty()
-        val referenceId = (intent.getStringExtra(EXTRA_REFERENCE_ID)
-            ?: intent.getStringExtra("referenceId")
-            ?: intent.getStringExtra("releaseId")
-            ?: broadcastId).orEmpty()
-
-        val verCode: Long = when {
-            intent.hasExtra(EXTRA_UPDATE_VERSION_CODE) -> intent.getLongExtra(EXTRA_UPDATE_VERSION_CODE, 0L)
-            extras.containsKey("versionCode") -> {
-                val raw = extras.get("versionCode")
-                when (raw) {
-                    is Number -> raw.toLong()
-                    is String -> raw.toLongOrNull() ?: 0L
-                    else -> 0L
-                }
-            }
-            else -> 0L
-        }
-
-        val hasMandatory = intent.hasExtra(EXTRA_UPDATE_MANDATORY) || extras.containsKey("isMandatory")
-        val isMandatory: Boolean = when {
-            intent.hasExtra(EXTRA_UPDATE_MANDATORY) -> intent.getBooleanExtra(EXTRA_UPDATE_MANDATORY, false)
-            extras.containsKey("isMandatory") -> {
-                val raw = extras.get("isMandatory")
-                when (raw) {
-                    is Boolean -> raw
-                    is String -> raw.equals("true", ignoreCase = true)
-                    else -> false
-                }
-            }
-            else -> false
-        }
-
-        val broadcastCategory = intent.getStringExtra(EXTRA_BROADCAST_CATEGORY)
-            ?: intent.getStringExtra("category").orEmpty()
-        val broadcastTitle = intent.getStringExtra(EXTRA_BROADCAST_TITLE)
-            ?: intent.getStringExtra(EXTRA_UPDATE_TITLE)
-            ?: intent.getStringExtra("title").orEmpty()
-        val broadcastBody = intent.getStringExtra(EXTRA_BROADCAST_BODY)
-            ?: intent.getStringExtra(EXTRA_UPDATE_BODY)
-            ?: intent.getStringExtra("body").orEmpty()
-
         return JSONObject().apply {
             put("targetRoute", targetRoute)
             put("chatId", intent.getStringExtra(EXTRA_CHAT_ID) ?: intent.getStringExtra("chatId").orEmpty())
             put("senderUid", intent.getStringExtra(EXTRA_SENDER_UID) ?: intent.getStringExtra("senderUid").orEmpty())
-            put("notifId", notifId)
-            put("referenceId", referenceId)
-            if (broadcastId.isNotBlank()) put("broadcastId", broadcastId)
-            if (broadcastCategory.isNotBlank()) put("broadcastCategory", broadcastCategory)
-            if (broadcastTitle.isNotBlank()) {
-                put("broadcastTitle", broadcastTitle)
-                put("updateTitle", broadcastTitle)
-            }
-            if (broadcastBody.isNotBlank()) {
-                put("broadcastBody", broadcastBody)
-                put("releaseNotes", broadcastBody)
-            }
+            put("notifId", intent.getStringExtra(EXTRA_NOTIF_ID) ?: intent.getStringExtra("notifId").orEmpty())
+            put("referenceId", intent.getStringExtra(EXTRA_REFERENCE_ID) ?: intent.getStringExtra("referenceId").orEmpty())
             val verName = intent.getStringExtra(EXTRA_UPDATE_VERSION_NAME)
                 ?: intent.getStringExtra("versionName").orEmpty()
             if (verName.isNotBlank()) put("versionName", verName)
+            val verCode = intent.getLongExtra(EXTRA_UPDATE_VERSION_CODE, 0L)
             if (verCode > 0L) put("versionCode", verCode)
+            val updTitle = intent.getStringExtra(EXTRA_UPDATE_TITLE)
+                ?: intent.getStringExtra("title").orEmpty()
+            if (updTitle.isNotBlank()) put("updateTitle", updTitle)
+            val updBody = intent.getStringExtra(EXTRA_UPDATE_BODY)
+                ?: intent.getStringExtra("body").orEmpty()
+            if (updBody.isNotBlank()) put("releaseNotes", updBody)
             val apkUrl = intent.getStringExtra(EXTRA_UPDATE_APK_URL)
                 ?: intent.getStringExtra("apkDownloadUrl").orEmpty()
             if (apkUrl.isNotBlank()) put("apkDownloadUrl", apkUrl)
-            if (hasMandatory) {
-                put("isMandatory", isMandatory)
+            if (intent.hasExtra(EXTRA_UPDATE_MANDATORY)) {
+                put("isMandatory", intent.getBooleanExtra(EXTRA_UPDATE_MANDATORY, false))
             }
         }
     }
@@ -387,145 +295,19 @@ object AdminNotificationHelper {
         return raw.ifBlank { "null" }
     }
 
-    /**
-     * Persists shown notification dedupe keys in SharedPreferences so the exact same
-     * notification is NEVER displayed twice — even after the app is force-closed or restarted.
-     */
-    fun markDedupeShown(context: Context, dedupeKey: String): Boolean {
-        val clean = dedupeKey.trim()
-        if (clean.isBlank()) return true
-        synchronized(dedupeLock) {
-            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            if (!shownKeysLoaded) {
-                shownKeysLoaded = true
-                runCatching {
-                    val saved = prefs.getString(KEY_SHOWN_DEDUPE_KEYS, null).orEmpty()
-                    if (saved.startsWith("[")) {
-                        val arr = JSONArray(saved)
-                        for (i in 0 until arr.length()) {
-                            val item = arr.optString(i).trim()
-                            if (item.isNotBlank()) shownKeys.add(item)
-                        }
-                    }
-                }
-            }
-            if (shownKeys.contains(clean)) return false
-            while (shownKeys.size >= MAX_PERSISTED_DEDUPE_KEYS) {
+    private fun markDedupeShown(dedupeKey: String): Boolean {
+        if (dedupeKey.isBlank()) return true
+        synchronized(shownKeys) {
+            if (shownKeys.contains(dedupeKey)) return false
+            if (shownKeys.size > 200) {
                 val iter = shownKeys.iterator()
                 if (iter.hasNext()) {
                     iter.next()
                     iter.remove()
-                } else {
-                    break
                 }
             }
-            shownKeys.add(clean)
-            val arr = JSONArray()
-            shownKeys.forEach { arr.put(it) }
-            prefs.edit().putString(KEY_SHOWN_DEDUPE_KEYS, arr.toString()).apply()
+            shownKeys.add(dedupeKey)
             return true
-        }
-    }
-
-    private fun getAppLogoBitmap(context: Context): Bitmap? {
-        cachedAppLogoBitmap?.let { if (!it.isRecycled) return it }
-        return runCatching {
-            val raw = BitmapFactory.decodeResource(context.resources, R.drawable.ic_app_logo) ?: return@runCatching null
-            val size = 128
-            val scaled = Bitmap.createScaledBitmap(raw, size, size, true)
-            val output = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
-            val canvas = Canvas(output)
-            val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-            val rect = Rect(0, 0, size, size)
-            val rectF = RectF(rect)
-            canvas.drawARGB(0, 0, 0, 0)
-            canvas.drawRoundRect(rectF, 28f, 28f, paint)
-            paint.xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_IN)
-            canvas.drawBitmap(scaled, rect, rect, paint)
-            cachedAppLogoBitmap = output
-            output
-        }.getOrNull()
-    }
-
-    /**
-     * WhatsApp-style heads-up notification for Admin broadcasts, Exam Notices, and Announcements.
-     * Delivered to ALL opted-in users across foreground, background, and terminated states.
-     */
-    fun showPushBroadcastNotification(
-        context: Context,
-        broadcastId: String,
-        category: String,
-        title: String,
-        body: String,
-        targetRoute: String,
-        referenceId: String = ""
-    ) {
-        ensureChannels(context)
-        if (!hasNotificationPermission(context)) return
-        val cleanId = broadcastId.trim().ifBlank { "${category}_${title.hashCode()}_${body.hashCode()}" }
-        if (!markDedupeShown(context, "broadcast_$cleanId")) return
-
-        val resolvedRoute = targetRoute.trim().ifBlank {
-            if (category == "app_update") "app_update" else "home"
-        }
-        val intent = Intent(context, MainActivity::class.java).apply {
-            action = "OPEN_QUICK_QUIZ_NOTIFICATION"
-            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            putExtra(EXTRA_TARGET_ROUTE, resolvedRoute)
-            putExtra(EXTRA_NOTIF_ID, cleanId)
-            putExtra(EXTRA_REFERENCE_ID, referenceId.ifBlank { cleanId })
-            putExtra("broadcastId", cleanId)
-            putExtra(EXTRA_BROADCAST_CATEGORY, category)
-            putExtra(EXTRA_BROADCAST_TITLE, title)
-            putExtra(EXTRA_BROADCAST_BODY, body)
-        }
-        val reqCode = ("broadcast_$cleanId").hashCode()
-        val pendingIntent = PendingIntent.getActivity(
-            context,
-            reqCode,
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        val appName = context.getString(R.string.app_name)
-        val channelId = if (category == "app_update") CHANNEL_APP_UPDATES else CHANNEL_GENERAL_PUSH
-        val accentColor = when (category) {
-            "exam_notice" -> 0xFFB45309.toInt()
-            "app_update" -> 0xFF1E3A8A.toInt()
-            else -> 0xFF008069.toInt()
-        }
-        val subTextLabel = when (category) {
-            "exam_notice" -> "$appName • પરીક્ષા સૂચના"
-            "app_update" -> "$appName • અપડેટ"
-            else -> appName
-        }
-
-        val builder = NotificationCompat.Builder(context, channelId)
-            .setSmallIcon(R.drawable.ic_stat_notification)
-            .setColor(accentColor)
-            .setSubText(subTextLabel)
-            .setContentTitle(title.ifBlank { appName })
-            .setContentText(body)
-            .setStyle(
-                NotificationCompat.BigTextStyle()
-                    .setBigContentTitle(title.ifBlank { appName })
-                    .bigText(body)
-            )
-            .setPriority(NotificationCompat.PRIORITY_MAX)
-            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setDefaults(NotificationCompat.DEFAULT_ALL)
-            .setVibrate(VIBRATION_PATTERN)
-            .setAutoCancel(true)
-            .setOnlyAlertOnce(true)
-            .setContentIntent(pendingIntent)
-
-        getAppLogoBitmap(context)?.let { builder.setLargeIcon(it) }
-
-        runCatching {
-            NotificationManagerCompat.from(context).notify("broadcast_$cleanId", reqCode, builder.build())
-        }.onFailure { err ->
-            Log.w("AdminNotification", "Unable to post push broadcast notification", err)
         }
     }
 
@@ -541,10 +323,9 @@ object AdminNotificationHelper {
         ensureChannels(context)
         if (!hasNotificationPermission(context)) return
         if (!isCategoryEnabled(context, category)) return
-        if (!markDedupeShown(context, "act_$notifId")) return
+        if (!markDedupeShown("act_$notifId")) return
 
         val intent = Intent(context, MainActivity::class.java).apply {
-            action = "OPEN_QUICK_QUIZ_NOTIFICATION"
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra(EXTRA_TARGET_ROUTE, targetRoute.ifBlank { "admin_notifications" })
             putExtra(EXTRA_NOTIF_ID, notifId)
@@ -558,17 +339,15 @@ object AdminNotificationHelper {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val appName = context.getString(R.string.app_name)
         val publicFallback = NotificationCompat.Builder(context, CHANNEL_ADMIN_ALERTS)
             .setSmallIcon(R.drawable.ic_stat_notification)
-            .setContentTitle("$appName • Admin Alert")
+            .setContentTitle("ધોરણ 10 Admin Alert")
             .setContentText("નવી Admin સૂચના આવી છે.")
             .build()
 
-        val builder = NotificationCompat.Builder(context, CHANNEL_ADMIN_ALERTS)
+        val notification = NotificationCompat.Builder(context, CHANNEL_ADMIN_ALERTS)
             .setSmallIcon(R.drawable.ic_stat_notification)
             .setColor(0xFF075E54.toInt())
-            .setSubText("$appName • Admin")
             .setContentTitle(title.ifBlank { "Admin સૂચના" })
             .setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
@@ -579,13 +358,11 @@ object AdminNotificationHelper {
             .setDefaults(NotificationCompat.DEFAULT_ALL)
             .setVibrate(VIBRATION_PATTERN)
             .setAutoCancel(true)
-            .setOnlyAlertOnce(true)
             .setContentIntent(pendingIntent)
-
-        getAppLogoBitmap(context)?.let { builder.setLargeIcon(it) }
+            .build()
 
         runCatching {
-            NotificationManagerCompat.from(context).notify("act_$notifId", reqCode, builder.build())
+            NotificationManagerCompat.from(context).notify(reqCode, notification)
         }.onFailure { err ->
             Log.w("AdminNotification", "Unable to post activity notification", err)
         }
@@ -605,10 +382,9 @@ object AdminNotificationHelper {
         ensureChannels(context)
         if (!hasNotificationPermission(context)) return
         val dedupeKey = "appupd_${releaseId.ifBlank { "${versionName}_$versionCode" }}"
-        if (!markDedupeShown(context, dedupeKey)) return
+        if (!markDedupeShown(dedupeKey)) return
 
         val intent = Intent(context, MainActivity::class.java).apply {
-            action = "OPEN_QUICK_QUIZ_NOTIFICATION"
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra(EXTRA_TARGET_ROUTE, "app_update")
             putExtra(EXTRA_NOTIF_ID, releaseId)
@@ -640,7 +416,7 @@ object AdminNotificationHelper {
             "નવું વર્ઝન v$versionName ઉપલબ્ધ છે. અહીં ટચ કરીને એપની અંદરથી તરત અપડેટ કરો."
         }
 
-        val builder = NotificationCompat.Builder(context, CHANNEL_APP_UPDATES)
+        val notification = NotificationCompat.Builder(context, CHANNEL_APP_UPDATES)
             .setSmallIcon(R.drawable.ic_stat_notification)
             .setColor(0xFF1E3A8A.toInt())
             .setSubText(resolvedAppName)
@@ -657,13 +433,11 @@ object AdminNotificationHelper {
             .setDefaults(NotificationCompat.DEFAULT_ALL)
             .setVibrate(VIBRATION_PATTERN)
             .setAutoCancel(true)
-            .setOnlyAlertOnce(true)
             .setContentIntent(pendingIntent)
-
-        getAppLogoBitmap(context)?.let { builder.setLargeIcon(it) }
+            .build()
 
         runCatching {
-            NotificationManagerCompat.from(context).notify(dedupeKey, reqCode, builder.build())
+            NotificationManagerCompat.from(context).notify(reqCode, notification)
         }.onFailure { err ->
             Log.w("AdminNotification", "Unable to post app update notification", err)
         }
@@ -682,13 +456,13 @@ object AdminNotificationHelper {
         ensureChannels(context)
         if (!hasNotificationPermission(context)) return
         if (!isCategoryEnabled(context, "admin_chat")) return
-        if (!markDedupeShown(context, "chat_$messageId")) return
+        if (!markDedupeShown("chat_$messageId")) return
 
         val avatarBitmap = if (senderPhotoUrl.startsWith("https://")) {
             fetchCircularBitmap(senderPhotoUrl)
         } else {
             null
-        } ?: getAppLogoBitmap(context)
+        }
 
         val senderPersonBuilder = Person.Builder()
             .setKey(senderUid)
@@ -709,7 +483,6 @@ object AdminNotificationHelper {
             .addMessage(text, if (timestampMs > 0L) timestampMs else System.currentTimeMillis(), senderPerson)
 
         val intent = Intent(context, MainActivity::class.java).apply {
-            action = "OPEN_QUICK_QUIZ_NOTIFICATION"
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra(EXTRA_TARGET_ROUTE, "admin_chat")
             putExtra(EXTRA_CHAT_ID, chatId)
@@ -724,17 +497,15 @@ object AdminNotificationHelper {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val appName = context.getString(R.string.app_name)
         val publicFallback = NotificationCompat.Builder(context, CHANNEL_ADMIN_CHAT)
             .setSmallIcon(R.drawable.ic_stat_notification)
-            .setContentTitle("$appName • Admin Message")
+            .setContentTitle("Admin Personal Message")
             .setContentText("નવો Admin સંદેશ આવ્યો છે.")
             .build()
 
         val builder = NotificationCompat.Builder(context, CHANNEL_ADMIN_CHAT)
             .setSmallIcon(R.drawable.ic_stat_notification)
             .setColor(0xFF008069.toInt())
-            .setSubText(appName)
             .setStyle(messagingStyle)
             .setContentTitle(senderName.ifBlank { "Admin Message" })
             .setContentText(text)
@@ -745,7 +516,6 @@ object AdminNotificationHelper {
             .setDefaults(NotificationCompat.DEFAULT_ALL)
             .setVibrate(VIBRATION_PATTERN)
             .setAutoCancel(true)
-            .setOnlyAlertOnce(true)
             .setContentIntent(pendingIntent)
 
         if (avatarBitmap != null) {
@@ -753,7 +523,7 @@ object AdminNotificationHelper {
         }
 
         runCatching {
-            NotificationManagerCompat.from(context).notify("chat_$chatId", reqCode, builder.build())
+            NotificationManagerCompat.from(context).notify(reqCode, builder.build())
         }.onFailure { err ->
             Log.w("AdminNotification", "Unable to post chat notification", err)
         }

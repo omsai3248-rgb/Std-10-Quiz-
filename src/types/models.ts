@@ -417,44 +417,7 @@ export type AdminNotificationRoute =
   | 'admin_updates'
   | 'admin_notifications';
 
-export type PushBroadcastCategory = 'admin_message' | 'exam_notice' | 'app_update';
-
-export type PushBroadcastTargetRoute =
-  | 'home'
-  | 'mock_test'
-  | 'app_update'
-  | 'subject_maths'
-  | 'subject_science'
-  | 'subject_social_science';
-
-export interface PushBroadcastRecord {
-  id: string;
-  category: PushBroadcastCategory;
-  title: string;
-  body: string;
-  targetRoute: PushBroadcastTargetRoute;
-  referenceId: string;
-  senderUid: string;
-  senderName: string;
-  pushDispatched: boolean;
-  recipientCount: number;
-  createdAt: Timestamp | null;
-  updatedAt: Timestamp | null;
-}
-
-export interface SendPushBroadcastInput {
-  category: PushBroadcastCategory;
-  title: string;
-  body: string;
-  targetRoute: PushBroadcastTargetRoute;
-  referenceId?: string;
-}
-
-export type AdminDeepLinkRoute =
-  | AdminNotificationRoute
-  | 'admin_chat'
-  | 'app_update'
-  | PushBroadcastTargetRoute;
+export type AdminDeepLinkRoute = AdminNotificationRoute | 'admin_chat' | 'app_update';
 
 export interface AdminNotificationPrefs {
   registrations: boolean;
@@ -556,10 +519,6 @@ export interface AdminDeepLinkPayload {
   senderUid?: string;
   notifId?: string;
   referenceId?: string;
-  broadcastId?: string;
-  broadcastCategory?: PushBroadcastCategory | string;
-  broadcastTitle?: string;
-  broadcastBody?: string;
   versionName?: string;
   versionCode?: number;
   updateTitle?: string;
@@ -567,5 +526,4 @@ export interface AdminDeepLinkPayload {
   apkDownloadUrl?: string;
   isMandatory?: boolean;
 }
-
 

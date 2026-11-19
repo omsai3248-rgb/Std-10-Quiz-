@@ -13,9 +13,7 @@ import type {
   InspectedApkMetadata,
   InstalledAppInfo,
   PaymentRequest,
-  PushBroadcastRecord,
   QuizAttempt,
-  SendPushBroadcastInput,
   StudentProfile,
   UpdateNotificationRecord,
 } from '../types/models';
@@ -74,9 +72,6 @@ interface AndroidFirebaseBridgeApi {
   loadMoreAdminCollection?: (callId: string, collectionName: string, cursorSeconds: number) => void;
   getNotificationPermissionStatus?: () => string;
   requestNotificationPermission?: (callId: string) => void;
-  openNotificationSettings?: () => void;
-  sendPushBroadcast?: (callId: string, payloadJson: string) => void;
-  deletePushBroadcast?: (callId: string, broadcastId: string) => void;
   consumePendingDeepLink?: () => string;
   syncAdminProfileAndFcmToken?: (callId: string) => void;
   updateAdminNotificationPrefs?: (callId: string, prefsJson: string) => void;
@@ -106,7 +101,6 @@ declare global {
     __onNativeAuthStateChanged?: (user: AppAuthUser | null) => void;
     __onNativeReleaseConfig?: (cfg: AppReleaseConfig | null) => void;
     __onNativeUpdateNotifications?: (list: UpdateNotificationRecord[]) => void;
-    __onNativePushBroadcasts?: (list: PushBroadcastRecord[]) => void;
     __onNativeApkUploadProgress?: (evt: AppUpdateProgressEvent) => void;
     __onNativeAppUpdateProgress?: (evt: AppUpdateProgressEvent) => void;
     __onNativeMyPayments?: (list: PaymentRequest[]) => void;
@@ -189,7 +183,6 @@ const pendingCalls = new Map<
 const authListeners = new Set<(user: AppAuthUser | null) => void>();
 const releaseListeners = new Set<(cfg: AppReleaseConfig | null) => void>();
 const updateNotificationListeners = new Set<(list: UpdateNotificationRecord[]) => void>();
-const pushBroadcastListeners = new Set<(list: PushBroadcastRecord[]) => void>();
 const apkUploadProgressListeners = new Set<(evt: AppUpdateProgressEvent) => void>();
 const appUpdateProgressListeners = new Set<(evt: AppUpdateProgressEvent) => void>();
 const myPaymentListeners = new Set<(list: PaymentRequest[]) => void>();
@@ -210,7 +203,6 @@ const adminDeepLinkListeners = new Set<(payload: AdminDeepLinkPayload) => void>(
 let latestAuthUser: AppAuthUser | null | undefined;
 let latestReleaseConfig: AppReleaseConfig | null | undefined;
 let latestUpdateNotifications: UpdateNotificationRecord[] | undefined;
-let latestPushBroadcasts: PushBroadcastRecord[] | undefined;
 let latestMyPayments: PaymentRequest[] | undefined;
 let latestStudentProfile: StudentProfile | null | undefined;
 let latestMyAttempts: QuizAttempt[] | undefined;
@@ -255,11 +247,6 @@ if (typeof window !== 'undefined') {
   window.__onNativeUpdateNotifications = (list) => {
     latestUpdateNotifications = Array.isArray(list) ? list : [];
     updateNotificationListeners.forEach((cb) => cb(latestUpdateNotifications!));
-  };
-
-  window.__onNativePushBroadcasts = (list) => {
-    latestPushBroadcasts = Array.isArray(list) ? list : [];
-    pushBroadcastListeners.forEach((cb) => cb(latestPushBroadcasts!));
   };
 
   window.__onNativeApkUploadProgress = (evt) => {
@@ -493,17 +480,6 @@ export function subscribeNativeUpdateNotifications(
   };
 }
 
-export function subscribeNativePushBroadcasts(
-  cb: (list: PushBroadcastRecord[]) => void
-): () => void {
-  pushBroadcastListeners.add(cb);
-  if (latestPushBroadcasts !== undefined) cb(latestPushBroadcasts);
-  ensureNativePublicListenersStarted();
-  return () => {
-    pushBroadcastListeners.delete(cb);
-  };
-}
-
 export function subscribeNativeApkUploadProgress(
   cb: (evt: AppUpdateProgressEvent) => void
 ): () => void {
@@ -668,23 +644,6 @@ export async function requestNativeNotificationPermission(): Promise<'granted' |
     window.AndroidFirebaseBridge?.requestNotificationPermission?.(callId);
   });
   return status === 'granted' ? 'granted' : 'denied';
-}
-
-export function openNativeNotificationSettings(): void {
-  if (!hasNativeFirebaseBridge()) return;
-  window.AndroidFirebaseBridge?.openNotificationSettings?.();
-}
-
-export async function sendNativePushBroadcast(payload: SendPushBroadcastInput): Promise<string> {
-  return invokeNativeBridgeCall<string>((callId) => {
-    window.AndroidFirebaseBridge?.sendPushBroadcast?.(callId, JSON.stringify(payload));
-  });
-}
-
-export async function deleteNativePushBroadcast(broadcastId: string): Promise<void> {
-  await invokeNativeBridgeCall((callId) => {
-    window.AndroidFirebaseBridge?.deletePushBroadcast?.(callId, broadcastId);
-  });
 }
 
 export function subscribeNativeNotificationPermission(

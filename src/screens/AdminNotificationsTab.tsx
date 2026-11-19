@@ -8,14 +8,9 @@ import {
   ChevronDown,
   ChevronUp,
   Database,
-  Download,
-  GraduationCap,
   KeyRound,
   LogIn,
-  Megaphone,
   MessageSquare,
-  Send,
-  Settings,
   SlidersHorizontal,
   Trash2,
   UserPlus,
@@ -28,23 +23,15 @@ import {
   type AdminNotificationItem,
   type AdminNotificationPrefs,
   type AdminNotificationRoute,
-  type PushBroadcastCategory,
-  type PushBroadcastRecord,
-  type PushBroadcastTargetRoute,
-  type SendPushBroadcastInput,
 } from '../types/models';
 
 interface AdminNotificationsTabProps {
   notifications: AdminNotificationItem[];
-  pushBroadcasts?: PushBroadcastRecord[];
   prefs: AdminNotificationPrefs | null;
   permissionStatus: 'granted' | 'denied' | 'default';
   currentAdminUid: string;
   isBusy: boolean;
   onRequestPermission: () => Promise<void> | void;
-  onOpenNotificationSettings?: () => void;
-  onSendPushBroadcast?: (input: SendPushBroadcastInput) => Promise<void>;
-  onDeletePushBroadcast?: (broadcastId: string) => Promise<void>;
   onUpdatePrefs: (next: AdminNotificationPrefs) => Promise<void> | void;
   onMarkRead: (notifId: string) => Promise<void> | void;
   onMarkAllRead: () => Promise<void> | void;
@@ -108,15 +95,11 @@ function getCategoryLabel(
 
 export const AdminNotificationsTab: React.FC<AdminNotificationsTabProps> = ({
   notifications,
-  pushBroadcasts = [],
   prefs,
   permissionStatus,
   currentAdminUid,
   isBusy,
   onRequestPermission,
-  onOpenNotificationSettings,
-  onSendPushBroadcast,
-  onDeletePushBroadcast,
   onUpdatePrefs,
   onMarkRead,
   onMarkAllRead,
@@ -126,44 +109,6 @@ export const AdminNotificationsTab: React.FC<AdminNotificationsTabProps> = ({
   const { t } = useTranslation();
   const [filter, setFilter] = useState<'all' | 'unread'>('all');
   const [showPrefs, setShowPrefs] = useState(false);
-
-  // Real-Time Student Push Broadcast Composer State
-  const [bcastCategory, setBcastCategory] = useState<PushBroadcastCategory>('exam_notice');
-  const [bcastTargetRoute, setBcastTargetRoute] = useState<PushBroadcastTargetRoute>('mock_test');
-  const [bcastTitle, setBcastTitle] = useState('');
-  const [bcastBody, setBcastBody] = useState('');
-  const [isSendingBroadcast, setIsSendingBroadcast] = useState(false);
-  const [bcastError, setBcastError] = useState('');
-  const [bcastSuccess, setBcastSuccess] = useState('');
-
-  const handleSubmitBroadcast = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!onSendPushBroadcast) return;
-    const cleanTitle = bcastTitle.trim();
-    const cleanBody = bcastBody.trim();
-    if (!cleanTitle || !cleanBody) {
-      setBcastError('શીર્ષક અને સંદેશ બંને લખવા જરૂરી છે.');
-      return;
-    }
-    setBcastError('');
-    setBcastSuccess('');
-    setIsSendingBroadcast(true);
-    try {
-      await onSendPushBroadcast({
-        category: bcastCategory,
-        title: cleanTitle,
-        body: cleanBody,
-        targetRoute: bcastTargetRoute,
-      });
-      setBcastTitle('');
-      setBcastBody('');
-      setBcastSuccess('Real-Time Push Notification બધા એક્ટિવ ડિવાઇસ પર મોકલાઈ ગઈ છે!');
-    } catch (err) {
-      setBcastError(err instanceof Error ? err.message : 'Push Notification મોકલવામાં ભૂલ આવી.');
-    } finally {
-      setIsSendingBroadcast(false);
-    }
-  };
 
   const effectivePrefs = prefs ?? DEFAULT_ADMIN_NOTIFICATION_PREFS;
 
@@ -234,210 +179,17 @@ export const AdminNotificationsTab: React.FC<AdminNotificationsTabProps> = ({
         </div>
 
         {permissionStatus !== 'granted' && (
-          <div className="flex flex-wrap items-center gap-2 shrink-0">
-            <button
-              type="button"
-              data-testid="enable_push_notifications_btn"
-              onClick={() => void onRequestPermission()}
-              className="min-h-[48px] px-4 rounded-xl bg-[#047857] hover:bg-[#065F46] text-white text-xs sm:text-sm font-extrabold inline-flex items-center justify-center gap-2 cursor-pointer"
-            >
-              <Bell className="h-4 w-4" />
-              <span>{t.pushPermissionEnableBtn}</span>
-            </button>
-            {onOpenNotificationSettings && permissionStatus === 'denied' && (
-              <button
-                type="button"
-                onClick={onOpenNotificationSettings}
-                className="min-h-[48px] px-3.5 rounded-xl border border-[#CBD5E1] dark:border-[#334155] text-xs font-extrabold inline-flex items-center gap-1.5 cursor-pointer"
-              >
-                <Settings className="h-4 w-4" />
-                <span>Settings</span>
-              </button>
-            )}
-          </div>
+          <button
+            type="button"
+            data-testid="enable_push_notifications_btn"
+            onClick={() => void onRequestPermission()}
+            className="min-h-[48px] px-4 rounded-xl bg-[#047857] hover:bg-[#065F46] text-white text-xs sm:text-sm font-extrabold inline-flex items-center justify-center gap-2 shrink-0 cursor-pointer"
+          >
+            <Bell className="h-4 w-4" />
+            <span>{t.pushPermissionEnableBtn}</span>
+          </button>
         )}
       </div>
-
-      {/* Real-Time FCM Push Broadcast Composer (WhatsApp-style Alerts to ALL Users) */}
-      {onSendPushBroadcast && (
-        <div
-          className="rounded-2xl bg-white dark:bg-[#1E293B] border border-[#CBD5E1] dark:border-[#334155] p-4 sm:p-5 shadow-sm space-y-4"
-          data-testid="admin_push_broadcast_studio"
-        >
-          <div className="flex items-start gap-3">
-            <div className="h-11 w-11 rounded-xl bg-[#047857]/12 dark:bg-[#047857]/25 text-[#047857] dark:text-[#6EE7B7] flex items-center justify-center shrink-0">
-              <Megaphone className="h-5 w-5" />
-            </div>
-            <div className="min-w-0">
-              <h3 className="text-sm sm:text-base font-extrabold text-[#0F172A] dark:text-white">
-                વિદ્યાર્થીઓને Real-Time Push Notification મોકલો
-              </h3>
-              <p className="text-xs text-[#475569] dark:text-[#94A3B8]">
-                એપ બંધ હોય, બેકગ્રાઉન્ડમાં હોય કે બીજી એપ ચાલુ હોય ત્યારે પણ WhatsApp જેવું Banner + Sound + Vibration મળશે.
-              </p>
-            </div>
-          </div>
-
-          <form onSubmit={(e) => void handleSubmitBroadcast(e)} className="space-y-3">
-            {/* Category Chips */}
-            <div className="flex flex-wrap items-center gap-2">
-              {(
-                [
-                  { id: 'exam_notice', label: 'પરીક્ષાની સૂચના', icon: GraduationCap, defaultRoute: 'mock_test' },
-                  { id: 'admin_message', label: 'Admin સંદેશ', icon: Megaphone, defaultRoute: 'home' },
-                  { id: 'app_update', label: 'App Update જાણકારી', icon: Download, defaultRoute: 'app_update' },
-                ] as const
-              ).map(({ id, label, icon: Icon, defaultRoute }) => {
-                const active = bcastCategory === id;
-                return (
-                  <button
-                    key={id}
-                    type="button"
-                    data-testid={`broadcast_cat_${id}`}
-                    onClick={() => {
-                      setBcastCategory(id);
-                      setBcastTargetRoute(defaultRoute);
-                    }}
-                    className={`min-h-[44px] px-3.5 rounded-xl text-xs font-extrabold inline-flex items-center gap-1.5 cursor-pointer transition-colors ${
-                      active
-                        ? 'bg-[#047857] text-white shadow-sm'
-                        : 'bg-[#FAF9F5] dark:bg-[#0F172A] border border-[#CBD5E1] dark:border-[#334155] text-slate-700 dark:text-slate-200'
-                    }`}
-                  >
-                    <Icon className="h-3.5 w-3.5" />
-                    <span>{label}</span>
-                  </button>
-                );
-              })}
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-extrabold mb-1 text-slate-700 dark:text-slate-200">
-                  નોટિફિકેશન શીર્ષક (Title)
-                </label>
-                <input
-                  type="text"
-                  maxLength={120}
-                  data-testid="broadcast_title_input"
-                  value={bcastTitle}
-                  onChange={(e) => setBcastTitle(e.target.value)}
-                  placeholder="દા.ત. બોર્ડ પરીક્ષા મોક ટેસ્ટ શરૂ થઈ ગયો છે!"
-                  className="w-full min-h-[46px] rounded-xl border border-[#CBD5E1] dark:border-[#334155] bg-[#FAF9F5] dark:bg-[#0F172A] px-3.5 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-[#047857]"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-extrabold mb-1 text-slate-700 dark:text-slate-200">
-                  ક્લિક કરતાં કઈ સ્ક્રીન ખૂલે? (Deep Link)
-                </label>
-                <select
-                  data-testid="broadcast_target_route_select"
-                  value={bcastTargetRoute}
-                  onChange={(e) => setBcastTargetRoute(e.target.value as PushBroadcastTargetRoute)}
-                  className="w-full min-h-[46px] rounded-xl border border-[#CBD5E1] dark:border-[#334155] bg-[#FAF9F5] dark:bg-[#0F172A] px-3.5 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-[#047857]"
-                >
-                  <option value="mock_test">બોર્ડ મોક ટેસ્ટ (Board Mock Test)</option>
-                  <option value="home">હોમ સ્ક્રીન (Home)</option>
-                  <option value="subject_maths">ગણિત વિષય (Mathematics)</option>
-                  <option value="subject_science">વિજ્ઞાન વિષય (Science)</option>
-                  <option value="subject_social_science">સામાજિક વિજ્ઞાન (Social Science)</option>
-                  <option value="app_update">App Update સ્ક્રીન (Update Screen)</option>
-                </select>
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-xs font-extrabold mb-1 text-slate-700 dark:text-slate-200">
-                સંદેશ (Message)
-              </label>
-              <textarea
-                rows={3}
-                maxLength={600}
-                data-testid="broadcast_body_input"
-                value={bcastBody}
-                onChange={(e) => setBcastBody(e.target.value)}
-                placeholder="વિદ્યાર્થીઓને મોકલવાનો સ્પષ્ટ સંદેશ અહીં લખો..."
-                className="w-full rounded-xl border border-[#CBD5E1] dark:border-[#334155] bg-[#FAF9F5] dark:bg-[#0F172A] px-3.5 py-2.5 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-[#047857] resize-y"
-              />
-            </div>
-
-            {bcastError && (
-              <p className="text-xs font-bold text-red-600 dark:text-red-400">{bcastError}</p>
-            )}
-            {bcastSuccess && (
-              <p className="text-xs font-bold text-emerald-700 dark:text-emerald-400">
-                {bcastSuccess}
-              </p>
-            )}
-
-            <div className="flex justify-end">
-              <button
-                type="submit"
-                data-testid="send_push_broadcast_btn"
-                disabled={isSendingBroadcast || isBusy}
-                className="min-h-[48px] px-5 rounded-xl bg-[#047857] hover:bg-[#065F46] text-white text-xs sm:text-sm font-extrabold inline-flex items-center gap-2 cursor-pointer disabled:opacity-50"
-              >
-                <Send className="h-4 w-4" />
-                <span>{isSendingBroadcast ? 'મોકલાઈ રહ્યું છે...' : 'બધાને Push Notification મોકલો'}</span>
-              </button>
-            </div>
-          </form>
-
-          {/* Recently Sent Push Broadcasts */}
-          {pushBroadcasts.length > 0 && (
-            <div className="pt-3 border-t border-slate-100 dark:border-slate-800 space-y-2">
-              <p className="text-xs font-extrabold text-slate-500 dark:text-slate-400">
-                મોકલેલી Push Notifications ({pushBroadcasts.length})
-              </p>
-              <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
-                {pushBroadcasts.slice(0, 12).map((item) => (
-                  <div
-                    key={item.id}
-                    className="rounded-xl border border-slate-200 dark:border-slate-700 bg-[#FAF9F5] dark:bg-[#0F172A] px-3.5 py-2.5 flex items-start justify-between gap-3"
-                  >
-                    <div className="min-w-0 flex-1 space-y-0.5">
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <span className="text-[10px] font-extrabold rounded-full px-2 py-0.5 bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300">
-                          {item.category === 'exam_notice'
-                            ? 'પરીક્ષા સૂચના'
-                            : item.category === 'app_update'
-                              ? 'App Update'
-                              : 'Admin સંદેશ'}
-                        </span>
-                        <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400">
-                          {item.pushDispatched
-                            ? `Sent (${item.recipientCount} devices)`
-                            : 'Queued for FCM'}
-                        </span>
-                        <span className="text-[10px] text-slate-400 tabular-nums">
-                          {formatNotifDateTime(item.createdAt)}
-                        </span>
-                      </div>
-                      <p className="text-xs font-extrabold text-slate-900 dark:text-white break-words">
-                        {item.title}
-                      </p>
-                      <p className="text-[11px] text-slate-600 dark:text-slate-300 break-words">
-                        {item.body}
-                      </p>
-                    </div>
-                    {onDeletePushBroadcast && (
-                      <button
-                        type="button"
-                        aria-label="Delete broadcast"
-                        onClick={() => void onDeletePushBroadcast(item.id)}
-                        className="min-h-[40px] min-w-[40px] rounded-lg border border-red-200 dark:border-red-900 text-red-600 dark:text-red-400 flex items-center justify-center hover:bg-red-50 dark:hover:bg-red-950/40 cursor-pointer shrink-0"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
 
       {/* Category Preferences Toggle Drawer */}
       <div className="rounded-2xl bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] shadow-sm overflow-hidden">

@@ -790,46 +790,6 @@ service cloud.firestore {
       allow delete: if isAdmin() && isValidId(notifId);
     }
 
-    function isValidPushBroadcast(data) {
-      return data.keys().hasAll([
-               'category', 'title', 'body', 'targetRoute', 'referenceId',
-               'senderUid', 'senderName', 'pushDispatched', 'recipientCount',
-               'createdAt', 'updatedAt'
-             ]) &&
-             data.keys().hasOnly([
-               'category', 'title', 'body', 'targetRoute', 'referenceId',
-               'senderUid', 'senderName', 'pushDispatched', 'recipientCount',
-               'createdAt', 'updatedAt'
-             ]) &&
-             data.category in ['admin_message', 'exam_notice', 'app_update'] &&
-             data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
-             data.body is string && data.body.size() >= 1 && data.body.size() <= 600 &&
-             data.targetRoute in ['home', 'mock_test', 'app_update', 'subject_maths', 'subject_science', 'subject_social_science'] &&
-             data.referenceId is string && data.referenceId.size() <= 128 &&
-             data.senderUid is string && data.senderUid.size() >= 1 && data.senderUid.size() <= 128 &&
-             data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 80 &&
-             data.pushDispatched is bool &&
-             data.recipientCount is int && data.recipientCount >= 0 && data.recipientCount <= 1000000 &&
-             data.createdAt is timestamp && data.createdAt <= request.time &&
-             data.updatedAt is timestamp && data.updatedAt <= request.time;
-    }
-
-    match /push_broadcasts/{broadcastId} {
-      allow get, list: if true;
-      allow create: if isAdmin() &&
-                       isValidId(broadcastId) &&
-                       isValidPushBroadcast(incoming()) &&
-                       incoming().senderUid == request.auth.uid &&
-                       incoming().pushDispatched == false &&
-                       incoming().recipientCount == 0;
-      allow update: if isAdmin() &&
-                       isValidId(broadcastId) &&
-                       isValidPushBroadcast(incoming()) &&
-                       incoming().senderUid == existing().senderUid &&
-                       incoming().createdAt == existing().createdAt;
-      allow delete: if isAdmin() && isValidId(broadcastId);
-    }
-
     function isValidDeviceTokenDocId(deviceId) {
       return deviceId is string && deviceId.size() >= 8 && deviceId.size() <= 128 && deviceId.matches('^[a-zA-Z0-9_\\-]+$');
     }

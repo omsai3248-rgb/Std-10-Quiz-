@@ -18,51 +18,16 @@ class QuizFirebaseMessagingService : FirebaseMessagingService() {
         super.onNewToken(token)
         AdminNotificationHelper.clearStaleFcmTopicQueue(applicationContext)
         AdminNotificationHelper.saveFcmToken(applicationContext, token)
-        val permissionGranted = AdminNotificationHelper.hasNotificationPermission(applicationContext)
-        persistPublicDeviceFcmToken(
-            context = applicationContext,
-            token = token,
-            topicSubscribed = false,
-            enabled = permissionGranted
-        )
-        persistRefreshedTokenIfAdminSignedIn(token, enabled = permissionGranted)
+        persistPublicDeviceFcmToken(applicationContext, token, topicSubscribed = false)
+        persistRefreshedTokenIfAdminSignedIn(token)
     }
 
     override fun onMessageReceived(message: RemoteMessage) {
         super.onMessageReceived(message)
-        // Strict permission gate: only render system notifications if user granted permission
-        if (!AdminNotificationHelper.hasNotificationPermission(applicationContext)) {
-            return
-        }
-
         val data = message.data
-        val type = data["type"].orEmpty().trim()
+        val type = data["type"].orEmpty()
 
-        // 1. Public Push Broadcasts (Admin Messages, Exam Notices, Study Alerts) for ALL users
-        if (type == "push_broadcast") {
-            val broadcastId = data["broadcastId"].orEmpty().ifBlank { data["referenceId"].orEmpty() }
-            val category = data["category"].orEmpty().ifBlank { "admin_message" }
-            val title = data["title"].orEmpty().ifBlank { message.notification?.title.orEmpty() }
-            val body = data["body"].orEmpty().ifBlank { message.notification?.body.orEmpty() }
-            val targetRoute = data["targetRoute"].orEmpty().ifBlank {
-                if (category == "app_update") "app_update" else "home"
-            }
-            val referenceId = data["referenceId"].orEmpty().ifBlank { broadcastId }
-            if (title.isBlank() && body.isBlank()) return
-
-            AdminNotificationHelper.showPushBroadcastNotification(
-                context = applicationContext,
-                broadcastId = broadcastId,
-                category = category,
-                title = title,
-                body = body,
-                targetRoute = targetRoute,
-                referenceId = referenceId
-            )
-            return
-        }
-
-        // 2. App Update notifications are delivered to ALL opted-in users (foreground/background/killed)
+        // 1. App Update notifications are delivered to ALL registered users (foreground/background/killed)
         if (type == "app_update") {
             val releaseId = data["releaseId"].orEmpty().ifBlank { data["referenceId"].orEmpty() }
             val appName = data["appName"].orEmpty().ifBlank { applicationContext.getString(R.string.app_name) }
@@ -87,27 +52,7 @@ class QuizFirebaseMessagingService : FirebaseMessagingService() {
             return
         }
 
-        // 3. Direct Firebase Console / generic notification fallback (when no admin-only type is set)
-        if (type.isBlank() && message.notification != null) {
-            val notifTitle = message.notification?.title.orEmpty()
-            val notifBody = message.notification?.body.orEmpty()
-            if (notifTitle.isNotBlank() || notifBody.isNotBlank()) {
-                val fallbackId = message.messageId.orEmpty()
-                    .ifBlank { "fcm_msg_${notifTitle.hashCode()}_${notifBody.hashCode()}" }
-                AdminNotificationHelper.showPushBroadcastNotification(
-                    context = applicationContext,
-                    broadcastId = fallbackId,
-                    category = data["category"].orEmpty().ifBlank { "admin_message" },
-                    title = notifTitle,
-                    body = notifBody,
-                    targetRoute = data["targetRoute"].orEmpty().ifBlank { "home" },
-                    referenceId = data["referenceId"].orEmpty()
-                )
-            }
-            return
-        }
-
-        // 4. Admin-only activity & 1-to-1 Admin personal chat notifications
+        // 2. Ensure device still has an active Admin session before displaying Admin notifications
         if (!AdminNotificationHelper.isAdminSessionActive(applicationContext) && Firebase.auth.currentUser == null) {
             return
         }
@@ -202,12 +147,7 @@ class QuizFirebaseMessagingService : FirebaseMessagingService() {
         }
     }
 
-    private fun persistPublicDeviceFcmToken(
-        context: Context,
-        token: String,
-        topicSubscribed: Boolean,
-        enabled: Boolean
-    ) {
+    private fun persistPublicDeviceFcmToken(context: Context, token: String, topicSubscribed: Boolean) {
         if (token.length < 20) return
         runCatching {
             val db = getNamedFirestore() ?: return
@@ -227,7 +167,7 @@ class QuizFirebaseMessagingService : FirebaseMessagingService() {
                     "appVersion" to appVersion,
                     "versionCode" to versionCode,
                     "topicSubscribed" to topicSubscribed,
-                    "enabled" to enabled,
+                    "enabled" to true,
                     "updatedAt" to FieldValue.serverTimestamp(),
                 )
                 if (!snap.exists()) {
@@ -242,7 +182,7 @@ class QuizFirebaseMessagingService : FirebaseMessagingService() {
         }
     }
 
-    private fun persistRefreshedTokenIfAdminSignedIn(token: String, enabled: Boolean) {
+    private fun persistRefreshedTokenIfAdminSignedIn(token: String) {
         runCatching {
             if (!AdminNotificationHelper.isAdminSessionActive(applicationContext)) return
             val user = Firebase.auth.currentUser ?: return
@@ -263,7 +203,7 @@ class QuizFirebaseMessagingService : FirebaseMessagingService() {
                 "deviceId" to deviceId,
                 "deviceName" to deviceName,
                 "appVersion" to appVersion.take(32),
-                "enabled" to enabled,
+                "enabled" to true,
                 "updatedAt" to FieldValue.serverTimestamp(),
             )
             val docRef = db.collection("admin_fcm_tokens").document(docId)

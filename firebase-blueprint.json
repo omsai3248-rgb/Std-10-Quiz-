@@ -319,29 +319,6 @@
         "deviceId", "token", "platform", "appVersion", "versionCode",
         "topicSubscribed", "enabled", "createdAt", "updatedAt"
       ]
-    },
-    "PushBroadcast": {
-      "title": "PushBroadcast",
-      "description": "Real-time FCM push notification broadcast authored by an Admin (announcements, exam notices, app updates) delivered to all opted-in user devices across foreground, background, and closed states.",
-      "type": "object",
-      "properties": {
-        "category": { "type": "string", "enum": ["admin_message", "exam_notice", "app_update"] },
-        "title": { "type": "string" },
-        "body": { "type": "string" },
-        "targetRoute": { "type": "string", "enum": ["home", "mock_test", "app_update", "subject_maths", "subject_science", "subject_social_science"] },
-        "referenceId": { "type": "string" },
-        "senderUid": { "type": "string" },
-        "senderName": { "type": "string" },
-        "pushDispatched": { "type": "boolean" },
-        "recipientCount": { "type": "integer" },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
-      },
-      "required": [
-        "category", "title", "body", "targetRoute", "referenceId",
-        "senderUid", "senderName", "pushDispatched", "recipientCount",
-        "createdAt", "updatedAt"
-      ]
     }
   },
   "firestore": {
@@ -399,11 +376,7 @@
     },
     "/device_fcm_tokens/{deviceId}": {
       "schema": { "$ref": "#/entities/DeviceFcmToken" },
-      "description": "Registered user device FCM tokens for reliable push notifications (permission-gated via enabled flag)."
-    },
-    "/push_broadcasts/{broadcastId}": {
-      "schema": { "$ref": "#/entities/PushBroadcast" },
-      "description": "Admin-authored real-time push broadcasts (messages, exam notices, app updates) triggering server-side FCM fan-out."
+      "description": "Registered user device FCM tokens for reliable app update notifications."
     }
   }
 }
