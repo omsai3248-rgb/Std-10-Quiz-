@@ -212,10 +212,13 @@ test('fetchLatestRelease parses GitHub Releases API and falls back to version.js
   }
 });
 
-test('AppUpdateComponents and App toast/notification render full-screen no-scroll update view and unclipped auto-height responsive messages', () => {
+test('AppUpdateComponents and App toast/notification render full-screen 100dvh x 100vw zero-scroll responsive update UI across Mobile Portrait, Landscape, Tablet, and Smart TV', () => {
   const source = fs.readFileSync(path.resolve('src/components/AppUpdateComponents.tsx'), 'utf8');
-  assert.equal(source.includes('min-h-[100dvh] w-full flex flex-col bg-[#FAF9F5]'), true);
-  assert.equal(source.includes('grid grid-cols-2 gap-2.5 sm:gap-4'), true);
+  assert.equal(source.includes('update-screen-root'), true);
+  assert.equal(source.includes('update-screen-shell'), true);
+  assert.equal(source.includes('data-testid="update_progress_panel"'), true);
+  assert.equal(source.includes('data-testid="update_progress_percent"'), true);
+  assert.equal(source.includes('grid grid-cols-2 gap-2.5 sm:gap-3.5 shrink-0'), true);
   assert.equal(source.includes('const [showHistory, setShowHistory] = useState(false);'), true);
   assert.equal(source.includes('w-full h-auto rounded-2xl bg-white dark:bg-[#0F172A]'), true);
   assert.equal(source.includes('whitespace-normal break-words'), true);
@@ -227,6 +230,12 @@ test('AppUpdateComponents and App toast/notification render full-screen no-scrol
   assert.equal(source.includes('max-h-36'), false);
   assert.equal(source.includes('max-h-28'), false);
   assert.equal(source.includes('line-clamp-2'), false);
+
+  const cssSource = fs.readFileSync(path.resolve('src/index.css'), 'utf8');
+  assert.equal(cssSource.includes('.update-screen-root'), true);
+  assert.equal(cssSource.includes('width: 100vw;'), true);
+  assert.equal(cssSource.includes('height: 100dvh;'), true);
+  assert.equal(cssSource.includes('@media (orientation: landscape)'), true);
 
   const appSource = fs.readFileSync(path.resolve('src/App.tsx'), 'utf8');
   assert.equal(appSource.includes('const isShowingFullScreenUpdate = Boolean(isUpdateModalOpen && availableUpdate);'), true);
