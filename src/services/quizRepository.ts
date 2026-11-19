@@ -31,6 +31,7 @@ import { auth, db, googleProvider, storage } from '../firebase';
 import {
   addNativeAdminInvite,
   deleteNativeAdminNotification,
+  deleteNativePushBroadcast,
   forceRefreshNativeAdminListeners,
   getActiveFirebaseSummary,
   getNativeActiveStudentSnapshot,
@@ -44,12 +45,14 @@ import {
   markNativeAdminNotificationRead,
   markNativeChatMessagesRead,
   notifyNativeAuthUser,
+  openNativeNotificationSettings,
   pauseNativeAdminListeners,
   publishNativeAppUpdate,
   removeNativeAdminInvite,
   requestNativeNotificationPermission,
   resumeNativeAdminListeners,
   sendNativeAdminChatMessage,
+  sendNativePushBroadcast,
   setNativeActiveStudentMobile,
   subscribeNativeAdminChatMessages,
   subscribeNativeAdminChats,
@@ -63,6 +66,7 @@ import {
   subscribeNativeAuthState,
   subscribeNativeMyAttempts,
   subscribeNativeMyPayments,
+  subscribeNativePushBroadcasts,
   subscribeNativeReleaseConfig,
   subscribeNativeStudentProfile,
   subscribeNativeUpdateNotifications,
@@ -71,6 +75,7 @@ import {
   updateNativeAdminNotificationPrefs,
   type AppAuthUser,
 } from './nativeFirebaseBridge';
+import { syncWebPushTokenRegistration } from './webPushService';
 import {
   classifyFirestoreError,
   enqueueSyncOperation,
@@ -113,8 +118,12 @@ import {
   type AppReleaseRecord,
   type ChatMessageStatus,
   type PaymentRequest,
+  type PushBroadcastCategory,
+  type PushBroadcastRecord,
+  type PushBroadcastTargetRoute,
   type PublishAppUpdateInput,
   type QuizAttempt,
+  type SendPushBroadcastInput,
   type StudentProfile,
   type SubjectId,
   type UpdateNotificationRecord,
@@ -3104,6 +3113,7 @@ export const COLLECTION_ADMINS = 'admins';
 export const COLLECTION_ADMIN_INVITES = 'admin_invites';
 export const COLLECTION_ADMIN_NOTIFICATIONS = 'admin_notifications';
 export const COLLECTION_ADMIN_CHATS = 'admin_chats';
+export const COLLECTION_PUSH_BROADCASTS = 'push_broadcasts';
 export const SUBCOLLECTION_CHAT_MESSAGES = 'messages';
 
 export function getAdminChatId(uidA: string, uidB: string): string {
@@ -3129,9 +3139,132 @@ export async function requestAppNotificationPermission(): Promise<'granted' | 'd
   }
   if (typeof Notification !== 'undefined') {
     const res = await Notification.requestPermission();
-    return res === 'granted' ? 'granted' : 'denied';
+    if (res === 'granted') {
+      void syncWebPushTokenRegistration(true);
+      return 'granted';
+    }
+    return 'denied';
   }
   return 'denied';
+}
+
+export function openAppNotificationSettings(): void {
+  if (hasNativeFirebaseBridge()) {
+    openNativeNotificationSettings();
+  }
+}
+
+export function observePushBroadcasts(
+  onData: (items: PushBroadcastRecord[]) => void
+): Unsubscribe {
+  if (hasNativeFirebaseBridge()) {
+    return subscribeNativePushBroadcasts(onData);
+  }
+  const q = query(
+    collection(db, COLLECTION_PUSH_BROADCASTS),
+    orderBy('createdAt', 'desc'),
+    limit(40)
+  );
+  return onSnapshot(
+    q,
+    (snap) => {
+      const list: PushBroadcastRecord[] = snap.docs.map((docSnap) => {
+        const d = docSnap.data();
+        const rawCategory = String(d.category ?? 'admin_message');
+        const category: PushBroadcastCategory =
+          rawCategory === 'exam_notice' || rawCategory === 'app_update'
+            ? rawCategory
+            : 'admin_message';
+        const rawRoute = String(d.targetRoute ?? 'home');
+        const allowedRoutes: PushBroadcastTargetRoute[] = [
+          'home',
+          'mock_test',
+          'app_update',
+          'subject_maths',
+          'subject_science',
+          'subject_social_science',
+        ];
+        const targetRoute: PushBroadcastTargetRoute = allowedRoutes.includes(
+          rawRoute as PushBroadcastTargetRoute
+        )
+          ? (rawRoute as PushBroadcastTargetRoute)
+          : 'home';
+        return {
+          id: docSnap.id,
+          category,
+          title: String(d.title ?? ''),
+          body: String(d.body ?? ''),
+          targetRoute,
+          referenceId: String(d.referenceId ?? ''),
+          senderUid: String(d.senderUid ?? ''),
+          senderName: String(d.senderName ?? 'Quick Quiz Admin'),
+          pushDispatched: Boolean(d.pushDispatched),
+          recipientCount: Number(d.recipientCount ?? 0),
+          createdAt: (d.createdAt as Timestamp | null) ?? null,
+          updatedAt: (d.updatedAt as Timestamp | null) ?? null,
+        };
+      });
+      onData(list);
+    },
+    () => {
+      onData([]);
+    }
+  );
+}
+
+export async function sendPushBroadcastNotification(
+  input: SendPushBroadcastInput
+): Promise<string> {
+  const title = input.title.trim().slice(0, 120);
+  const body = input.body.trim().slice(0, 600);
+  if (!title || !body) {
+    throw new Error('શીર્ષક અને સંદેશ બંને જરૂરી છે.');
+  }
+  const payload: SendPushBroadcastInput = {
+    category: input.category,
+    title,
+    body,
+    targetRoute: input.targetRoute,
+    referenceId: (input.referenceId ?? '').trim().slice(0, 128),
+  };
+  if (hasNativeFirebaseBridge()) {
+    return sendNativePushBroadcast(payload);
+  }
+  const user = auth.currentUser;
+  if (!user) {
+    throw new Error('Admin login required.');
+  }
+  const broadcastId = `bcast_${Date.now()}_${randomHex32().slice(0, 6)}`;
+  const senderName = (
+    user.displayName?.trim() ||
+    user.email?.split('@')[0] ||
+    'Quick Quiz Admin'
+  ).slice(0, 80);
+  await setDoc(doc(db, COLLECTION_PUSH_BROADCASTS, broadcastId), {
+    category: payload.category,
+    title: payload.title,
+    body: payload.body,
+    targetRoute: payload.targetRoute,
+    referenceId: payload.referenceId ?? '',
+    senderUid: user.uid,
+    senderName,
+    pushDispatched: false,
+    recipientCount: 0,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+  return broadcastId;
+}
+
+export async function deletePushBroadcastNotification(broadcastId: string): Promise<void> {
+  const cleanId = broadcastId.trim();
+  if (!cleanId) return;
+  if (hasNativeFirebaseBridge()) {
+    await deleteNativePushBroadcast(cleanId);
+    return;
+  }
+  requireUserId();
+  await deleteDoc(doc(db, COLLECTION_PUSH_BROADCASTS, cleanId));
 }
 
 export async function syncAdminProfileAndPushToken(): Promise<AdminUser | null> {

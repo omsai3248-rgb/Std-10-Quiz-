@@ -1,6 +1,7 @@
 package com.aistudio.std10quiz.kqxmtv
 
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.Network
@@ -8,6 +9,7 @@ import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.Uri
 import android.os.Build
+import android.provider.Settings
 import android.util.Log
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
@@ -1596,6 +1598,43 @@ class NativeFirebaseBridge(
                     emitToJs("window.__onNativeUpdateNotifications", arr.toString())
                 }
             publicListeners.add(updateNotifReg)
+
+            var pushBroadcastInitialLoaded = false
+            val pushBroadcastReg = localDb.collection("push_broadcasts")
+                .orderBy("createdAt", Query.Direction.DESCENDING)
+                .limit(40)
+                .addSnapshotListener { snap, error ->
+                    if (error != null) return@addSnapshotListener
+                    val arr = JSONArray()
+                    snap?.documents?.forEach { arr.put(serializePushBroadcast(it)) }
+                    emitToJs("window.__onNativePushBroadcasts", arr.toString())
+
+                    // Real-time foreground fallback: if a brand-new broadcast arrives while app is open
+                    // and FCM hasn't already displayed it, show the WhatsApp-style heads-up banner once
+                    // (strictly deduplicated via persistent SharedPreferences key "broadcast_<id>").
+                    if (pushBroadcastInitialLoaded && snap != null && AdminNotificationHelper.hasNotificationPermission(appContext)) {
+                        val nowMs = System.currentTimeMillis()
+                        snap.documentChanges.forEach { change ->
+                            if (change.type == com.google.firebase.firestore.DocumentChange.Type.ADDED) {
+                                val doc = change.document
+                                val createdMs = doc.getTimestamp("createdAt")?.toDate()?.time ?: nowMs
+                                if (nowMs - createdMs <= 5 * 60 * 1000L) {
+                                    AdminNotificationHelper.showPushBroadcastNotification(
+                                        context = appContext,
+                                        broadcastId = doc.id,
+                                        category = doc.getString("category").orEmpty().ifBlank { "admin_message" },
+                                        title = doc.getString("title").orEmpty(),
+                                        body = doc.getString("body").orEmpty(),
+                                        targetRoute = doc.getString("targetRoute").orEmpty().ifBlank { "home" },
+                                        referenceId = doc.getString("referenceId").orEmpty()
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    pushBroadcastInitialLoaded = true
+                }
+            publicListeners.add(pushBroadcastReg)
         }
     }
 
@@ -2366,6 +2405,7 @@ class NativeFirebaseBridge(
                         PackageInfoCompat.getLongVersionCode(actualPkgInfo).coerceAtLeast(1L)
                     } else 1L
 
+                    val permissionGranted = AdminNotificationHelper.hasNotificationPermission(appContext)
                     val docRef = localDb.collection("device_fcm_tokens").document(deviceId)
                     val existing = runCatching {
                         withTimeoutOrNull(2_500L) { docRef.get().awaitResult() }
@@ -2377,7 +2417,7 @@ class NativeFirebaseBridge(
                         "appVersion" to appVersion,
                         "versionCode" to versionCode,
                         "topicSubscribed" to false,
-                        "enabled" to true,
+                        "enabled" to permissionGranted,
                         "updatedAt" to FieldValue.serverTimestamp()
                     )
                     if (existing == null || !existing.exists()) {
@@ -2972,15 +3012,136 @@ class NativeFirebaseBridge(
     }
 
     fun onNotificationPermissionResult(granted: Boolean) {
-        val status = if (granted) "granted" else "denied"
+        val actualGranted = granted && AdminNotificationHelper.hasNotificationPermission(appContext)
+        val status = if (actualGranted) "granted" else "denied"
         pendingNotificationPermissionCallId?.let { callId ->
             pendingNotificationPermissionCallId = null
             resolveCallSuccess(callId, JSONObject.quote(status))
         }
-        if (granted) {
-            syncPublicDeviceFcmRegistration()
-        }
+        // Strictly permission-gated FCM sync: sets enabled=true ONLY when granted, false when denied
+        syncPublicDeviceFcmRegistration()
         emitToJs("window.__onNativeNotificationPermissionChanged", JSONObject.quote(status))
+    }
+
+    fun refreshNotificationPermissionState() {
+        val granted = AdminNotificationHelper.hasNotificationPermission(appContext)
+        val status = if (granted) "granted" else "denied"
+        syncPublicDeviceFcmRegistration()
+        emitToJs("window.__onNativeNotificationPermissionChanged", JSONObject.quote(status))
+    }
+
+    @JavascriptInterface
+    fun openNotificationSettings() {
+        activity.runOnUiThread {
+            val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+                    putExtra(Settings.EXTRA_APP_PACKAGE, appContext.packageName)
+                }
+            } else {
+                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                    data = Uri.parse("package:${appContext.packageName}")
+                }
+            }
+            runCatching { activity.startActivity(intent) }
+        }
+    }
+
+    @JavascriptInterface
+    fun sendPushBroadcast(callId: String, payloadJson: String) {
+        val localDb = db ?: run {
+            resolveCallError(callId, "Native Firebase is not initialized.")
+            return
+        }
+        val user = auth?.currentUser ?: run {
+            resolveCallError(callId, "Admin Google login required.")
+            return
+        }
+        activity.lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                if (!verifyAuthorizedAdminSuspended(user)) {
+                    resolveCallError(callId, "ONLY_ADMIN_GOOGLE_EMAIL")
+                    return@launch
+                }
+                val obj = JSONObject(payloadJson)
+                val rawCategory = obj.optString("category", "admin_message").trim()
+                val category = if (rawCategory in setOf("admin_message", "exam_notice", "app_update")) {
+                    rawCategory
+                } else {
+                    "admin_message"
+                }
+                val title = obj.optString("title", "").trim().take(120)
+                val body = obj.optString("body", "").trim().take(600)
+                if (title.isBlank() || body.isBlank()) {
+                    resolveCallError(callId, "Title and message are required.")
+                    return@launch
+                }
+                val rawRoute = obj.optString("targetRoute", "home").trim()
+                val allowedRoutes = setOf(
+                    "home",
+                    "mock_test",
+                    "app_update",
+                    "subject_maths",
+                    "subject_science",
+                    "subject_social_science"
+                )
+                val targetRoute = if (rawRoute in allowedRoutes) rawRoute else "home"
+                val referenceId = obj.optString("referenceId", "").trim().take(128)
+                val senderName = (user.displayName?.takeIf { it.isNotBlank() }
+                    ?: AdminNotificationHelper.getSavedAdminName(appContext).takeIf { it.isNotBlank() }
+                    ?: "Quick Quiz Admin").take(80)
+
+                val broadcastId = "bcast_${System.currentTimeMillis()}_${java.util.UUID.randomUUID().toString().replace("-", "").take(6)}"
+                val now = FieldValue.serverTimestamp()
+                val payload = hashMapOf<String, Any>(
+                    "category" to category,
+                    "title" to title,
+                    "body" to body,
+                    "targetRoute" to targetRoute,
+                    "referenceId" to referenceId,
+                    "senderUid" to user.uid,
+                    "senderName" to senderName,
+                    "pushDispatched" to false,
+                    "recipientCount" to 0,
+                    "createdAt" to now,
+                    "updatedAt" to now
+                )
+                localDb.collection("push_broadcasts").document(broadcastId).set(payload).awaitResult()
+                resolveCallSuccess(callId, JSONObject.quote(broadcastId))
+            } catch (e: Exception) {
+                handleFirestoreError(e, OperationType.CREATE, "push_broadcasts")
+                resolveCallError(callId, e.localizedMessage ?: "Failed to send push notification broadcast")
+            }
+        }
+    }
+
+    @JavascriptInterface
+    fun deletePushBroadcast(callId: String, broadcastId: String) {
+        val localDb = db ?: run {
+            resolveCallError(callId, "Native Firebase is not initialized.")
+            return
+        }
+        val user = auth?.currentUser ?: run {
+            resolveCallError(callId, "Admin Google login required.")
+            return
+        }
+        val cleanId = broadcastId.trim()
+        if (cleanId.isBlank()) {
+            resolveCallError(callId, "Invalid broadcast ID.")
+            return
+        }
+        activity.lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                if (!verifyAuthorizedAdminSuspended(user)) {
+                    resolveCallError(callId, "ONLY_ADMIN_GOOGLE_EMAIL")
+                    return@launch
+                }
+                localDb.collection("push_broadcasts").document(cleanId).delete().awaitResult()
+                resolveCallSuccess(callId, "true")
+            } catch (e: Exception) {
+                handleFirestoreError(e, OperationType.DELETE, "push_broadcasts/$cleanId")
+                resolveCallError(callId, e.localizedMessage ?: "Failed to delete push broadcast")
+            }
+        }
     }
 
     @JavascriptInterface
@@ -3107,7 +3268,7 @@ class NativeFirebaseBridge(
                         "deviceId" to deviceId,
                         "deviceName" to deviceName,
                         "appVersion" to appVersion,
-                        "enabled" to true,
+                        "enabled" to AdminNotificationHelper.hasNotificationPermission(appContext),
                         "updatedAt" to FieldValue.serverTimestamp()
                     )
                     if (existingToken == null || !existingToken.exists()) {
@@ -3875,6 +4036,21 @@ class NativeFirebaseBridge(
         put("isMandatory", doc.getBoolean("isMandatory") == true)
         put("apkDownloadUrl", doc.getString("apkDownloadUrl").orEmpty())
         put("targetRoute", doc.getString("targetRoute") ?: "app_update")
+        put("pushDispatched", doc.getBoolean("pushDispatched") == true)
+        put("recipientCount", (doc.getLong("recipientCount") ?: 0L).toInt())
+        put("createdAt", serializeTimestamp(doc.getTimestamp("createdAt")))
+        put("updatedAt", serializeTimestamp(doc.getTimestamp("updatedAt")))
+    }
+
+    private fun serializePushBroadcast(doc: DocumentSnapshot): JSONObject = JSONObject().apply {
+        put("id", doc.id)
+        put("category", doc.getString("category") ?: "admin_message")
+        put("title", doc.getString("title").orEmpty())
+        put("body", doc.getString("body").orEmpty())
+        put("targetRoute", doc.getString("targetRoute") ?: "home")
+        put("referenceId", doc.getString("referenceId").orEmpty())
+        put("senderUid", doc.getString("senderUid").orEmpty())
+        put("senderName", doc.getString("senderName").orEmpty())
         put("pushDispatched", doc.getBoolean("pushDispatched") == true)
         put("recipientCount", (doc.getLong("recipientCount") ?: 0L).toInt())
         put("createdAt", serializeTimestamp(doc.getTimestamp("createdAt")))

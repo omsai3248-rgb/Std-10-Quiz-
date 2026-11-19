@@ -52,6 +52,8 @@ import {
   type InstalledAppInfo,
   type PaymentRequest,
   type PublishAppUpdateInput,
+  type PushBroadcastRecord,
+  type SendPushBroadcastInput,
   type StudentProfile,
   type SubjectId,
   type UpdateNotificationRecord,
@@ -173,6 +175,10 @@ interface AdminPanelScreenProps {
   onMarkChatRead?: (chatId: string) => Promise<void> | void;
   onInviteAdmin?: (email: string, displayName: string) => Promise<void>;
   onRemoveAdminInvite?: (email: string) => Promise<void>;
+  pushBroadcasts?: PushBroadcastRecord[];
+  onOpenNotificationSettings?: () => void;
+  onSendPushBroadcast?: (input: SendPushBroadcastInput) => Promise<void>;
+  onDeletePushBroadcast?: (broadcastId: string) => Promise<void>;
 }
 
 type PendingDeleteTarget =
@@ -250,6 +256,10 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
   onMarkChatRead,
   onInviteAdmin,
   onRemoveAdminInvite,
+  pushBroadcasts = [],
+  onOpenNotificationSettings,
+  onSendPushBroadcast,
+  onDeletePushBroadcast,
 }) => {
   const { lang, toggleLang, t } = useTranslation();
   const { useNavigationRail, isLargeScreen, isTvOrSmartBoard } = useAdaptiveDisplay();
@@ -844,11 +854,15 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
         {selectedTab === 'notifications' && (
           <AdminNotificationsTab
             notifications={adminNotifications}
+            pushBroadcasts={pushBroadcasts}
             prefs={notificationPrefs}
             permissionStatus={notificationPermissionStatus}
             currentAdminUid={currentAdminUid}
             isBusy={isBusy}
             onRequestPermission={() => onRequestNotificationPermission?.()}
+            onOpenNotificationSettings={onOpenNotificationSettings}
+            onSendPushBroadcast={onSendPushBroadcast}
+            onDeletePushBroadcast={onDeletePushBroadcast}
             onUpdatePrefs={(next) => onUpdateNotificationPrefs?.(next)}
             onMarkRead={(id) => onMarkNotificationRead?.(id)}
             onMarkAllRead={() => onMarkAllNotificationsRead?.()}

@@ -1,5 +1,7 @@
 import React from 'react';
 import {
+  Bell,
+  BellOff,
   Languages,
   LogOut,
   Monitor,
@@ -25,6 +27,9 @@ interface TopNavHeaderProps {
   onStudentLogout: () => void;
   onToggleTheme: () => void;
   onOpenDisplaySettings?: () => void;
+  notificationPermissionStatus?: 'granted' | 'denied' | 'default';
+  pushBroadcastCount?: number;
+  onOpenNotifications?: () => void;
 }
 
 export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
@@ -39,6 +44,9 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
   onStudentLogout,
   onToggleTheme,
   onOpenDisplaySettings,
+  notificationPermissionStatus = 'default',
+  pushBroadcastCount = 0,
+  onOpenNotifications,
 }) => {
   const { lang, toggleLang, t } = useTranslation();
   const { isLargeScreen, isTvOrSmartBoard, isFullScreen, displayMode } = useAdaptiveDisplay();
@@ -92,6 +100,32 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
                   {adminBadgeCount}
                 </span>
               )}
+            </button>
+          )}
+
+          {onOpenNotifications && (
+            <button
+              type="button"
+              data-testid="open_student_notifications_btn"
+              onClick={onOpenNotifications}
+              aria-label="Quick Quiz Notifications"
+              title="Quick Quiz Notifications"
+              className={`${
+                isTvOrSmartBoard ? 'min-h-[48px] min-w-[48px]' : 'min-h-[42px] min-w-[42px]'
+              } relative rounded-xl border border-[#CBD5E1] dark:border-[#334155] bg-[#FAF9F5] dark:bg-[#0F172A] hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-center transition-colors cursor-pointer`}
+            >
+              {notificationPermissionStatus === 'granted' ? (
+                <Bell className="h-4 w-4 text-[#047857] dark:text-[#6EE7B7] shrink-0" />
+              ) : (
+                <BellOff className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0" />
+              )}
+              {notificationPermissionStatus !== 'granted' ? (
+                <span className="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-amber-500 ring-2 ring-white dark:ring-[#1E293B]" />
+              ) : pushBroadcastCount > 0 ? (
+                <span className="absolute -top-1 -right-1 rounded-full bg-[#DC2626] text-white text-[9px] font-extrabold px-1 min-w-[16px] h-4 flex items-center justify-center leading-none tabular-nums">
+                  {pushBroadcastCount > 9 ? '9+' : pushBroadcastCount}
+                </span>
+              ) : null}
             </button>
           )}
 

@@ -1,4 +1,5 @@
 const { initializeApp } = require("firebase-admin/app");
+const { getAuth } = require("firebase-admin/auth");
 const { getFirestore, FieldValue } = require("firebase-admin/firestore");
 const { getMessaging } = require("firebase-admin/messaging");
 const crypto = require("crypto");
@@ -435,7 +436,7 @@ exports.onAppReleaseCreated = onDocumentCreated(
     if (!release) return;
     const releaseId = event.params.releaseId;
 
-    const appName = "ધોરણ 10 ક્વિઝ";
+    const appName = "Quick Quiz";
     const versionName = safeString(release.versionName, 32) || "1.0.1";
     const versionCode = Number(release.versionCode || 1);
     const isMandatory = release.isMandatory === true;
@@ -449,6 +450,7 @@ exports.onAppReleaseCreated = onDocumentCreated(
     const apkSha256 = safeString(release.apkSha256, 64);
     const signingCertSha256 = safeString(release.signingCertSha256, 64);
     const packageName = safeString(release.packageName, 120) || "com.aistudio.std10quiz.kqxmtv";
+    const dedupeTag = `appupd_${releaseId}`;
 
     const dataPayload = {
       type: "app_update",
@@ -468,29 +470,47 @@ exports.onAppReleaseCreated = onDocumentCreated(
       timestampMs: String(Date.now()),
     };
 
-    let topicSent = false;
-    try {
-      await messaging.send({
-        topic: "app_updates",
-        data: dataPayload,
-        android: {
-          priority: "high",
-          ttl: 86400 * 7 * 1000,
-        },
-        webpush: {
-          headers: { Urgency: "high" },
-          notification: {
-            title: `${appName} • ${updateTitle}`,
-            body,
-          },
-        },
-      });
-      topicSent = true;
-    } catch (err) {
-      logger.warn("Topic app_updates push failed", err);
-    }
+    const androidPayload = {
+      priority: "high",
+      ttl: 86400 * 7 * 1000,
+      collapseKey: dedupeTag,
+      notification: {
+        title: `${appName} • ${updateTitle}`,
+        body,
+        channelId: "app_updates_high",
+        sound: "default",
+        defaultSound: true,
+        defaultVibrateTimings: true,
+        notificationPriority: "PRIORITY_MAX",
+        visibility: "PUBLIC",
+        tag: dedupeTag,
+        clickAction: "OPEN_QUICK_QUIZ_NOTIFICATION",
+      },
+    };
 
-    // Also dispatch directly to device tokens not subscribed to topic (or web tokens)
+    const webpushPayload = {
+      headers: { Urgency: "high" },
+      notification: {
+        title: `${appName} • ${updateTitle}`,
+        body,
+        icon: "/images/ic_app_logo_192.png",
+        badge: "/images/ic_app_logo_192.png",
+        tag: dedupeTag,
+        renotify: false,
+        vibrate: [220, 110, 220],
+        data: {
+          type: "app_update",
+          targetRoute: "app_update",
+          releaseId,
+          url: `/?pushRoute=app_update&releaseId=${encodeURIComponent(releaseId)}`,
+        },
+      },
+      fcmOptions: {
+        link: `/?pushRoute=app_update&releaseId=${encodeURIComponent(releaseId)}`,
+      },
+    };
+
+    // Dispatch directly to all opted-in (permission-granted) device tokens in chunks of 450
     let tokenSuccessCount = 0;
     try {
       const deviceTokensSnap = await db
@@ -498,40 +518,32 @@ exports.onAppReleaseCreated = onDocumentCreated(
         .where("enabled", "==", true)
         .get();
 
-      const unsubscribedDocs = [];
+      const targetDocs = [];
       const tokens = [];
+      const seenTokens = new Set();
       deviceTokensSnap.forEach((docSnap) => {
         const d = docSnap.data();
-        if (!d || !d.token) return;
-        if (!topicSent || d.topicSubscribed !== true || d.platform === "web") {
-          unsubscribedDocs.push(docSnap);
-          tokens.push(d.token);
-        }
+        if (!d || !d.token || seenTokens.has(d.token)) return;
+        seenTokens.add(d.token);
+        targetDocs.push(docSnap);
+        tokens.push(d.token);
       });
 
       for (let i = 0; i < tokens.length; i += 450) {
         const chunkTokens = tokens.slice(i, i + 450);
-        const chunkDocs = unsubscribedDocs.slice(i, i + 450);
+        const chunkDocs = targetDocs.slice(i, i + 450);
         const resp = await messaging.sendEachForMulticast({
           tokens: chunkTokens,
+          notification: {
+            title: `${appName} • ${updateTitle}`,
+            body,
+          },
           data: dataPayload,
-          android: {
-            priority: "high",
-            ttl: 86400 * 7 * 1000,
-          },
-          webpush: {
-            headers: { Urgency: "high" },
-            notification: {
-              title: `${appName} • ${updateTitle}`,
-              body,
-            },
-          },
+          android: androidPayload,
+          webpush: webpushPayload,
         });
         tokenSuccessCount += resp.successCount;
         await pruneFailedTokens(chunkDocs, resp.responses);
-      }
-      if (topicSent) {
-        tokenSuccessCount = Math.max(tokenSuccessCount, deviceTokensSnap.size);
       }
     } catch (err) {
       logger.warn("Direct device token fan-out failed", err);
@@ -675,4 +687,227 @@ exports.onGitHubReleasePush = onRequest(
   }
 );
 
+// 11. Real-Time Push Broadcast Dispatcher (Admin Messages, Exam Notices, App Update Alerts)
+// Sends WhatsApp-style high-priority FCM notifications to ALL opted-in user devices
+// across Foreground, Background, and Completely Closed (Terminated) states.
+exports.onPushBroadcastCreated = onDocumentCreated(
+  {
+    region: REGION,
+    database: FIRESTORE_DATABASE_ID,
+    document: "push_broadcasts/{broadcastId}",
+  },
+  async (event) => {
+    const snap = event.data;
+    const data = snap?.data();
+    if (!snap || !data || data.pushDispatched === true) return;
 
+    const broadcastId = event.params.broadcastId;
+    const appName = "Quick Quiz";
+    const category = safeString(data.category, 40) || "admin_message";
+    const title = safeString(data.title, 120) || appName;
+    const body = safeString(data.body, 600);
+    const targetRoute = safeString(data.targetRoute, 60) || (category === "app_update" ? "app_update" : "home");
+    const referenceId = safeString(data.referenceId, 128) || broadcastId;
+    if (!body) return;
+
+    const dedupeTag = `broadcast_${broadcastId}`;
+    const channelId = category === "app_update" ? "app_updates_high" : "quick_quiz_push_high";
+    const categoryPrefix =
+      category === "exam_notice"
+        ? "પરીક્ષા સૂચના"
+        : category === "app_update"
+          ? "નવું અપડેટ"
+          : appName;
+    const displayTitle = title.includes(appName) ? title : `${categoryPrefix} • ${title}`;
+    const deepLinkUrl = `/?pushRoute=${encodeURIComponent(targetRoute)}&broadcastId=${encodeURIComponent(broadcastId)}`;
+
+    const deviceTokensSnap = await db
+      .collection("device_fcm_tokens")
+      .where("enabled", "==", true)
+      .get();
+
+    const targetDocs = [];
+    const tokens = [];
+    const seenTokens = new Set();
+    deviceTokensSnap.forEach((docSnap) => {
+      const d = docSnap.data();
+      if (!d || !d.token || seenTokens.has(d.token)) return;
+      seenTokens.add(d.token);
+      targetDocs.push(docSnap);
+      tokens.push(d.token);
+    });
+
+    let successCount = 0;
+    for (let i = 0; i < tokens.length; i += 450) {
+      const chunkTokens = tokens.slice(i, i + 450);
+      const chunkDocs = targetDocs.slice(i, i + 450);
+      const resp = await messaging.sendEachForMulticast({
+        tokens: chunkTokens,
+        notification: {
+          title: displayTitle,
+          body,
+        },
+        data: {
+          type: "push_broadcast",
+          broadcastId,
+          category,
+          title,
+          body,
+          targetRoute,
+          referenceId,
+          appName,
+          timestampMs: String(Date.now()),
+        },
+        android: {
+          priority: "high",
+          ttl: 86400 * 3 * 1000,
+          collapseKey: dedupeTag,
+          notification: {
+            title: displayTitle,
+            body,
+            channelId,
+            sound: "default",
+            defaultSound: true,
+            defaultVibrateTimings: true,
+            notificationPriority: "PRIORITY_MAX",
+            visibility: "PUBLIC",
+            tag: dedupeTag,
+            clickAction: "OPEN_QUICK_QUIZ_NOTIFICATION",
+          },
+        },
+        webpush: {
+          headers: {
+            Urgency: "high",
+          },
+          notification: {
+            title: displayTitle,
+            body,
+            icon: "/images/ic_app_logo_192.png",
+            badge: "/images/ic_app_logo_192.png",
+            tag: dedupeTag,
+            renotify: false,
+            vibrate: [220, 110, 220],
+            data: {
+              type: "push_broadcast",
+              broadcastId,
+              category,
+              targetRoute,
+              referenceId,
+              url: deepLinkUrl,
+            },
+          },
+          fcmOptions: {
+            link: deepLinkUrl,
+          },
+        },
+      });
+      successCount += resp.successCount;
+      await pruneFailedTokens(chunkDocs, resp.responses);
+    }
+
+    logger.info("Dispatched public push broadcast", {
+      broadcastId,
+      category,
+      targetRoute,
+      totalOptedInTokens: tokens.length,
+      successCount,
+    });
+
+    await snap.ref.update({
+      pushDispatched: true,
+      recipientCount: successCount,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+  }
+);
+
+// 12. Authenticated Admin HTTPS Endpoint to trigger a real-time push broadcast directly
+exports.sendAdminPushNotification = onRequest(
+  {
+    region: REGION,
+    cors: true,
+  },
+  async (req, res) => {
+    if (req.method !== "POST") {
+      res.status(405).json({ error: "Method Not Allowed" });
+      return;
+    }
+
+    const authHeader = String(req.headers.authorization || "");
+    const idToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+    if (!idToken) {
+      res.status(401).json({ error: "Missing Firebase ID token" });
+      return;
+    }
+
+    let decoded;
+    try {
+      decoded = await getAuth().verifyIdToken(idToken);
+    } catch {
+      res.status(401).json({ error: "Invalid Firebase ID token" });
+      return;
+    }
+
+    const email = String(decoded.email || "").toLowerCase();
+    const isSuper =
+      decoded.phone_number === "+919099592283" ||
+      email === "admin9099592283@std10quiz.app" ||
+      (email === "omsai3248@gmail.com" && decoded.email_verified === true);
+    let isAuthorizedAdmin = isSuper;
+    if (!isAuthorizedAdmin) {
+      const [adminDoc, inviteDoc] = await Promise.all([
+        db.collection("admins").doc(decoded.uid).get(),
+        email && decoded.email_verified === true
+          ? db.collection("admin_invites").doc(email).get()
+          : Promise.resolve({ exists: false }),
+      ]);
+      isAuthorizedAdmin = adminDoc.exists || inviteDoc.exists;
+    }
+
+    if (!isAuthorizedAdmin) {
+      res.status(403).json({ error: "Admin authorization required" });
+      return;
+    }
+
+    const payload = req.body && typeof req.body === "object" ? req.body : {};
+    const rawCategory = safeString(payload.category, 40);
+    const category = ["admin_message", "exam_notice", "app_update"].includes(rawCategory)
+      ? rawCategory
+      : "admin_message";
+    const title = safeString(payload.title, 120);
+    const body = safeString(payload.body, 600);
+    if (!title || !body) {
+      res.status(400).json({ error: "title and body are required" });
+      return;
+    }
+    const rawRoute = safeString(payload.targetRoute, 60);
+    const allowedRoutes = [
+      "home",
+      "mock_test",
+      "app_update",
+      "subject_maths",
+      "subject_science",
+      "subject_social_science",
+    ];
+    const targetRoute = allowedRoutes.includes(rawRoute) ? rawRoute : "home";
+    const referenceId = safeString(payload.referenceId, 128);
+    const broadcastId = `bcast_${Date.now()}_${crypto.randomBytes(3).toString("hex")}`;
+    const now = FieldValue.serverTimestamp();
+
+    await db.collection("push_broadcasts").doc(broadcastId).set({
+      category,
+      title,
+      body,
+      targetRoute,
+      referenceId,
+      senderUid: decoded.uid,
+      senderName: safeString(decoded.name || email.split("@")[0] || "Quick Quiz Admin", 80),
+      pushDispatched: false,
+      recipientCount: 0,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    res.status(200).json({ ok: true, broadcastId });
+  }
+);

@@ -149,6 +149,7 @@ class MainActivity : ComponentActivity() {
         val settings = AdaptiveDisplayManager.loadSettings(this)
         val telemetry = AdaptiveDisplayManager.collectTelemetry(this, latestLayoutInfoRef, settings)
         AdaptiveDisplayManager.applyActivityDisplaySettings(this, settings, telemetry)
+        activeBridgeRef?.refreshNotificationPermissionState()
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {

@@ -1,5 +1,5 @@
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, BellRing, X } from 'lucide-react';
+import { AlertTriangle, Bell, BellOff, BellRing, Settings, X } from 'lucide-react';
 import {
   getCachedChapter,
   getCachedSubject,
@@ -9,6 +9,7 @@ import { buildBoardExamMockTestChapter } from './data/curriculum/mockTestBuilder
 import { TopNavHeader, type PublicTabId } from './components/TopNavHeader';
 import { UpdateAvailableBanner, UpdateAvailableModal } from './components/AppUpdateComponents';
 import { DisplaySettingsModal } from './components/DisplaySettingsModal';
+import { PushNotificationsModal } from './components/PushNotificationsModal';
 import { AdaptiveDisplayProvider, useAdaptiveDisplay } from './context/AdaptiveDisplayContext';
 import { useTranslation } from './i18n/translations';
 import { StudentMobileLoginScreen } from './screens/StudentMobileLoginScreen';
@@ -30,6 +31,7 @@ import {
   deleteAdminNotificationItem,
   deleteAppReleaseRecord,
   deletePaymentRequestAdmin,
+  deletePushBroadcastNotification,
   deleteStudentAdmin,
   flushPendingSyncOperations,
   forceRefreshNativeAdminListeners,
@@ -64,9 +66,11 @@ import {
   observeMyPaymentRequests,
   observeMyQuizAttempts,
   observePaymentRequestsByIds,
+  observePushBroadcasts,
   observeReleaseConfig,
   observeStudentProfile,
   observeUpdateNotifications,
+  openAppNotificationSettings,
   pauseNativeAdminListeners,
   publishFirebaseAppUpdate,
   recordQuizAttempt,
@@ -78,6 +82,7 @@ import {
   saveMyPaymentRequestId,
   saveReleaseConfig,
   sendAdminChatMessage,
+  sendPushBroadcastNotification,
   setNativeActiveStudentMobile,
   signOutAdminSession,
   submitPaymentRequest,
@@ -115,6 +120,10 @@ import {
   subscribeWebSwUpdates,
 } from './services/webSwUpdateService';
 import {
+  consumeWebUrlPushDeepLink,
+  syncWebPushTokenRegistration,
+} from './services/webPushService';
+import {
   ALL_SUBJECT_IDS,
   getSubjectDisplayName,
   resolvePaymentSubjectId,
@@ -133,9 +142,12 @@ import {
   type InstalledAppInfo,
   type PaymentRequest,
   type PublishAppUpdateInput,
+  type PushBroadcastRecord,
+  type PushBroadcastTargetRoute,
   type QuizAttempt,
   type QuizChapter,
   type QuizSubject,
+  type SendPushBroadcastInput,
   type StudentProfile,
   type SubjectId,
   type UpdateNotificationRecord,
@@ -381,6 +393,9 @@ const AppContent: React.FC = () => {
   const [notificationPermissionStatus, setNotificationPermissionStatus] = useState<
     'granted' | 'denied' | 'default'
   >(() => getNotificationPermissionState());
+  const [pushBroadcasts, setPushBroadcasts] = useState<PushBroadcastRecord[]>([]);
+  const [showNotificationsModal, setShowNotificationsModal] = useState(false);
+  const [dismissedNotifPrompt, setDismissedNotifPrompt] = useState(false);
   const [bannerTargetAction, setBannerTargetAction] = useState<{
     tab: AdminTabId;
     chatId?: string;
@@ -395,6 +410,7 @@ const AppContent: React.FC = () => {
   const knownChatSigRef = useRef<Map<string, string> | null>(null);
   const hasAutoRequestedPushRef = useRef(false);
   const pendingDeepLinkRef = useRef<AdminDeepLinkPayload | null>(null);
+  const handlePublicPushDeepLinkRef = useRef<(payload: AdminDeepLinkPayload) => void>(() => {});
   const isSoundEnabledRef = useRef(isSoundEnabled);
   const langRef = useRef(lang);
   const currentNotificationPrefsRef = useRef<AdminNotificationPrefs | null>(null);
@@ -590,14 +606,24 @@ const AppContent: React.FC = () => {
     [authUser?.uid]
   );
 
-  // Observe public App Release Config & Update Notification History for ALL users
+  // Observe public App Release Config, Update History & Push Broadcasts for ALL users
   useEffect(() => {
     const unsubConfig = observeReleaseConfig(setReleaseConfig);
     const unsubNotifs = observeUpdateNotifications(setUpdateNotifications);
+    const unsubBroadcasts = observePushBroadcasts(setPushBroadcasts);
     return () => {
       unsubConfig();
       unsubNotifs();
+      unsubBroadcasts();
     };
+  }, []);
+
+  // On Web (browser/PWA), if Notification permission was already granted, ensure FCM token is synced & active
+  useEffect(() => {
+    if (hasNativeFirebaseBridge()) return;
+    if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+      void syncWebPushTokenRegistration(false).catch(() => {});
+    }
   }, []);
 
   // Request Android 13+ notification permission cleanly on logged-in student devices too
@@ -668,15 +694,19 @@ const AppContent: React.FC = () => {
     [currentVersionCode, currentVersionName, t.appUpdateAvailableTitle]
   );
 
-  // Sync Admin Profile + FCM Token, Notification Center, Multi-Admin Directory & 1-to-1 Chat Listeners
+  // Sync Native Push Permission + Deep-Link Routing (App Update, Public Push Broadcasts, Admin Alerts)
   useEffect(() => {
-    if (!hasNativeFirebaseBridge()) return undefined;
-    const unsubPerm = subscribeNativeNotificationPermission((status) => {
-      setNotificationPermissionStatus(status);
-    });
-    const unsubDeepLink = subscribeNativeAdminDeepLink((payload) => {
-      if (payload.targetRoute === 'app_update') {
-        handleIncomingAppUpdateDeepLink(payload);
+    const isPublicPushRoute = (r: AdminDeepLinkPayload['targetRoute']): boolean =>
+      r === 'app_update' ||
+      r === 'home' ||
+      r === 'mock_test' ||
+      r === 'subject_maths' ||
+      r === 'subject_science' ||
+      r === 'subject_social_science';
+
+    const routeIncomingDeepLink = (payload: AdminDeepLinkPayload) => {
+      if (isPublicPushRoute(payload.targetRoute)) {
+        handlePublicPushDeepLinkRef.current(payload);
         return;
       }
       if (isFirebaseAdmin) {
@@ -684,20 +714,70 @@ const AppContent: React.FC = () => {
       } else {
         pendingDeepLinkRef.current = payload;
       }
+    };
+
+    // Web URL deep-link (cold start from Web Push click)
+    const webInitialDeepLink = consumeWebUrlPushDeepLink();
+    if (webInitialDeepLink) {
+      routeIncomingDeepLink(webInitialDeepLink);
+    }
+
+    const onWebPushDeepLink = (event: Event) => {
+      const detail = (event as CustomEvent<AdminDeepLinkPayload>).detail;
+      if (detail) {
+        routeIncomingDeepLink(detail);
+      }
+    };
+    window.addEventListener('quick-quiz:push-deeplink', onWebPushDeepLink);
+
+    const onServiceWorkerMessage = (event: MessageEvent) => {
+      const msg = event.data as { type?: string; payload?: Record<string, unknown> } | null;
+      if (msg?.type !== 'QUICK_QUIZ_NOTIFICATION_CLICK' || !msg.payload) return;
+      const rawRoute = String(msg.payload.targetRoute ?? 'home').trim();
+      const targetRoute = rawRoute as AdminDeepLinkPayload['targetRoute'];
+      routeIncomingDeepLink({
+        targetRoute,
+        broadcastId: String(msg.payload.broadcastId ?? ''),
+        broadcastCategory: String(msg.payload.category ?? ''),
+        broadcastTitle: String(msg.payload.title ?? ''),
+        broadcastBody: String(msg.payload.body ?? ''),
+        versionName: String(msg.payload.versionName ?? ''),
+        apkDownloadUrl: String(msg.payload.apkDownloadUrl ?? ''),
+        releaseNotes: String(msg.payload.releaseNotes ?? ''),
+        updateTitle: String(msg.payload.title ?? ''),
+        isMandatory: msg.payload.isMandatory === true || msg.payload.isMandatory === 'true',
+      });
+    };
+    if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+      navigator.serviceWorker.addEventListener('message', onServiceWorkerMessage);
+    }
+
+    if (!hasNativeFirebaseBridge()) {
+      return () => {
+        window.removeEventListener('quick-quiz:push-deeplink', onWebPushDeepLink);
+        if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+          navigator.serviceWorker.removeEventListener('message', onServiceWorkerMessage);
+        }
+      };
+    }
+
+    const unsubPerm = subscribeNativeNotificationPermission((status) => {
+      setNotificationPermissionStatus(status);
     });
+    const unsubDeepLink = subscribeNativeAdminDeepLink(routeIncomingDeepLink);
     const initialDeepLink = consumeNativePendingDeepLink();
     if (initialDeepLink) {
-      if (initialDeepLink.targetRoute === 'app_update') {
-        handleIncomingAppUpdateDeepLink(initialDeepLink);
-      } else {
-        pendingDeepLinkRef.current = initialDeepLink;
-      }
+      routeIncomingDeepLink(initialDeepLink);
     }
     return () => {
+      window.removeEventListener('quick-quiz:push-deeplink', onWebPushDeepLink);
+      if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+        navigator.serviceWorker.removeEventListener('message', onServiceWorkerMessage);
+      }
       unsubPerm();
       unsubDeepLink();
     };
-  }, [applyAdminDeepLink, handleIncomingAppUpdateDeepLink, isFirebaseAdmin]);
+  }, [applyAdminDeepLink, isFirebaseAdmin]);
 
   useEffect(() => {
     if (!isFirebaseAdmin || !authUser?.uid) return undefined;
@@ -1585,6 +1665,148 @@ const AppContent: React.FC = () => {
     setRoute({ name: 'quiz', subjectId: subject.id, chapterId: mockCh.id });
   }, []);
 
+  const handlePublicPushDeepLink = useCallback(
+    (payload: AdminDeepLinkPayload) => {
+      const target = payload.targetRoute;
+      if (target === 'app_update') {
+        handleIncomingAppUpdateDeepLink(payload);
+        if (availableUpdate?.isUpdateAvailable) {
+          setIsUpdateModalOpen(true);
+        } else {
+          void checkForUpdates(true);
+        }
+        return;
+      }
+
+      if (target === 'subject_maths' || target === 'subject_science' || target === 'subject_social_science') {
+        const subjectId: SubjectId =
+          target === 'subject_maths'
+            ? 'maths'
+            : target === 'subject_science'
+              ? 'science'
+              : 'social_science';
+        if (isStudentLoggedIn) {
+          setRoute({ name: 'subject', subjectId });
+        } else {
+          setRoute({ name: 'public', tab: 'quiz' });
+        }
+        if (payload.broadcastTitle || payload.broadcastBody) {
+          setBanner({
+            isError: false,
+            message: [payload.broadcastTitle, payload.broadcastBody].filter(Boolean).join('\n'),
+          });
+        }
+        return;
+      }
+
+      if (target === 'mock_test') {
+        if (isStudentLoggedIn) {
+          const cached = loadedSubjects.maths ?? getCachedSubject('maths');
+          if (cached) {
+            startSubjectMockTest(cached);
+          } else {
+            setRoute({ name: 'subject', subjectId: 'maths' });
+            void loadSubjectWithChapters('maths')
+              .then((sub) => {
+                if (sub) {
+                  setLoadedSubjects((prev) => ({ ...prev, maths: sub }));
+                  startSubjectMockTest(sub);
+                }
+              })
+              .catch(() => {});
+          }
+        } else {
+          setRoute({ name: 'public', tab: 'quiz' });
+        }
+        if (payload.broadcastTitle || payload.broadcastBody) {
+          setBanner({
+            isError: false,
+            message: [payload.broadcastTitle, payload.broadcastBody].filter(Boolean).join('\n'),
+          });
+        }
+        return;
+      }
+
+      // Default 'home' push broadcast click -> open Home + Notifications drawer / announcement
+      setRoute({ name: 'public', tab: 'quiz' });
+      if (payload.broadcastTitle || payload.broadcastBody) {
+        setShowNotificationsModal(true);
+        setBanner({
+          isError: false,
+          message: [payload.broadcastTitle, payload.broadcastBody].filter(Boolean).join('\n'),
+        });
+      }
+    },
+    [
+      availableUpdate?.isUpdateAvailable,
+      checkForUpdates,
+      handleIncomingAppUpdateDeepLink,
+      isStudentLoggedIn,
+      loadedSubjects.maths,
+      startSubjectMockTest,
+    ]
+  );
+
+  useEffect(() => {
+    handlePublicPushDeepLinkRef.current = handlePublicPushDeepLink;
+  }, [handlePublicPushDeepLink]);
+
+  const handleSelectPushBroadcastRoute = useCallback(
+    (targetRoute: PushBroadcastTargetRoute, broadcast?: PushBroadcastRecord) => {
+      setShowNotificationsModal(false);
+      handlePublicPushDeepLink({
+        targetRoute,
+        broadcastId: broadcast?.id,
+        broadcastCategory: broadcast?.category,
+        broadcastTitle: broadcast?.title,
+        broadcastBody: broadcast?.body,
+      });
+    },
+    [handlePublicPushDeepLink]
+  );
+
+  const handleRequestNotificationsWithFeedback = useCallback(async () => {
+    const status = await requestAppNotificationPermission();
+    setNotificationPermissionStatus(status);
+    if (status === 'granted') {
+      setDismissedNotifPrompt(true);
+      setBanner({
+        isError: false,
+        message: 'Real-Time Push Notifications ચાલુ થઈ ગઈ છે! એપ બંધ હશે ત્યારે પણ સૂચના મળશે.',
+      });
+    } else if (status === 'denied') {
+      setBanner({
+        isError: true,
+        message: hasNativeFirebaseBridge()
+          ? 'Notification Permission બંધ છે. કૃપા કરીને Settings માંથી Notifications ચાલુ કરો.'
+          : 'બ્રાઉઝરમાં Notification Permission બંધ છે. બ્રાઉઝર Settings માંથી Allow કરો.',
+      });
+    }
+  }, []);
+
+  const handleSendPushBroadcast = useCallback(async (input: SendPushBroadcastInput) => {
+    await sendPushBroadcastNotification(input);
+    setBanner({
+      isError: false,
+      message: `Push Notification સફળતાપૂર્વક મોકલાઈ ગઈ છે: "${input.title}"`,
+    });
+  }, []);
+
+  const handleDeletePushBroadcast = useCallback(
+    async (broadcastId: string) => {
+      try {
+        await deletePushBroadcastNotification(broadcastId);
+        setBanner({
+          isError: false,
+          message: 'Push Notification ઇતિહાસમાંથી દૂર કરી દેવાઈ છે.',
+        });
+      } catch (err) {
+        setBanner({ isError: true, message: formatAppError(err, 'Delete failed') });
+      }
+    },
+    [formatAppError]
+  );
+
   const handleSubmitPayment = async (params: {
     studentName: string;
     mobileNumber: string;
@@ -2116,6 +2338,10 @@ const AppContent: React.FC = () => {
               setBanner({ isError: true, message: formatAppError(err, 'Remove failed') });
             });
           }}
+          pushBroadcasts={pushBroadcasts}
+          onOpenNotificationSettings={openAppNotificationSettings}
+          onSendPushBroadcast={handleSendPushBroadcast}
+          onDeletePushBroadcast={handleDeletePushBroadcast}
         />
       </Suspense>
     );
@@ -2241,9 +2467,62 @@ const AppContent: React.FC = () => {
           onStudentLogout={handleStudentLogout}
           onToggleTheme={() => setIsDarkTheme((prev) => !prev)}
           onOpenDisplaySettings={() => setShowDisplaySettings(true)}
+          notificationPermissionStatus={notificationPermissionStatus}
+          pushBroadcastCount={pushBroadcasts.length}
+          onOpenNotifications={() => setShowNotificationsModal(true)}
         />
 
         <main className="flex-1 pb-14">
+          {isStudentLoggedIn &&
+            notificationPermissionStatus !== 'granted' &&
+            !dismissedNotifPrompt && (
+              <div
+                data-testid="student_push_permission_strip"
+                className="max-w-4xl mx-auto px-3 sm:px-4 pt-3"
+              >
+                <div className="rounded-2xl border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2.5 shadow-sm">
+                  <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                    <div className="h-8 w-8 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0">
+                      <BellOff className="h-4 w-4" />
+                    </div>
+                    <p className="text-xs sm:text-sm font-bold text-amber-950 dark:text-amber-100 leading-snug">
+                      પરીક્ષા સૂચના, Admin સંદેશા અને App Update મેળવવા Notifications ચાલુ કરો.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      data-testid="student_strip_enable_notif_btn"
+                      onClick={() => void handleRequestNotificationsWithFeedback()}
+                      className="min-h-[40px] px-3 rounded-xl bg-[#047857] hover:bg-[#065F46] text-white text-xs font-extrabold inline-flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Bell className="h-3.5 w-3.5" />
+                      <span>ચાલુ કરો</span>
+                    </button>
+                    {hasNativeFirebaseBridge() && notificationPermissionStatus === 'denied' && (
+                      <button
+                        type="button"
+                        data-testid="student_strip_open_settings_btn"
+                        onClick={openAppNotificationSettings}
+                        className="min-h-[40px] px-2.5 rounded-xl border border-amber-400 dark:border-amber-700 bg-white dark:bg-slate-900 text-xs font-extrabold inline-flex items-center gap-1 cursor-pointer"
+                      >
+                        <Settings className="h-3.5 w-3.5" />
+                        <span>Settings</span>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      aria-label={t.closeBtn}
+                      onClick={() => setDismissedNotifPrompt(true)}
+                      className="min-h-[40px] min-w-[40px] rounded-xl hover:bg-amber-200/60 dark:hover:bg-amber-900/50 flex items-center justify-center cursor-pointer"
+                    >
+                      <X className="h-4 w-4 text-amber-900 dark:text-amber-200" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
           {!isStudentLoggedIn ? (
             <StudentMobileLoginScreen
               initialName={savedUserMeta.name}
@@ -2468,6 +2747,17 @@ const AppContent: React.FC = () => {
         isOpen={showDisplaySettings}
         onClose={() => setShowDisplaySettings(false)}
       />
+
+      {showNotificationsModal && (
+        <PushNotificationsModal
+          permissionStatus={notificationPermissionStatus}
+          broadcasts={pushBroadcasts}
+          onRequestPermission={handleRequestNotificationsWithFeedback}
+          onOpenSettings={openAppNotificationSettings}
+          onSelectTargetRoute={handleSelectPushBroadcastRoute}
+          onClose={() => setShowNotificationsModal(false)}
+        />
+      )}
     </>
   );
 };
