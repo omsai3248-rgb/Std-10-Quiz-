@@ -259,20 +259,22 @@ object AppUpdateManager {
         var currentUrl = cleanUrl
         var connection: HttpURLConnection? = null
         var redirects = 0
-        while (redirects < 5) {
+        while (redirects < 8) {
             val conn = (URL(currentUrl).openConnection() as HttpURLConnection).apply {
                 instanceFollowRedirects = false
                 connectTimeout = 20_000
                 readTimeout = 30_000
                 requestMethod = "GET"
+                setRequestProperty("User-Agent", "QuickQuiz-Android/${Build.VERSION.RELEASE}")
+                setRequestProperty("Accept", "application/octet-stream, */*")
             }
             conn.connect()
             val code = conn.responseCode
-            if (code in setOf(HttpURLConnection.HTTP_MOVED_PERM, HttpURLConnection.HTTP_MOVED_TEMP, 307, 308)) {
+            if (code in setOf(HttpURLConnection.HTTP_MOVED_PERM, HttpURLConnection.HTTP_MOVED_TEMP, 303, 307, 308)) {
                 val nextLoc = conn.getHeaderField("Location").orEmpty()
                 conn.disconnect()
                 if (nextLoc.isBlank()) throw IllegalStateException("Redirect location missing.")
-                currentUrl = nextLoc
+                currentUrl = URL(URL(currentUrl), nextLoc).toString()
                 redirects++
                 continue
             }

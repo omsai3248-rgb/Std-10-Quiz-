@@ -2286,9 +2286,29 @@ const AppContent: React.FC = () => {
     );
   }
 
+  const isShowingFullScreenUpdate = Boolean(isUpdateModalOpen && availableUpdate);
+
   return (
     <>
-      {bodyNode}
+      {isShowingFullScreenUpdate && availableUpdate ? (
+        <UpdateAvailableModal
+          release={availableUpdate}
+          currentVersionName={currentVersionName}
+          currentVersionCode={currentVersionCode}
+          updateHistory={updateNotifications}
+          onNotify={(msg, isErr) => setBanner({ isError: Boolean(isErr), message: msg })}
+          onDismiss={() => {
+            if (!availableUpdate.isMandatory) {
+              setDismissedOptionalVersionKey(
+                `${availableUpdate.versionName}_${availableUpdate.versionCode ?? 0}`
+              );
+              setIsUpdateModalOpen(false);
+            }
+          }}
+        />
+      ) : (
+        bodyNode
+      )}
 
       {banner && isAdmin && (
         <div
@@ -2300,7 +2320,7 @@ const AppContent: React.FC = () => {
             aria-live="assertive"
             className={`admin-top-popup pointer-events-auto ${
               isTvOrSmartBoard ? 'max-w-3xl p-5' : isLargeScreen ? 'max-w-xl p-4' : 'max-w-lg p-3.5 sm:p-4'
-            } w-full h-auto min-h-0 max-h-[65dvh] overflow-y-auto rounded-2xl shadow-2xl border-2 flex items-start gap-3 ${
+            } w-full h-auto rounded-2xl shadow-2xl border-2 flex items-start gap-3 ${
               banner.isError
                 ? 'bg-[#FEF2F2] dark:bg-[#450A0A] text-[#7F1D1D] dark:text-[#FEE2E2] border-[#DC2626]'
                 : 'bg-white dark:bg-[#0F172A] text-[#0F172A] dark:text-[#F8FAFC] border-[#1E3A8A] dark:border-[#3B82F6]'
@@ -2406,7 +2426,7 @@ const AppContent: React.FC = () => {
             role="status"
             className={`pointer-events-auto ${
               isTvOrSmartBoard ? 'max-w-3xl px-5 py-4 text-base sm:text-lg' : isLargeScreen ? 'max-w-2xl px-4 py-3.5 text-sm sm:text-base' : 'max-w-xl px-4 py-3.5 text-sm sm:text-base'
-            } w-full h-auto min-h-0 max-h-[65dvh] overflow-y-auto rounded-2xl shadow-2xl flex items-start justify-between gap-3 font-semibold border-2 ${
+            } w-full h-auto rounded-2xl shadow-2xl flex items-start justify-between gap-3 font-semibold border-2 ${
               banner.isError
                 ? 'bg-[#FEE2E2] text-[#7F1D1D] border-[#DC2626] dark:bg-[#7F1D1D] dark:text-[#FEE2E2]'
                 : 'bg-[#0F172A] text-white border-slate-700 dark:bg-[#1E3A8A] dark:border-[#3B82F6]'
@@ -2428,7 +2448,7 @@ const AppContent: React.FC = () => {
       )}
 
       {availableUpdate &&
-        !isUpdateModalOpen &&
+        !isShowingFullScreenUpdate &&
         route.name === 'quiz' &&
         !availableUpdate.isMandatory &&
         dismissedOptionalVersionKey !==
@@ -2443,24 +2463,6 @@ const AppContent: React.FC = () => {
             }}
           />
         )}
-
-      {isUpdateModalOpen && availableUpdate && (
-        <UpdateAvailableModal
-          release={availableUpdate}
-          currentVersionName={currentVersionName}
-          currentVersionCode={currentVersionCode}
-          updateHistory={updateNotifications}
-          onNotify={(msg, isErr) => setBanner({ isError: Boolean(isErr), message: msg })}
-          onDismiss={() => {
-            if (!availableUpdate.isMandatory) {
-              setDismissedOptionalVersionKey(
-                `${availableUpdate.versionName}_${availableUpdate.versionCode ?? 0}`
-              );
-              setIsUpdateModalOpen(false);
-            }
-          }}
-        />
-      )}
 
       <DisplaySettingsModal
         isOpen={showDisplaySettings}

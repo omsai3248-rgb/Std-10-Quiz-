@@ -212,21 +212,29 @@ test('fetchLatestRelease parses GitHub Releases API and falls back to version.js
   }
 });
 
-test('AppUpdateComponents and App toast/notification render full unclipped auto-height responsive messages across Mobile, Tablet, and Smart TV', () => {
+test('AppUpdateComponents and App toast/notification render full-screen no-scroll update view and unclipped auto-height responsive messages', () => {
   const source = fs.readFileSync(path.resolve('src/components/AppUpdateComponents.tsx'), 'utf8');
-  assert.equal(source.includes('fixed inset-0 z-[90] flex flex-col w-full h-full min-h-[100dvh] overflow-hidden'), true);
-  assert.equal(source.includes('h-auto min-h-0 max-h-[82dvh]'), true);
+  assert.equal(source.includes('min-h-[100dvh] w-full flex flex-col bg-[#FAF9F5]'), true);
+  assert.equal(source.includes('grid grid-cols-2 gap-2.5 sm:gap-4'), true);
+  assert.equal(source.includes('const [showHistory, setShowHistory] = useState(false);'), true);
+  assert.equal(source.includes('w-full h-auto rounded-2xl bg-white dark:bg-[#0F172A]'), true);
   assert.equal(source.includes('whitespace-normal break-words'), true);
   assert.equal(source.includes('isTvOrSmartBoard'), true);
+  assert.equal(source.includes('fixed inset-0 z-[90]'), false);
   assert.equal(source.includes('backdrop-blur'), false);
+  assert.equal(source.includes('max-h-[82dvh]'), false);
   assert.equal(source.includes('max-h-[90vh]'), false);
   assert.equal(source.includes('max-h-36'), false);
   assert.equal(source.includes('max-h-28'), false);
   assert.equal(source.includes('line-clamp-2'), false);
 
   const appSource = fs.readFileSync(path.resolve('src/App.tsx'), 'utf8');
+  assert.equal(appSource.includes('const isShowingFullScreenUpdate = Boolean(isUpdateModalOpen && availableUpdate);'), true);
+  assert.equal(appSource.includes('data-testid="admin_top_popup"'), true);
   assert.equal(appSource.includes('data-testid="app_status_toast"'), true);
-  assert.equal(appSource.includes('w-full h-auto min-h-0 max-h-[65dvh] overflow-y-auto'), true);
+  assert.equal(appSource.includes('w-full h-auto rounded-2xl shadow-2xl'), true);
+  assert.equal(appSource.includes('max-h-[65dvh]'), false);
   assert.equal(appSource.includes('min-w-0 flex-1 whitespace-pre-line break-words leading-relaxed'), true);
 });
+
 
