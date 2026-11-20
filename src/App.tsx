@@ -7,7 +7,11 @@ import {
 } from './data/curriculum/std10Curriculum';
 import { buildBoardExamMockTestChapter } from './data/curriculum/mockTestBuilder';
 import { TopNavHeader, type PublicTabId } from './components/TopNavHeader';
-import { UpdateAvailableBanner, UpdateAvailableModal } from './components/AppUpdateComponents';
+import {
+  UpdateAvailableBanner,
+  UpdateAvailableModal,
+  UpdateModalErrorBoundary,
+} from './components/AppUpdateComponents';
 import { DisplaySettingsModal } from './components/DisplaySettingsModal';
 import { AdaptiveDisplayProvider, useAdaptiveDisplay } from './context/AdaptiveDisplayContext';
 import { useTranslation } from './i18n/translations';
@@ -24,6 +28,7 @@ import {
   subscribeNativeNotificationPermission,
 } from './services/nativeFirebaseBridge';
 import {
+  ADMIN_CODES_PAGE_SIZE,
   ADMIN_PAGE_SIZE,
   approvePaymentAndAssignCode,
   deleteAccessCodeAdmin,
@@ -32,6 +37,8 @@ import {
   deletePaymentRequestAdmin,
   deletePushBroadcastNotification,
   deleteStudentAdmin,
+  deleteUnusedAccessCodesAdmin,
+  fetchAccessCodesByBatchAdmin,
   flushPendingSyncOperations,
   forceRefreshNativeAdminListeners,
   generateBulkAccessCodes,
@@ -1212,7 +1219,7 @@ const AppContent: React.FC = () => {
 
       observeAllAccessCodes((codes) => {
         setAllCodes(codes);
-        setHasMoreCodes(codes.length >= ADMIN_PAGE_SIZE);
+        setHasMoreCodes(codes.length >= ADMIN_CODES_PAGE_SIZE);
         const usedItems = codes.filter((c) => c.status === 'used' || c.isUsed);
         const usedCodeSet = new Set(usedItems.map((c) => c.code));
 
@@ -1396,19 +1403,47 @@ const AppContent: React.FC = () => {
     [effectiveGithubRepo, releaseConfig?.updatedAt?.seconds]
   );
 
+  const firebaseAvailableUpdateRef = useRef<GitHubReleaseInfo | null>(firebaseAvailableUpdate);
+  const webSwAvailableUpdateRef = useRef<GitHubReleaseInfo | null>(webSwAvailableUpdate);
+  const dismissedOptionalVersionKeyRef = useRef<string>(dismissedOptionalVersionKey);
+  const releaseConfigKeyRef = useRef<string>(releaseConfigKey);
+  const autoShownVersionKeyRef = useRef<string>('');
+  const authInitializedRef = useRef<boolean>(authInitialized);
+
+  useEffect(() => {
+    firebaseAvailableUpdateRef.current = firebaseAvailableUpdate;
+  }, [firebaseAvailableUpdate]);
+
+  useEffect(() => {
+    webSwAvailableUpdateRef.current = webSwAvailableUpdate;
+  }, [webSwAvailableUpdate]);
+
+  useEffect(() => {
+    dismissedOptionalVersionKeyRef.current = dismissedOptionalVersionKey;
+  }, [dismissedOptionalVersionKey]);
+
+  useEffect(() => {
+    releaseConfigKeyRef.current = releaseConfigKey;
+  }, [releaseConfigKey]);
+
+  useEffect(() => {
+    authInitializedRef.current = authInitialized;
+  }, [authInitialized]);
+
   const checkForUpdates = useCallback(
     async (manual = false, force = false, repoOverride?: string) => {
       if (checkInFlightRef.current) return;
 
       const repoToCheck = sanitizeOwnerRepo(repoOverride ?? '') || effectiveGithubRepo;
       const now = Date.now();
-      const configChanged = lastCheckedConfigKeyRef.current !== releaseConfigKey;
+      const currentConfigKey = releaseConfigKeyRef.current;
+      const configChanged = lastCheckedConfigKeyRef.current !== currentConfigKey;
 
       if (!manual && !force && !configChanged && now - lastUpdateCheckAtRef.current < 120_000) {
         return;
       }
 
-      lastCheckedConfigKeyRef.current = releaseConfigKey;
+      lastCheckedConfigKeyRef.current = currentConfigKey;
       lastUpdateCheckAtRef.current = now;
       checkInFlightRef.current = true;
       setIsCheckingUpdate(true);
@@ -1424,21 +1459,33 @@ const AppContent: React.FC = () => {
           checkWebSwForUpdateNow(currentVersionName, currentVersionCode).catch(() => null),
         ]);
 
-        const nextGithub = ghResult && ghResult.isUpdateAvailable ? { ...ghResult, source: 'github' as const } : null;
+        const nextGithub =
+          ghResult && ghResult.isUpdateAvailable ? { ...ghResult, source: 'github' as const } : null;
         setGithubAvailableUpdate(nextGithub);
         if (swResult) {
           setWebSwAvailableUpdate(swResult);
         }
 
         const winner = chooseNewestAvailableUpdate(
-          [firebaseAvailableUpdate, nextGithub, swResult ?? webSwAvailableUpdate],
+          [firebaseAvailableUpdateRef.current, nextGithub, swResult ?? webSwAvailableUpdateRef.current],
           currentVersionName,
           currentVersionCode
         );
 
         if (winner) {
           setDeepLinkUpdateFallback(null);
-          if (manual || winner.isMandatory || routeRef.current.name !== 'quiz') {
+          const versionKey = `${winner.versionName}_${winner.versionCode ?? 0}`;
+          const isDismissedOptional =
+            !winner.isMandatory && dismissedOptionalVersionKeyRef.current === versionKey;
+          if (
+            manual ||
+            (authInitializedRef.current &&
+              (winner.isMandatory ||
+                (!isDismissedOptional &&
+                  routeRef.current.name !== 'quiz' &&
+                  autoShownVersionKeyRef.current !== versionKey)))
+          ) {
+            autoShownVersionKeyRef.current = versionKey;
             setIsUpdateModalOpen(true);
           }
         } else {
@@ -1468,26 +1515,37 @@ const AppContent: React.FC = () => {
       currentVersionCode,
       currentVersionName,
       effectiveGithubRepo,
-      firebaseAvailableUpdate,
-      releaseConfigKey,
       t.appUpdateUpToDateMsg,
-      webSwAvailableUpdate,
     ]
   );
 
-  // Auto-present update modal or clear stale dialogs whenever the resolved candidate changes
+  // Auto-present update modal cleanly once per version after app initialization, or clear stale dialogs
   useEffect(() => {
     if (!availableUpdate) {
       setIsUpdateModalOpen(false);
       return;
     }
+    if (!authInitialized) return;
     const key = `${availableUpdate.versionName}_${availableUpdate.versionCode ?? 0}`;
     if (availableUpdate.isMandatory) {
+      autoShownVersionKeyRef.current = key;
       setIsUpdateModalOpen(true);
-    } else if (dismissedOptionalVersionKey !== key && routeRef.current.name !== 'quiz') {
+    } else if (
+      dismissedOptionalVersionKey !== key &&
+      autoShownVersionKeyRef.current !== key &&
+      routeRef.current.name !== 'quiz'
+    ) {
+      autoShownVersionKeyRef.current = key;
       setIsUpdateModalOpen(true);
     }
-  }, [availableUpdate, dismissedOptionalVersionKey]);
+  }, [authInitialized, availableUpdate, dismissedOptionalVersionKey]);
+
+  // Re-check once when Firestore release config updates after startup
+  useEffect(() => {
+    if (lastCheckedConfigKeyRef.current && lastCheckedConfigKeyRef.current !== releaseConfigKey) {
+      void checkForUpdates(false, false);
+    }
+  }, [checkForUpdates, releaseConfigKey]);
 
   // Automatic update check on startup, foreground resume, and 15-minute intervals
   useEffect(() => {
@@ -1923,20 +1981,121 @@ const AppContent: React.FC = () => {
     }
   };
 
-  const handleGenerateBulkCodes = async (count: number, batchName: string, subjectId: string) => {
+  const handleGenerateBulkCodes = async (
+    count: number,
+    batchName: string,
+    subjectId: string
+  ): Promise<{ batchName: string; codes: string[] } | null> => {
     setIsBusy(true);
     try {
-      const codes = await generateBulkAccessCodes(count, batchName, subjectId);
+      const normalizedSubject = ALL_SUBJECT_IDS.includes(subjectId as SubjectId)
+        ? (subjectId as SubjectId)
+        : 'all';
+      const cleanBatch = (
+        batchName.trim() || `${getSubjectDisplayName(normalizedSubject)} Batch`
+      ).slice(0, 60);
+      const codes = await generateBulkAccessCodes(count, cleanBatch, normalizedSubject);
       setLastGeneratedBatch(codes);
+
+      const nowSec = Math.floor(Date.now() / 1000);
+      const optimisticTs = {
+        seconds: nowSec,
+        nanoseconds: 0,
+        toMillis: () => nowSec * 1000,
+        toDate: () => new Date(nowSec * 1000),
+      } as unknown as AccessCode['createdAt'];
+
+      const optimisticRecords: AccessCode[] = codes.map((code) => ({
+        id: code,
+        code,
+        requestId: '',
+        userName: '',
+        mobileNumber: '',
+        amountRupees: 0,
+        batchName: cleanBatch,
+        status: 'unused',
+        isUsed: false,
+        usedAt: null,
+        usedBy: null,
+        usedByUserId: '',
+        usedByMobile: '',
+        usedByName: '',
+        source: 'book',
+        subjectId: normalizedSubject,
+        createdAt: optimisticTs,
+        updatedAt: optimisticTs,
+      }));
+
+      setAllCodes((prev) => {
+        const seen = new Set(optimisticRecords.map((c) => c.code));
+        return [...optimisticRecords, ...prev.filter((c) => !seen.has(c.code))];
+      });
+
       setBanner({
         isError: false,
-        message: `${codes.length} ${getSubjectDisplayName(subjectId, lang)} codes generated`,
+        message:
+          lang === 'en'
+            ? `${codes.length} codes generated in folder "${cleanBatch}"`
+            : `"${cleanBatch}" ફોલ્ડરમાં ${codes.length} નવા કોડ બની ગયા છે`,
       });
+      return { batchName: cleanBatch, codes };
     } catch (err) {
       setBanner({
         isError: true,
         message: formatAppError(err, 'Code generation error'),
       });
+      return null;
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const handleFetchBatchCodes = async (batchName: string): Promise<AccessCode[]> => {
+    try {
+      const batchItems = await fetchAccessCodesByBatchAdmin(batchName);
+      if (batchItems.length > 0) {
+        setAllCodes((prev) => {
+          const batchSet = new Set(batchItems.map((c) => c.code));
+          return [...batchItems, ...prev.filter((c) => !batchSet.has(c.code))];
+        });
+      }
+      return batchItems;
+    } catch (err) {
+      setBanner({
+        isError: true,
+        message: formatAppError(err, 'Failed to load batch codes'),
+      });
+      return [];
+    }
+  };
+
+  const handleDeleteUnusedCodes = async (batchName?: string): Promise<number> => {
+    setIsBusy(true);
+    try {
+      const res = await deleteUnusedAccessCodesAdmin(batchName);
+      if (res.deletedCodes.length > 0) {
+        const deletedSet = new Set(res.deletedCodes);
+        setAllCodes((prev) => prev.filter((c) => !deletedSet.has(c.code)));
+        setLastGeneratedBatch((prev) => prev.filter((code) => !deletedSet.has(code)));
+      }
+      setBanner({
+        isError: false,
+        message:
+          res.deletedCount > 0
+            ? lang === 'en'
+              ? `Deleted ${res.deletedCount} unused codes (used codes kept safe)`
+              : `${res.deletedCount} ન વપરાયેલા કોડ ડિલીટ થઈ ગયા (વપરાયેલા કોડ સુરક્ષિત છે)`
+            : lang === 'en'
+              ? 'No unused codes found to delete'
+              : 'ડિલીટ કરવા માટે કોઈ ન વપરાયેલા કોડ નથી',
+      });
+      return res.deletedCount;
+    } catch (err) {
+      setBanner({
+        isError: true,
+        message: formatAppError(err, 'Delete unused codes failed'),
+      });
+      return 0;
     } finally {
       setIsBusy(false);
     }
@@ -2154,7 +2313,7 @@ const AppContent: React.FC = () => {
     }
     setIsLoadingMoreCodes(true);
     try {
-      const res = await loadMoreAdminCodes(lastCursor, ADMIN_PAGE_SIZE);
+      const res = await loadMoreAdminCodes(lastCursor, ADMIN_CODES_PAGE_SIZE);
       if (res.items.length > 0) {
         setAllCodes((prev) => {
           const seen = new Set(prev.map((x) => x.code));
@@ -2276,7 +2435,7 @@ const AppContent: React.FC = () => {
           onToggleSound={() => setIsSoundEnabled((prev) => !prev)}
           onClearAlerts={() => setLiveAlerts([])}
           onSignOut={() => void handleAdminSignOut()}
-          onGenerateBulkCodes={(c, b, s) => void handleGenerateBulkCodes(c, b, s)}
+          onGenerateBulkCodes={handleGenerateBulkCodes}
           onGenerateDirectCode={handleGenerateDirectCode}
           onApprovePayment={(r, n, s) => void handleApprovePayment(r, n, s)}
           onRejectPayment={(r, reason) => void handleRejectPayment(r, reason)}
@@ -2290,6 +2449,8 @@ const AppContent: React.FC = () => {
           onTestUpdateCheck={() => void checkForUpdates(true, true)}
           onDeletePayment={handleDeletePayment}
           onDeleteCode={handleDeleteCode}
+          onDeleteUnusedCodes={handleDeleteUnusedCodes}
+          onFetchBatchCodes={handleFetchBatchCodes}
           onDeleteStudent={handleDeleteStudent}
           onOpenDisplaySettings={() => setShowDisplaySettings(true)}
           onNotify={(msg, isErr) => setBanner({ isError: Boolean(isErr), message: msg })}
@@ -2589,27 +2750,39 @@ const AppContent: React.FC = () => {
   }
 
   const isShowingFullScreenUpdate = Boolean(isUpdateModalOpen && availableUpdate);
+  const dismissUpdateModalSafely = () => {
+    if (availableUpdate) {
+      setDismissedOptionalVersionKey(
+        `${availableUpdate.versionName}_${availableUpdate.versionCode ?? 0}`
+      );
+    }
+    setIsUpdateModalOpen(false);
+  };
 
   return (
     <>
-      {isShowingFullScreenUpdate && availableUpdate ? (
-        <UpdateAvailableModal
-          release={availableUpdate}
-          currentVersionName={currentVersionName}
-          currentVersionCode={currentVersionCode}
-          updateHistory={updateNotifications}
-          onNotify={(msg, isErr) => setBanner({ isError: Boolean(isErr), message: msg })}
-          onDismiss={() => {
-            if (!availableUpdate.isMandatory) {
-              setDismissedOptionalVersionKey(
-                `${availableUpdate.versionName}_${availableUpdate.versionCode ?? 0}`
-              );
-              setIsUpdateModalOpen(false);
-            }
-          }}
-        />
-      ) : (
-        bodyNode
+      <div aria-hidden={isShowingFullScreenUpdate ? true : undefined}>
+        {bodyNode}
+      </div>
+
+      {isShowingFullScreenUpdate && availableUpdate && (
+        <UpdateModalErrorBoundary
+          key={`${availableUpdate.versionName}_${availableUpdate.versionCode ?? 0}`}
+          onErrorFallback={dismissUpdateModalSafely}
+        >
+          <UpdateAvailableModal
+            release={availableUpdate}
+            currentVersionName={currentVersionName}
+            currentVersionCode={currentVersionCode}
+            updateHistory={updateNotifications}
+            onNotify={(msg, isErr) => setBanner({ isError: Boolean(isErr), message: msg })}
+            onDismiss={() => {
+              if (!availableUpdate.isMandatory) {
+                dismissUpdateModalSafely();
+              }
+            }}
+          />
+        </UpdateModalErrorBoundary>
       )}
 
       {banner && isAdmin && (

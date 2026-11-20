@@ -1435,8 +1435,13 @@ class NativeFirebaseBridge(
 
                     val rawSub = snap.getString("subjectId").orEmpty()
                     val batchName = snap.getString("batchName").orEmpty().lowercase()
+                    val upperCode = cleanCode.trim().uppercase()
                     val codeSub = when {
                         rawSub in listOf("maths", "science", "social_science", "all") -> rawSub
+                        upperCode.startsWith("MAT") || upperCode.startsWith("MTH") -> "maths"
+                        upperCode.startsWith("SCI") -> "science"
+                        upperCode.startsWith("SOC") || upperCode.startsWith("SS-") -> "social_science"
+                        upperCode.startsWith("ALL") -> "all"
                         batchName.contains("maths") -> "maths"
                         batchName.contains("science") && !batchName.contains("social") -> "science"
                         batchName.contains("social") -> "social_science"
@@ -1698,7 +1703,7 @@ class NativeFirebaseBridge(
             .limit(25)
         val codeQuery = localDb.collection("access_codes")
             .orderBy("createdAt", Query.Direction.DESCENDING)
-            .limit(25)
+            .limit(600)
         val studentsQuery = localDb.collection("students")
             .orderBy("updatedAt", Query.Direction.DESCENDING)
             .limit(25)
@@ -1911,7 +1916,7 @@ class NativeFirebaseBridge(
 
             val codeQuery = localDb.collection("access_codes")
                 .orderBy("createdAt", Query.Direction.DESCENDING)
-                .limit(25)
+                .limit(600)
             val codeReg = codeQuery
                 .addSnapshotListener { snap, error ->
                     if (error != null) {
@@ -2061,7 +2066,7 @@ class NativeFirebaseBridge(
 
                     var uniqueCode = ""
                     for (attempt in 0 until 10) {
-                        val candidate = generate8CharCode()
+                        val candidate = generate8CharCode(subjectId)
                         val candSnap = tx.get(localDb.collection("access_codes").document(candidate))
                         if (!candSnap.exists()) {
                             uniqueCode = candidate
@@ -2168,7 +2173,7 @@ class NativeFirebaseBridge(
 
             val codes = linkedSetOf<String>()
             while (codes.size < count) {
-                codes.add(generate8CharCode())
+                codes.add(generate8CharCode(subjectId))
             }
             val codeList = codes.toList()
 
@@ -2254,7 +2259,7 @@ class NativeFirebaseBridge(
                 val chosenCode = localDb.runTransaction { tx ->
                     var uniqueCode = ""
                     for (attempt in 0 until 10) {
-                        val candidate = generate8CharCode()
+                        val candidate = generate8CharCode(subjectId)
                         val candSnap = tx.get(localDb.collection("access_codes").document(candidate))
                         if (!candSnap.exists()) {
                             uniqueCode = candidate
@@ -2765,6 +2770,99 @@ class NativeFirebaseBridge(
             } catch (e: Exception) {
                 handleFirestoreError(e, OperationType.DELETE, codeRef.path)
                 resolveCallError(callId, e.localizedMessage ?: "Failed to delete access code")
+            }
+        }
+    }
+
+    @JavascriptInterface
+    fun fetchCodesByBatch(callId: String, payloadJson: String) {
+        val localDb = db ?: run {
+            resolveCallError(callId, "Native Firebase is not initialized.")
+            return
+        }
+        activity.lifecycleScope.launch(Dispatchers.IO) {
+            if (!isCurrentUserAdmin()) {
+                resolveCallError(callId, "Authentication session not ready.")
+                return@launch
+            }
+            try {
+                val obj = JSONObject(payloadJson)
+                val batchName = obj.optString("batchName", "").trim()
+                val snap = if (batchName.isNotBlank()) {
+                    localDb.collection("access_codes")
+                        .whereEqualTo("batchName", batchName)
+                        .get()
+                        .awaitResult()
+                } else {
+                    localDb.collection("access_codes")
+                        .orderBy("createdAt", Query.Direction.DESCENDING)
+                        .limit(600)
+                        .get()
+                        .awaitResult()
+                }
+                val arr = JSONArray()
+                snap.documents.forEach { arr.put(serializeAccessCode(it)) }
+                resolveCallSuccess(callId, arr.toString())
+            } catch (e: Exception) {
+                handleFirestoreError(e, OperationType.LIST, "access_codes")
+                resolveCallError(callId, e.localizedMessage ?: "Failed to fetch batch codes")
+            }
+        }
+    }
+
+    @JavascriptInterface
+    fun deleteUnusedAccessCodes(callId: String, payloadJson: String) {
+        val localDb = db ?: run {
+            resolveCallError(callId, "Native Firebase is not initialized.")
+            return
+        }
+        activity.lifecycleScope.launch(Dispatchers.IO) {
+            if (!isCurrentUserAdmin()) {
+                resolveCallError(callId, "Authentication session not ready.")
+                return@launch
+            }
+            try {
+                val obj = if (payloadJson.isNotBlank()) JSONObject(payloadJson) else JSONObject()
+                val batchName = obj.optString("batchName", "").trim()
+
+                val isDirectUntaggedOnly = batchName == "__direct_untagged__"
+                val snap = if (batchName.isNotBlank() && !isDirectUntaggedOnly) {
+                    localDb.collection("access_codes")
+                        .whereEqualTo("batchName", batchName)
+                        .get()
+                        .awaitResult()
+                } else {
+                    localDb.collection("access_codes")
+                        .whereEqualTo("isUsed", false)
+                        .get()
+                        .awaitResult()
+                }
+
+                val unusedDocs = snap.documents.filter { doc ->
+                    val isUsed = doc.getBoolean("isUsed") == true
+                    val status = doc.getString("status").orEmpty().lowercase()
+                    val docBatch = doc.getString("batchName").orEmpty().trim()
+                    !isUsed && status != "used" && (!isDirectUntaggedOnly || docBatch.isBlank())
+                }
+
+                val deletedCodesArr = JSONArray()
+                unusedDocs.chunked(400).forEach { chunk ->
+                    val batch = localDb.batch()
+                    chunk.forEach { doc ->
+                        batch.delete(doc.reference)
+                        deletedCodesArr.put(doc.getString("code") ?: doc.id)
+                    }
+                    batch.commit().awaitResult()
+                }
+
+                val res = JSONObject().apply {
+                    put("deletedCount", unusedDocs.size)
+                    put("deletedCodes", deletedCodesArr)
+                }
+                resolveCallSuccess(callId, res.toString())
+            } catch (e: Exception) {
+                handleFirestoreError(e, OperationType.DELETE, "access_codes")
+                resolveCallError(callId, e.localizedMessage ?: "Failed to delete unused access codes")
             }
         }
     }
@@ -3843,8 +3941,17 @@ class NativeFirebaseBridge(
         put("updatedAt", serializeTimestamp(doc.getTimestamp("updatedAt")))
     }
 
-    private fun generate8CharCode(): String = buildString(8) {
-        repeat(8) {
+    private fun getSubjectCodePrefix(subjectId: String): String =
+        when (subjectId.trim().lowercase()) {
+            "maths" -> "MAT"
+            "science" -> "SCI"
+            "social_science" -> "SOC"
+            else -> "ALL"
+        }
+
+    private fun generate8CharCode(subjectId: String = "all"): String = buildString(8) {
+        append(getSubjectCodePrefix(subjectId))
+        repeat(5) {
             append(CODE_CHARSET[secureRandom.nextInt(CODE_CHARSET.length)])
         }
     }

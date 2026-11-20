@@ -122,7 +122,11 @@ interface AdminPanelScreenProps {
   onToggleSound: () => void;
   onClearAlerts: () => void;
   onSignOut: () => void;
-  onGenerateBulkCodes: (count: number, batchName: string, subjectId: string) => void;
+  onGenerateBulkCodes: (
+    count: number,
+    batchName: string,
+    subjectId: string
+  ) => Promise<{ batchName: string; codes: string[] } | null> | void;
   onGenerateDirectCode: (params: {
     mobileNumber: string;
     userName?: string;
@@ -144,6 +148,8 @@ interface AdminPanelScreenProps {
   onTestUpdateCheck: () => void;
   onDeletePayment: (req: PaymentRequest) => Promise<void> | void;
   onDeleteCode: (code: AccessCode) => Promise<void> | void;
+  onDeleteUnusedCodes?: (batchName?: string) => Promise<number>;
+  onFetchBatchCodes?: (batchName: string) => Promise<AccessCode[]>;
   onDeleteStudent: (student: StudentProfile) => Promise<void> | void;
   onOpenDisplaySettings?: () => void;
   onNotify?: (message: string, isError?: boolean) => void;
@@ -234,6 +240,8 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
   onTestUpdateCheck,
   onDeletePayment,
   onDeleteCode,
+  onDeleteUnusedCodes,
+  onFetchBatchCodes,
   onDeleteStudent,
   onOpenDisplaySettings,
   onNotify,
@@ -838,6 +846,8 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
                   : item.batchName || item.id,
               })
             }
+            onDeleteUnusedCodes={onDeleteUnusedCodes}
+            onFetchBatchCodes={onFetchBatchCodes}
             onNotify={onNotify}
           />
         )}

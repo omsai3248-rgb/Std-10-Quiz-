@@ -10,18 +10,26 @@ import {
 import { ADMIN_PHONE_TEN_DIGITS } from '../services/quizRepository';
 
 export function formatTimestampLabel(
-  timestamp: Timestamp | null | undefined,
+  timestamp: Timestamp | { seconds?: number } | null | undefined,
   lang: 'gu' | 'en' = 'gu'
 ): string {
-  if (!timestamp) return lang === 'en' ? 'Just now' : 'હમણાં જ';
-  const date = new Date(timestamp.seconds * 1000);
-  return date.toLocaleString('en-IN', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  const fallback = lang === 'en' ? 'Just now' : 'હમણાં જ';
+  if (!timestamp || typeof timestamp !== 'object') return fallback;
+  const secs = Number((timestamp as { seconds?: unknown }).seconds);
+  if (!Number.isFinite(secs) || secs <= 0) return fallback;
+  const date = new Date(secs * 1000);
+  if (Number.isNaN(date.getTime())) return fallback;
+  try {
+    return date.toLocaleString('en-IN', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch {
+    return date.toISOString().slice(0, 16).replace('T', ' ');
+  }
 }
 
 export function getDeviceBrowserInfo(): string {

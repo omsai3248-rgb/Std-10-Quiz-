@@ -298,6 +298,36 @@ test('GitHub CI workflow, README, and updater provide a single permanent latest 
   );
 });
 
+test('Installed APK update popup and WebView prevent blank white screens after new APK releases', () => {
+  const mainActivity = fs.readFileSync(
+    path.resolve('app/src/main/java/com/aistudio/std10quiz/kqxmtv/MainActivity.kt'),
+    'utf8'
+  );
+  assert.equal(mainActivity.includes('Cache-Control'), true);
+  assert.equal(mainActivity.includes('no-store, no-cache, must-revalidate'), true);
+  assert.equal(mainActivity.includes('KEY_LAST_WEBVIEW_VERSION_CODE'), true);
+  assert.equal(mainActivity.includes('clearCache(true)'), true);
+  assert.equal(mainActivity.includes('override fun onRenderProcessGone'), true);
+
+  const cssSource = fs.readFileSync(path.resolve('src/index.css'), 'utf8');
+  assert.equal(cssSource.includes('position: fixed;'), true);
+  assert.equal(cssSource.includes('inset: 0;'), true);
+  assert.equal(cssSource.includes('z-index: 90;'), true);
+  assert.equal(cssSource.includes('height: 100%;'), true);
+  assert.equal(cssSource.includes('min-height: 100%;'), true);
+  assert.equal(cssSource.includes('.update-screen-header-inner'), true);
+
+  const modalSource = fs.readFileSync(path.resolve('src/components/AppUpdateComponents.tsx'), 'utf8');
+  assert.equal(modalSource.includes('export class UpdateModalErrorBoundary'), true);
+  assert.equal(modalSource.includes('update-screen-header-inner'), true);
+
+  const appSource = fs.readFileSync(path.resolve('src/App.tsx'), 'utf8');
+  assert.equal(appSource.includes('<UpdateModalErrorBoundary'), true);
+  assert.equal(appSource.includes('autoShownVersionKeyRef'), true);
+  assert.equal(appSource.includes('authInitializedRef'), true);
+  assert.equal(appSource.includes('<div aria-hidden={isShowingFullScreenUpdate ? true : undefined}>'), true);
+});
+
 
 
 

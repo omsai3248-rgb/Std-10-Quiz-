@@ -64,6 +64,8 @@ interface AndroidFirebaseBridgeApi {
   updateStudentSubjectAccess?: (callId: string, payloadJson: string) => void;
   deletePaymentRequest?: (callId: string, payloadJson: string) => void;
   deleteAccessCode?: (callId: string, payloadJson: string) => void;
+  fetchCodesByBatch?: (callId: string, payloadJson: string) => void;
+  deleteUnusedAccessCodes?: (callId: string, payloadJson: string) => void;
   deleteStudent?: (callId: string, payloadJson: string) => void;
   generateDirectCodeForMobile?: (callId: string, payloadJson: string) => void;
   setActiveStudentMobile?: (mobileOrId: string) => void;

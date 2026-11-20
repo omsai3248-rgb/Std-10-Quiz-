@@ -305,15 +305,15 @@ export function getSubjectDisplayName(subjectId: string, lang: 'gu' | 'en' = 'gu
 }
 
 export function getDefaultPrefix(subjectId: string): string {
-  switch (subjectId) {
+  switch (subjectId.trim().toLowerCase()) {
     case 'maths':
-      return 'MATH';
+      return 'MAT';
     case 'science':
       return 'SCI';
     case 'social_science':
       return 'SOC';
     default:
-      return 'STD10';
+      return 'ALL';
   }
 }
 
@@ -334,9 +334,10 @@ export function resolveCodeSubjectId(
     return normalizedExplicit;
   }
   const upperCode = code.trim().toUpperCase();
-  if (upperCode.startsWith('MATH') || upperCode.startsWith('MTH')) return 'maths';
+  if (upperCode.startsWith('MAT') || upperCode.startsWith('MTH')) return 'maths';
   if (upperCode.startsWith('SCI')) return 'science';
   if (upperCode.startsWith('SOC') || upperCode.startsWith('SS-')) return 'social_science';
+  if (upperCode.startsWith('ALL')) return 'all';
 
   const cleanBatch = batchName.trim().toLowerCase();
   if (cleanBatch.includes('ગણિત') || cleanBatch.includes('maths') || cleanBatch.includes('math')) {

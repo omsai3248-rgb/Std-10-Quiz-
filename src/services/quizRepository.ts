@@ -98,6 +98,7 @@ import {
 import {
   ALL_SUBJECT_IDS,
   DEFAULT_ADMIN_NOTIFICATION_PREFS,
+  getDefaultPrefix,
   getFixedPlanPrice,
   getSubjectDisplayName,
   resolveCodeSubjectId,
@@ -149,6 +150,7 @@ export const ADMIN_OWNER_EMAIL = 'omsai3248@gmail.com';
 export const ADMIN_PASSCODE = 'kkkk';
 
 export const ADMIN_PAGE_SIZE = 25;
+export const ADMIN_CODES_PAGE_SIZE = 600;
 const RESUME_SESSION_THROTTLE_MS = 60_000;
 const CODE_CHARSET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
@@ -473,11 +475,12 @@ function requireUserId(): string {
   return uid;
 }
 
-export function generateUnique8CharCode(): string {
-  const arr = new Uint32Array(8);
+export function generateUnique8CharCode(subjectId = 'all'): string {
+  const prefix = getDefaultPrefix(subjectId);
+  const arr = new Uint32Array(5);
   crypto.getRandomValues(arr);
-  let out = '';
-  for (let i = 0; i < 8; i++) {
+  let out = prefix;
+  for (let i = 0; i < 5; i++) {
     out += CODE_CHARSET[arr[i] % CODE_CHARSET.length];
   }
   return out;
@@ -1229,7 +1232,7 @@ export async function approvePaymentAndAssignCode(params: {
 
       let chosenCode = '';
       for (let attempt = 0; attempt < 10; attempt++) {
-        const candidate = generateUnique8CharCode();
+        const candidate = generateUnique8CharCode(normalizedSubject);
         const candidateRef = doc(db, COLLECTION_ACCESS_CODES, candidate);
         const candidateSnap = await tx.get(candidateRef);
         if (!candidateSnap.exists()) {
@@ -1597,7 +1600,7 @@ export async function generateBulkAccessCodes(
   const generated: string[] = [];
   const seen = new Set<string>();
   while (generated.length < count) {
-    const code = generateUnique8CharCode();
+    const code = generateUnique8CharCode(normalizedSubject);
     if (!seen.has(code)) {
       seen.add(code);
       generated.push(code);
@@ -1703,7 +1706,7 @@ export async function generateDirectCodeForMobile(params: {
     const chosenCode = await runTransaction(db, async (tx) => {
       let chosen = '';
       for (let attempt = 0; attempt < 10; attempt++) {
-        const candidate = generateUnique8CharCode();
+        const candidate = generateUnique8CharCode(normalizedSubject);
         const candRef = doc(db, COLLECTION_ACCESS_CODES, candidate);
         const candSnap = await tx.get(candRef);
         if (!candSnap.exists()) {
@@ -2288,7 +2291,7 @@ export function observeAllAccessCodes(
   }
   setLiveSyncState('active');
   const colRef = collection(db, COLLECTION_ACCESS_CODES);
-  const q = query(colRef, orderBy('createdAt', 'desc'), limit(ADMIN_PAGE_SIZE));
+  const q = query(colRef, orderBy('createdAt', 'desc'), limit(ADMIN_CODES_PAGE_SIZE));
   return onSnapshot(
     q,
     (snap) => {
@@ -2343,7 +2346,7 @@ export async function loadMoreAdminPayments(
 
 export async function loadMoreAdminCodes(
   cursorCreatedAt: Timestamp | null,
-  pageSize = ADMIN_PAGE_SIZE
+  pageSize = ADMIN_CODES_PAGE_SIZE
 ): Promise<{ items: AccessCode[]; hasMore: boolean }> {
   if (!cursorCreatedAt) return { items: [], hasMore: false };
   if (hasNativeFirebaseBridge()) {
@@ -3054,6 +3057,110 @@ export async function deleteAccessCodeAdmin(code: string): Promise<void> {
   } catch (error) {
     markServerSyncError(error);
     handleFirestoreError(error, OperationType.DELETE, codeRef.path);
+  }
+}
+
+export async function fetchAccessCodesByBatchAdmin(batchName: string): Promise<AccessCode[]> {
+  const cleanBatch = batchName.trim();
+  if (!cleanBatch) return [];
+
+  if (hasNativeFirebaseBridge()) {
+    const items = await invokeNativeBridgeCall<AccessCode[]>((callId) => {
+      window.AndroidFirebaseBridge?.fetchCodesByBatch?.(
+        callId,
+        JSON.stringify({ batchName: cleanBatch })
+      );
+    });
+    const list = Array.isArray(items) ? items : [];
+    list.sort((a, b) => timestampSortValue(b.createdAt) - timestampSortValue(a.createdAt));
+    return list;
+  }
+
+  requireUserId();
+  try {
+    const q = query(
+      collection(db, COLLECTION_ACCESS_CODES),
+      where('batchName', '==', cleanBatch)
+    );
+    const snap = await getDocs(q);
+    const items = snap.docs.map((d) => mapAccessCodeDoc(d.id, d.data()));
+    items.sort((a, b) => timestampSortValue(b.createdAt) - timestampSortValue(a.createdAt));
+    if (items.length > 0) {
+      const merged = mergeRecordsByIdNewer(loadCachedAdminCodes(), items, (x) => x.code);
+      merged.sort((a, b) => timestampSortValue(b.createdAt) - timestampSortValue(a.createdAt));
+      saveCachedAdminCodes(merged);
+    }
+    markServerSyncSuccess();
+    return items;
+  } catch (error) {
+    markServerSyncError(error);
+    handleFirestoreError(error, OperationType.LIST, COLLECTION_ACCESS_CODES);
+  }
+}
+
+export interface DeleteUnusedCodesResult {
+  deletedCount: number;
+  deletedCodes: string[];
+}
+
+export async function deleteUnusedAccessCodesAdmin(
+  batchName?: string
+): Promise<DeleteUnusedCodesResult> {
+  const cleanBatch = (batchName ?? '').trim();
+
+  if (hasNativeFirebaseBridge()) {
+    const res = await invokeNativeBridgeCall<DeleteUnusedCodesResult>((callId) => {
+      window.AndroidFirebaseBridge?.deleteUnusedAccessCodes?.(
+        callId,
+        JSON.stringify({ batchName: cleanBatch })
+      );
+    });
+    return {
+      deletedCount: Number(res?.deletedCount ?? 0),
+      deletedCodes: Array.isArray(res?.deletedCodes) ? res.deletedCodes : [],
+    };
+  }
+
+  requireUserId();
+  const isDirectUntaggedOnly = cleanBatch === '__direct_untagged__';
+  try {
+    const q =
+      cleanBatch && !isDirectUntaggedOnly
+        ? query(collection(db, COLLECTION_ACCESS_CODES), where('batchName', '==', cleanBatch))
+        : query(collection(db, COLLECTION_ACCESS_CODES), where('isUsed', '==', false));
+
+    const snap = await getDocs(q);
+    const unusedDocs = snap.docs.filter((docSnap) => {
+      const data = docSnap.data();
+      const isUsed = data.isUsed === true;
+      const status = String(data.status ?? '').toLowerCase();
+      const docBatch = String(data.batchName ?? '').trim();
+      return !isUsed && status !== 'used' && (!isDirectUntaggedOnly || docBatch.length === 0);
+    });
+
+    const deletedCodes: string[] = [];
+    for (let i = 0; i < unusedDocs.length; i += 400) {
+      const chunk = unusedDocs.slice(i, i + 400);
+      const batch = writeBatch(db);
+      for (const docSnap of chunk) {
+        batch.delete(docSnap.ref);
+        deletedCodes.push(String(docSnap.data().code ?? docSnap.id));
+      }
+      await batch.commit();
+    }
+
+    if (deletedCodes.length > 0) {
+      const deletedSet = new Set(deletedCodes);
+      saveCachedAdminCodes(loadCachedAdminCodes().filter((c) => !deletedSet.has(c.code)));
+    }
+    markServerSyncSuccess();
+    return {
+      deletedCount: deletedCodes.length,
+      deletedCodes,
+    };
+  } catch (error) {
+    markServerSyncError(error);
+    handleFirestoreError(error, OperationType.DELETE, COLLECTION_ACCESS_CODES);
   }
 }
 

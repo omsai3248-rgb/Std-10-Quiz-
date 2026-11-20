@@ -17,6 +17,7 @@ import android.util.Log
 import android.view.KeyEvent
 import android.webkit.JavascriptInterface
 import android.webkit.MimeTypeMap
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.URLUtil
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
@@ -25,6 +26,7 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.core.content.pm.PackageInfoCompat
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -90,6 +92,8 @@ import java.io.IOException
 
 private const val APP_HOST = "appassets.androidplatform.net"
 private const val START_URL = "https://$APP_HOST/index.html"
+private const val WEBVIEW_PREFS_NAME = "quick_quiz_webview_prefs"
+private const val KEY_LAST_WEBVIEW_VERSION_CODE = "last_loaded_webview_version_code"
 
 class MainActivity : ComponentActivity() {
     private var activeBridgeRef: NativeFirebaseBridge? = null
@@ -590,6 +594,28 @@ private fun PortalWebContainer(
                         isFocusable = true
                         isFocusableInTouchMode = true
                         setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                        // Clear stale HTTP cache automatically whenever a newer APK version is installed
+                        runCatching {
+                            val pkgInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                ctx.packageManager.getPackageInfo(
+                                    ctx.packageName,
+                                    android.content.pm.PackageManager.PackageInfoFlags.of(0)
+                                )
+                            } else {
+                                @Suppress("DEPRECATION")
+                                ctx.packageManager.getPackageInfo(ctx.packageName, 0)
+                            }
+                            val currentVerCode = PackageInfoCompat.getLongVersionCode(pkgInfo)
+                            val prefs = ctx.getSharedPreferences(WEBVIEW_PREFS_NAME, Context.MODE_PRIVATE)
+                            val lastVerCode = prefs.getLong(KEY_LAST_WEBVIEW_VERSION_CODE, -1L)
+                            if (lastVerCode != currentVerCode) {
+                                clearCache(true)
+                                clearFormData()
+                                prefs.edit().putLong(KEY_LAST_WEBVIEW_VERSION_CODE, currentVerCode).apply()
+                            }
+                        }.onFailure { err ->
+                            Log.w("MainActivity", "WebView version cache check skipped", err)
+                        }
                         settings.apply {
                             javaScriptEnabled = true
                             domStorageEnabled = true
@@ -761,6 +787,22 @@ private fun PortalWebContainer(
                                 )
                                 AdaptiveDisplayManager.pushTelemetryToWebView(view, telemetry)
                             }
+
+                            override fun onRenderProcessGone(
+                                view: WebView?,
+                                detail: RenderProcessGoneDetail?
+                            ): Boolean {
+                                Log.e(
+                                    "MainActivity",
+                                    "WebView render process gone (didCrash=${detail?.didCrash()}); reloading activity."
+                                )
+                                activity.runOnUiThread {
+                                    if (!activity.isFinishing && !activity.isDestroyed) {
+                                        activity.recreate()
+                                    }
+                                }
+                                return true
+                            }
                         }
 
                         webChromeClient = object : WebChromeClient() {
@@ -910,7 +952,12 @@ private fun openAssetResponse(
     return try {
         val stream = context.assets.open(assetPath)
         val mime = guessMimeType(assetPath)
-        val headers = mapOf("Access-Control-Allow-Origin" to "*")
+        val headers = mapOf(
+            "Access-Control-Allow-Origin" to "*",
+            "Cache-Control" to "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma" to "no-cache",
+            "Expires" to "0"
+        )
         WebResourceResponse(mime, "UTF-8", 200, "OK", headers, stream)
     } catch (_: IOException) {
         null

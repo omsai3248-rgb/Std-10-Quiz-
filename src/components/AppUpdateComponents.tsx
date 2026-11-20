@@ -122,6 +122,46 @@ export const AppUpdateFooterCard: React.FC<AppUpdateFooterCardProps> = ({
   );
 };
 
+interface UpdateModalErrorBoundaryProps {
+  onErrorFallback?: () => void;
+  children: React.ReactNode;
+}
+
+interface UpdateModalErrorBoundaryState {
+  hasError: boolean;
+}
+
+export class UpdateModalErrorBoundary extends React.Component<
+  UpdateModalErrorBoundaryProps,
+  UpdateModalErrorBoundaryState
+> {
+  constructor(props: UpdateModalErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError(): UpdateModalErrorBoundaryState {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: unknown, info: React.ErrorInfo): void {
+    console.error('UpdateAvailableModal render error (auto-dismissed to prevent blank screen):', error, info);
+    try {
+      document.body.classList.remove('update-screen-open');
+    } catch {
+      // Ignore
+    }
+    this.props.onErrorFallback?.();
+  }
+
+  render(): React.ReactNode {
+    if (this.state.hasError) {
+      return null;
+    }
+    return this.props.children;
+  }
+}
+
 interface UpdateAvailableModalProps {
   release: GitHubReleaseInfo;
   currentVersionName: string;
@@ -141,21 +181,35 @@ export const UpdateAvailableModal: React.FC<UpdateAvailableModalProps> = ({
 }) => {
   const { t, lang } = useTranslation();
   const { isTvOrSmartBoard } = useAdaptiveDisplay();
-  const isMandatory = Boolean(release.isMandatory);
+  const safeVersionName = String(release?.versionName ?? '').trim() || currentVersionName;
+  const safeVersionCode =
+    typeof release?.versionCode === 'number' && Number.isFinite(release.versionCode) && release.versionCode > 0
+      ? release.versionCode
+      : undefined;
+  const safeReleaseTitle = String(release?.releaseTitle ?? '').trim() || `Quick Quiz v${safeVersionName}`;
+  const safeReleaseNotes = String(release?.releaseNotes ?? '').trim();
+  const safeApkDownloadUrl = String(release?.apkDownloadUrl ?? '').trim();
+  const safeApkSizeBytes = Number(release?.apkSizeBytes ?? 0) || 0;
+  const safeHistory = Array.isArray(updateHistory)
+    ? updateHistory.filter((item): item is UpdateNotificationRecord => Boolean(item && typeof item === 'object'))
+    : [];
+  const isMandatory = Boolean(release?.isMandatory);
   const isNative = hasNativeFirebaseBridge();
-  const isWebSwUpdate = release.source === 'web_sw';
+  const isWebSwUpdate = release?.source === 'web_sw';
   const [progressState, setProgressState] = useState<AppUpdateProgressEvent>({
     status: 'idle',
     progressPercent: 0,
     bytesDownloaded: 0,
-    totalBytes: release.apkSizeBytes || 0,
+    totalBytes: safeApkSizeBytes,
     message: '',
   });
 
   useEffect(() => {
     if (!isNative) return undefined;
     return subscribeNativeAppUpdateProgress((evt) => {
-      setProgressState(evt);
+      if (evt && typeof evt === 'object') {
+        setProgressState(evt);
+      }
     });
   }, [isNative]);
 
@@ -192,7 +246,7 @@ export const UpdateAvailableModal: React.FC<UpdateAvailableModalProps> = ({
       return;
     }
 
-    if (!release.apkDownloadUrl) {
+    if (!safeApkDownloadUrl) {
       onNotify?.(
         lang === 'en'
           ? 'Update APK URL is unavailable. Please contact Admin.'
@@ -205,8 +259,8 @@ export const UpdateAvailableModal: React.FC<UpdateAvailableModalProps> = ({
     if (!isNative) {
       // Browser fallback downloads the APK directly without third-party site branding
       const link = document.createElement('a');
-      link.href = release.apkDownloadUrl;
-      link.download = `std10quiz_v${release.versionName}.apk`;
+      link.href = safeApkDownloadUrl;
+      link.download = `std10quiz_v${safeVersionName}.apk`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -217,18 +271,18 @@ export const UpdateAvailableModal: React.FC<UpdateAvailableModalProps> = ({
       status: 'downloading',
       progressPercent: 0,
       bytesDownloaded: 0,
-      totalBytes: release.apkSizeBytes || 0,
+      totalBytes: safeApkSizeBytes,
       message: '',
     });
 
     try {
       const result = await downloadAndInstallNativeAppUpdate({
-        apkDownloadUrl: release.apkDownloadUrl,
-        versionName: release.versionName,
-        versionCode: release.versionCode ?? currentVersionCode + 1,
-        apkSizeBytes: release.apkSizeBytes,
-        apkSha256: release.apkSha256,
-        signingCertSha256: release.signingCertSha256,
+        apkDownloadUrl: safeApkDownloadUrl,
+        versionName: safeVersionName,
+        versionCode: safeVersionCode ?? currentVersionCode + 1,
+        apkSizeBytes: safeApkSizeBytes,
+        apkSha256: release?.apkSha256,
+        signingCertSha256: release?.signingCertSha256,
       });
       if (result?.status === 'opened_browser') {
         onNotify?.(
@@ -239,8 +293,8 @@ export const UpdateAvailableModal: React.FC<UpdateAvailableModalProps> = ({
         setProgressState({
           status: 'idle',
           progressPercent: 100,
-          bytesDownloaded: release.apkSizeBytes || 0,
-          totalBytes: release.apkSizeBytes || 0,
+          bytesDownloaded: safeApkSizeBytes,
+          totalBytes: safeApkSizeBytes,
           message: '',
         });
       }
@@ -279,7 +333,7 @@ export const UpdateAvailableModal: React.FC<UpdateAvailableModalProps> = ({
 
   const totalMbText = isWebSwUpdate
     ? ''
-    : formatApkSizeMb(progressState.totalBytes || release.apkSizeBytes);
+    : formatApkSizeMb(progressState.totalBytes || safeApkSizeBytes);
   const downloadedMbText = isWebSwUpdate
     ? ''
     : formatApkSizeMb(progressState.bytesDownloaded);
@@ -317,13 +371,7 @@ export const UpdateAvailableModal: React.FC<UpdateAvailableModalProps> = ({
     >
       {/* Top Compact Safe-Area Header */}
       <header className="update-screen-header bg-white/95 dark:bg-[#1E293B]/95 border-b border-[#E2E8F0] dark:border-[#334155] shadow-xs">
-        <div
-          className="w-full mx-auto flex items-center justify-between gap-2.5 sm:gap-4"
-          style={{
-            maxWidth: 'clamp(320px, 96vw, 1180px)',
-            padding: 'clamp(0.45rem, 1.3dvh, 0.9rem) clamp(0.75rem, 3vw, 2rem)',
-          }}
-        >
+        <div className="update-screen-header-inner w-full mx-auto flex items-center justify-between gap-2.5 sm:gap-4">
           <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1">
             <img
               src="/images/ic_app_logo.png"
@@ -369,7 +417,7 @@ export const UpdateAvailableModal: React.FC<UpdateAvailableModalProps> = ({
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
-            {updateHistory.length > 0 && (
+            {safeHistory.length > 0 && (
               <button
                 type="button"
                 data-testid="update_history_toggle_btn"
@@ -383,7 +431,7 @@ export const UpdateAvailableModal: React.FC<UpdateAvailableModalProps> = ({
               >
                 <Bell className="h-4 w-4 shrink-0" />
                 <span className="hidden sm:inline">{t.appUpdateHistoryTitle}</span>
-                <span className="tabular-nums">({Math.min(updateHistory.length, 5)})</span>
+                <span className="tabular-nums">({Math.min(safeHistory.length, 5)})</span>
               </button>
             )}
 
@@ -422,8 +470,8 @@ export const UpdateAvailableModal: React.FC<UpdateAvailableModalProps> = ({
                   {t.appUpdateNewVersionLabel}
                 </p>
                 <p className="update-screen-version-num font-extrabold text-[#047857] dark:text-[#6EE7B7] tabular-nums mt-0.5 break-words">
-                  v{release.versionName}
-                  {release.versionCode ? ` (${release.versionCode})` : ''}
+                  v{safeVersionName}
+                  {safeVersionCode ? ` (${safeVersionCode})` : ''}
                 </p>
               </div>
             </div>
@@ -436,7 +484,7 @@ export const UpdateAvailableModal: React.FC<UpdateAvailableModalProps> = ({
 
             {/* Release Details / Optional History Swapper (Auto-fits remaining viewport height) */}
             <div className="update-screen-notes-card rounded-2xl bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] px-3.5 py-3 sm:px-5 sm:py-4 shadow-xs">
-              {showHistory && updateHistory.length > 0 ? (
+              {showHistory && safeHistory.length > 0 ? (
                 <>
                   <div className="shrink-0 flex items-center justify-between gap-2 pb-2 mb-2 border-b border-[#E2E8F0] dark:border-[#334155]">
                     <h3 className="update-screen-text font-extrabold text-[#0F172A] dark:text-[#F8FAFC]">
@@ -451,21 +499,21 @@ export const UpdateAvailableModal: React.FC<UpdateAvailableModalProps> = ({
                     </button>
                   </div>
                   <div className="update-screen-notes-body space-y-2 pr-1">
-                    {updateHistory.slice(0, 5).map((item) => (
+                    {safeHistory.slice(0, 5).map((item, idx) => (
                       <div
-                        key={item.id}
+                        key={item.id || `hist_${idx}`}
                         className="rounded-xl bg-slate-50 dark:bg-[#0F172A] border border-[#E2E8F0] dark:border-[#334155] p-2.5 text-xs sm:text-sm space-y-0.5"
                       >
                         <div className="flex flex-wrap items-center justify-between gap-1.5">
                           <p className="font-bold text-[#0F172A] dark:text-[#F8FAFC] whitespace-normal break-words">
-                            {item.title} (v{item.versionName})
+                            {item.title || `v${item.versionName || safeVersionName}`} (v{item.versionName || safeVersionName})
                           </p>
                           <span className="text-[11px] text-[#64748B] dark:text-[#94A3B8] shrink-0">
-                            {formatTimestampLabel(item.createdAt)}
+                            {formatTimestampLabel(item.createdAt, lang)}
                           </span>
                         </div>
                         <p className="text-[#475569] dark:text-[#CBD5E1] whitespace-pre-line break-words leading-snug">
-                          {item.body}
+                          {item.body || ''}
                         </p>
                       </div>
                     ))}
@@ -473,13 +521,13 @@ export const UpdateAvailableModal: React.FC<UpdateAvailableModalProps> = ({
                 </>
               ) : (
                 <>
-                  {release.releaseTitle && (
+                  {safeReleaseTitle && (
                     <h3 className="shrink-0 update-screen-text font-extrabold text-[#0F172A] dark:text-[#F8FAFC] whitespace-normal break-words mb-1">
-                      {release.releaseTitle}
+                      {safeReleaseTitle}
                     </h3>
                   )}
                   <div className="update-screen-notes-body update-screen-text text-[#334155] dark:text-[#CBD5E1] whitespace-pre-wrap break-words pr-1">
-                    {release.releaseNotes || release.releaseTitle}
+                    {safeReleaseNotes || safeReleaseTitle}
                   </div>
                 </>
               )}

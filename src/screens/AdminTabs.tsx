@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
+  AlertTriangle,
+  ArrowLeft,
   BellRing,
   Check,
   Copy,
@@ -7,8 +9,12 @@ import {
   FileSpreadsheet,
   FileText,
   Filter,
+  Folder,
+  FolderOpen,
   Image as ImageIcon,
   KeyRound,
+  Layers,
+  Loader2,
   PlusCircle,
   Search,
   Send,
@@ -23,8 +29,15 @@ import { useAdaptiveDisplay } from '../context/AdaptiveDisplayContext';
 import { useTranslation } from '../i18n/translations';
 import type { DirectMobileCodeResult } from '../services/quizRepository';
 import {
+  groupAccessCodesIntoBatchFolders,
+  isAccessCodeUsed,
+  suggestNextBatchName,
+  type CodeBatchFolder,
+} from '../utils/batchCodeUtils';
+import {
   ALL_SUBJECT_IDS,
   displayPaymentTransactionRef,
+  getDefaultPrefix,
   getFixedPlanPrice,
   getSubjectDisplayName,
   resolveCodeSubjectId,
@@ -703,7 +716,10 @@ const PaymentRequestCard: React.FC<{
   );
 };
 
-/* --- Tab 2: Permanent All Codes Tab --- */
+/* --- Tab 2: Permanent All Codes Tab (Batch Folders + PDF + 1-Click Delete Unused) --- */
+const BULK_COUNT_PRESETS = [50, 100, 200, 400, 500] as const;
+const INITIAL_VISIBLE_CODES = 60;
+
 export const AdminAllCodesTab: React.FC<{
   accessCodes: AccessCode[];
   students: StudentProfile[];
@@ -712,13 +728,19 @@ export const AdminAllCodesTab: React.FC<{
   hasMore?: boolean;
   isLoadingMore?: boolean;
   onLoadMore?: () => void;
-  onGenerateBulkCodes: (count: number, batchName: string, subjectId: string) => void;
+  onGenerateBulkCodes: (
+    count: number,
+    batchName: string,
+    subjectId: string
+  ) => Promise<{ batchName: string; codes: string[] } | null> | void;
   onGenerateDirectCode: (params: {
     mobileNumber: string;
     userName?: string;
     subjectId: string;
   }) => Promise<DirectMobileCodeResult>;
   onDeleteCode: (item: AccessCode) => void;
+  onDeleteUnusedCodes?: (batchName?: string) => Promise<number>;
+  onFetchBatchCodes?: (batchName: string) => Promise<AccessCode[]>;
   onNotify?: (message: string, isError?: boolean) => void;
 }> = ({
   accessCodes,
@@ -731,28 +753,86 @@ export const AdminAllCodesTab: React.FC<{
   onGenerateBulkCodes,
   onGenerateDirectCode,
   onDeleteCode,
+  onDeleteUnusedCodes,
+  onFetchBatchCodes,
   onNotify,
 }) => {
   const { lang, t } = useTranslation();
   const { isLargeScreen } = useAdaptiveDisplay();
+
+  const [viewMode, setViewMode] = useState<'folders' | 'all'>('folders');
+  const [selectedFolderKey, setSelectedFolderKey] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'unused' | 'used'>('all');
-  const [showGenerator, setShowGenerator] = useState(false);
+  const [visibleLimit, setVisibleLimit] = useState(INITIAL_VISIBLE_CODES);
 
+  const [showGenerator, setShowGenerator] = useState(false);
   const [genSubjectId, setGenSubjectId] = useState('all');
-  const [countInputText, setCountInputText] = useState('10');
-  const [batchName, setBatchName] = useState('Book Batch 1');
+  const [countInputText, setCountInputText] = useState('400');
+  const [batchName, setBatchName] = useState('Batch 1');
+  const [hasCustomBatchName, setHasCustomBatchName] = useState(false);
+
+  const [justCreatedBatch, setJustCreatedBatch] = useState<{
+    batchName: string;
+    count: number;
+  } | null>(null);
+  const [exportingPdfKey, setExportingPdfKey] = useState<string | null>(null);
+  const [loadingFolderKey, setLoadingFolderKey] = useState<string | null>(null);
+  const [pendingDeleteUnused, setPendingDeleteUnused] = useState<{
+    batchKey?: string;
+    label: string;
+    unusedCount: number;
+  } | null>(null);
+  const [isDeletingUnused, setIsDeletingUnused] = useState(false);
+
+  const batchFolders = useMemo(
+    () => groupAccessCodesIntoBatchFolders(accessCodes, lang),
+    [accessCodes, lang]
+  );
+
+  const suggestedNextBatch = useMemo(() => suggestNextBatchName(batchFolders), [batchFolders]);
+
+  useEffect(() => {
+    if (!hasCustomBatchName) {
+      setBatchName(suggestedNextBatch);
+    }
+  }, [suggestedNextBatch, hasCustomBatchName]);
+
+  const activeFolder: CodeBatchFolder | null = useMemo(() => {
+    if (!selectedFolderKey) return null;
+    return batchFolders.find((f) => f.folderKey === selectedFolderKey) ?? null;
+  }, [batchFolders, selectedFolderKey]);
+
+  // If an opened folder becomes empty (e.g., all unused codes deleted), return to folder list gracefully
+  useEffect(() => {
+    if (selectedFolderKey && !activeFolder) {
+      setSelectedFolderKey(null);
+    }
+  }, [selectedFolderKey, activeFolder]);
+
+  // Reset rendered card window when changing filters or folder
+  useEffect(() => {
+    setVisibleLimit(INITIAL_VISIBLE_CODES);
+  }, [selectedFolderKey, viewMode, searchQuery, statusFilter]);
+
+  const scopedCodes = useMemo(() => {
+    if (viewMode === 'folders' && activeFolder) {
+      return activeFolder.codes;
+    }
+    return accessCodes;
+  }, [viewMode, activeFolder, accessCodes]);
 
   const filteredCodes = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    return accessCodes.filter((item) => {
-      const isUsed = item.status === 'used' || item.isUsed;
+    return scopedCodes.filter((item) => {
+      const isUsed = isAccessCodeUsed(item);
       const matchesStatus =
         statusFilter === 'unused' ? !isUsed : statusFilter === 'used' ? isUsed : true;
       if (!matchesStatus) return false;
       if (!q) return true;
       return (
         item.code.toLowerCase().includes(q) ||
+        item.batchName.toLowerCase().includes(q) ||
         item.userName.toLowerCase().includes(q) ||
         item.mobileNumber.includes(q) ||
         item.requestId.toLowerCase().includes(q) ||
@@ -760,13 +840,19 @@ export const AdminAllCodesTab: React.FC<{
         item.usedByMobile.includes(q)
       );
     });
-  }, [accessCodes, searchQuery, statusFilter]);
+  }, [scopedCodes, searchQuery, statusFilter]);
 
-  const unusedCount = useMemo(
-    () => accessCodes.filter((c) => c.status !== 'used' && !c.isUsed).length,
+  const totalUnusedCount = useMemo(
+    () => accessCodes.filter((c) => !isAccessCodeUsed(c)).length,
     [accessCodes]
   );
-  const usedCount = accessCodes.length - unusedCount;
+  const totalUsedCount = accessCodes.length - totalUnusedCount;
+
+  const scopedUnusedCount = useMemo(
+    () => scopedCodes.filter((c) => !isAccessCodeUsed(c)).length,
+    [scopedCodes]
+  );
+  const scopedUsedCount = scopedCodes.length - scopedUnusedCount;
 
   const copyText = async (text: string, msg: string) => {
     try {
@@ -776,6 +862,96 @@ export const AdminAllCodesTab: React.FC<{
       onNotify?.(text);
     }
   };
+
+  const openBatchFolder = async (folder: CodeBatchFolder) => {
+    setViewMode('folders');
+    setSelectedFolderKey(folder.folderKey);
+    setSearchQuery('');
+    setStatusFilter('all');
+    if (!folder.isDirectOrUntagged && onFetchBatchCodes) {
+      setLoadingFolderKey(folder.folderKey);
+      try {
+        await onFetchBatchCodes(folder.folderKey);
+      } finally {
+        setLoadingFolderKey(null);
+      }
+    }
+  };
+
+  const handleDownloadBatchPdf = async (
+    folder: CodeBatchFolder,
+    onlyUnused = false
+  ) => {
+    const pdfKey = `${folder.folderKey}_${onlyUnused ? 'unused' : 'all'}`;
+    setExportingPdfKey(pdfKey);
+    try {
+      let sourceCodes = folder.codes;
+      if (!folder.isDirectOrUntagged && onFetchBatchCodes) {
+        const fetched = await onFetchBatchCodes(folder.folderKey);
+        if (fetched.length > sourceCodes.length) {
+          sourceCodes = fetched;
+        }
+      }
+      const targetCodes = onlyUnused
+        ? sourceCodes.filter((c) => !isAccessCodeUsed(c))
+        : sourceCodes;
+
+      if (targetCodes.length === 0) {
+        onNotify?.(
+          lang === 'en'
+            ? 'No codes available in this batch for PDF.'
+            : 'આ બેચમાં PDF માટે કોઈ કોડ ઉપલબ્ધ નથી.',
+          true
+        );
+        return;
+      }
+
+      const { exportAccessCodesA4Pdf } = await import('../services/pdfGenerator');
+      const subtitle = onlyUnused ? `${folder.displayName} Unused` : folder.displayName;
+      exportAccessCodesA4Pdf(targetCodes, subtitle);
+      onNotify?.(
+        lang === 'en'
+          ? `PDF ready for "${folder.displayName}" (${targetCodes.length} codes)`
+          : `"${folder.displayName}" ની PDF તૈયાર છે (${targetCodes.length} કોડ)`
+      );
+    } catch (err) {
+      onNotify?.(err instanceof Error ? err.message : 'PDF error', true);
+    } finally {
+      setExportingPdfKey(null);
+    }
+  };
+
+  const handleBulkGenerateSubmit = async () => {
+    const parsedCount = Number.parseInt(countInputText, 10) || 10;
+    const clampedCount = Math.min(500, Math.max(1, parsedCount));
+    const effectiveBatch = (batchName.trim() || suggestedNextBatch).slice(0, 60);
+    const result = await onGenerateBulkCodes(clampedCount, effectiveBatch, genSubjectId);
+    if (result && result.codes.length > 0) {
+      setViewMode('folders');
+      setSelectedFolderKey(result.batchName);
+      setSearchQuery('');
+      setStatusFilter('all');
+      setShowGenerator(false);
+      setHasCustomBatchName(false);
+      setJustCreatedBatch({ batchName: result.batchName, count: result.codes.length });
+    }
+  };
+
+  const handleConfirmDeleteUnused = async () => {
+    if (!pendingDeleteUnused || !onDeleteUnusedCodes) return;
+    setIsDeletingUnused(true);
+    try {
+      await onDeleteUnusedCodes(pendingDeleteUnused.batchKey);
+      setPendingDeleteUnused(null);
+    } finally {
+      setIsDeletingUnused(false);
+    }
+  };
+
+  const visibleCodes = useMemo(
+    () => filteredCodes.slice(0, visibleLimit),
+    [filteredCodes, visibleLimit]
+  );
 
   return (
     <div
@@ -788,274 +964,885 @@ export const AdminAllCodesTab: React.FC<{
         onNotify={onNotify}
       />
 
-      <div className="rounded-2xl bg-[#DBEAFE] dark:bg-[#1E3A5F] p-3.5 flex flex-wrap items-center justify-between gap-2 text-[#1E3A8A] dark:text-[#DBEAFE]">
+      {/* Bulk Generate + 1-Click Delete Unused Header Bar */}
+      <div className="rounded-2xl bg-[#DBEAFE] dark:bg-[#1E3A5F] p-3.5 flex flex-wrap items-center justify-between gap-2.5 text-[#1E3A8A] dark:text-[#DBEAFE]">
         <div className="flex items-center gap-2 text-xs font-bold">
           <ShieldCheck className="h-4.5 w-4.5 shrink-0" />
           <span>{t.permanentCodesNote}</span>
         </div>
-        <button
-          type="button"
-          onClick={() => setShowGenerator((prev) => !prev)}
-          className="rounded-xl bg-[#1E3A8A] text-white px-3 py-1.5 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
-        >
-          <PlusCircle className="h-3.5 w-3.5" />
-          <span>Bulk Generate</span>
-        </button>
-      </div>
-
-      {showGenerator && (
-        <div className="rounded-2xl bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] p-4 space-y-3">
-          <div className="flex flex-wrap gap-1.5">
-            {SUBJECT_LIST.map((subId) => (
-              <button
-                key={subId}
-                type="button"
-                onClick={() => setGenSubjectId(subId)}
-                className={`rounded-lg px-2.5 py-1 text-xs font-bold border cursor-pointer ${
-                  genSubjectId === subId
-                    ? 'bg-[#1E3A8A] text-white border-[#1E3A8A]'
-                    : 'bg-[#FAF9F5] dark:bg-[#0F172A] border-[#CBD5E1] dark:border-[#334155]'
-                }`}
-              >
-                {getSubjectDisplayName(subId, lang)}
-              </button>
-            ))}
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-            <input
-              type="text"
-              inputMode="numeric"
-              maxLength={3}
-              value={countInputText}
-              onChange={(e) => setCountInputText(e.target.value.replace(/\D/g, '').slice(0, 3))}
-              placeholder="Count (1-500)"
-              className="h-10 rounded-xl border border-[#CBD5E1] dark:border-[#334155] bg-[#FAF9F5] dark:bg-[#0F172A] px-3 text-sm font-bold outline-none"
-            />
-            <input
-              type="text"
-              maxLength={40}
-              value={batchName}
-              onChange={(e) => setBatchName(e.target.value)}
-              placeholder="Batch Name"
-              className="h-10 rounded-xl border border-[#CBD5E1] dark:border-[#334155] bg-[#FAF9F5] dark:bg-[#0F172A] px-3 text-sm outline-none"
-            />
-          </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {onDeleteUnusedCodes && (
+            <button
+              type="button"
+              data-testid="delete_all_unused_codes_btn"
+              disabled={isBusy || isDeletingUnused || totalUnusedCount === 0}
+              onClick={() =>
+                setPendingDeleteUnused({
+                  batchKey: undefined,
+                  label:
+                    lang === 'en' ? 'All Batch Folders' : 'બધા બેચ ફોલ્ડર્સ',
+                  unusedCount: totalUnusedCount,
+                })
+              }
+              className="min-h-[40px] rounded-xl bg-[#DC2626] hover:bg-[#B91C1C] text-white px-3 py-1.5 text-xs font-extrabold flex items-center gap-1.5 disabled:opacity-45 cursor-pointer transition-colors"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              <span>
+                {lang === 'en'
+                  ? `Delete All Unused (${totalUnusedCount})`
+                  : `બધા ન વપરાયેલા ડિલીટ (${totalUnusedCount})`}
+              </span>
+            </button>
+          )}
           <button
             type="button"
-            disabled={isBusy}
-            onClick={() => {
-              const cnt = Number.parseInt(countInputText, 10) || 10;
-              onGenerateBulkCodes(Math.min(500, Math.max(1, cnt)), batchName, genSubjectId);
-            }}
-            className="w-full h-10 rounded-xl bg-[#1E3A8A] text-white text-xs font-bold cursor-pointer"
+            data-testid="toggle_bulk_generate_btn"
+            onClick={() => setShowGenerator((prev) => !prev)}
+            className="min-h-[40px] rounded-xl bg-[#1E3A8A] hover:bg-[#172554] text-white px-3.5 py-1.5 text-xs font-extrabold flex items-center gap-1.5 cursor-pointer transition-colors"
           >
-            Generate {Number.parseInt(countInputText, 10) || 10} Permanent 8-Char Codes
+            <PlusCircle className="h-3.5 w-3.5" />
+            <span>{lang === 'en' ? 'Bulk Generate' : 'બલ્ક કોડ જનરેટ'}</span>
           </button>
+        </div>
+      </div>
+
+      {/* Bulk Code Generator Panel */}
+      {showGenerator && (
+        <div
+          data-testid="bulk_code_generator_panel"
+          className="rounded-2xl bg-white dark:bg-[#1E293B] border-2 border-[#1E3A8A]/25 dark:border-[#3B82F6]/35 p-4 space-y-3.5 shadow-sm"
+        >
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Folder className="h-4.5 w-4.5 text-[#1E3A8A] dark:text-[#93C5FD]" />
+              <h3 className="text-sm font-extrabold text-[#0F172A] dark:text-[#F8FAFC]">
+                {lang === 'en'
+                  ? 'Generate New Code Batch Folder'
+                  : 'નવું બેચ ફોલ્ડર બનાવો (Bulk Generate)'}
+              </h3>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowGenerator(false)}
+              className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+              aria-label="Close"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+
+          {/* Subject Pills */}
+          <div className="space-y-1">
+            <p className="text-[11px] font-bold text-[#475569] dark:text-[#94A3B8]">
+              {lang === 'en' ? 'Select Subject Scope' : 'વિષય પસંદ કરો'}
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {SUBJECT_LIST.map((subId) => (
+                <button
+                  key={subId}
+                  type="button"
+                  onClick={() => setGenSubjectId(subId)}
+                  className={`rounded-lg px-2.5 py-1.5 text-xs font-bold border cursor-pointer transition-colors ${
+                    genSubjectId === subId
+                      ? 'bg-[#1E3A8A] text-white border-[#1E3A8A]'
+                      : 'bg-[#FAF9F5] dark:bg-[#0F172A] border-[#CBD5E1] dark:border-[#334155]'
+                  }`}
+                >
+                  {getSubjectDisplayName(subId, lang)} ({getDefaultPrefix(subId)})
+                </button>
+              ))}
+            </div>
+            <p className="text-[11px] font-bold text-[#1E3A8A] dark:text-[#93C5FD] font-mono">
+              {lang === 'en'
+                ? `Code format: ${getDefaultPrefix(genSubjectId)} + 5 random chars (e.g. ${getDefaultPrefix(genSubjectId)}XXXXX)`
+                : `કોડ ફોર્મેટ: ${getDefaultPrefix(genSubjectId)} + 5 રેન્ડમ અક્ષર (દા.ત. ${getDefaultPrefix(genSubjectId)}XXXXX)`}
+            </p>
+          </div>
+
+          {/* Quick Count Presets */}
+          <div className="space-y-1.5">
+            <p className="text-[11px] font-bold text-[#475569] dark:text-[#94A3B8]">
+              {lang === 'en' ? 'Quick Count (1–500)' : 'કેટલા કોડ બનાવવા? (1–500)'}
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {BULK_COUNT_PRESETS.map((preset) => {
+                const active = Number.parseInt(countInputText, 10) === preset;
+                return (
+                  <button
+                    key={preset}
+                    type="button"
+                    onClick={() => setCountInputText(String(preset))}
+                    className={`rounded-lg px-3 py-1.5 text-xs font-extrabold border cursor-pointer transition-colors ${
+                      active
+                        ? 'bg-[#047857] text-white border-[#047857]'
+                        : 'bg-[#FAF9F5] dark:bg-[#0F172A] border-[#CBD5E1] dark:border-[#334155]'
+                    }`}
+                  >
+                    {preset} {lang === 'en' ? 'Codes' : 'કોડ'}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            <div className="space-y-1">
+              <label className="text-[11px] font-bold text-[#475569] dark:text-[#94A3B8]">
+                {lang === 'en' ? 'Number of Codes (1-500)' : 'કોડની સંખ્યા (1-500)'}
+              </label>
+              <input
+                type="text"
+                inputMode="numeric"
+                maxLength={3}
+                data-testid="bulk_count_input"
+                value={countInputText}
+                onChange={(e) => setCountInputText(e.target.value.replace(/\D/g, '').slice(0, 3))}
+                placeholder="400"
+                className="w-full h-11 rounded-xl border border-[#CBD5E1] dark:border-[#334155] bg-[#FAF9F5] dark:bg-[#0F172A] px-3 text-sm font-extrabold outline-none"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-[11px] font-bold text-[#475569] dark:text-[#94A3B8]">
+                {lang === 'en' ? 'Batch Folder Name (e.g. Batch 1)' : 'બેચ ફોલ્ડરનું નામ (દા.ત. Batch 1)'}
+              </label>
+              <input
+                type="text"
+                maxLength={60}
+                data-testid="bulk_batch_name_input"
+                value={batchName}
+                onChange={(e) => {
+                  setHasCustomBatchName(true);
+                  setBatchName(e.target.value);
+                }}
+                placeholder="Batch 1"
+                className="w-full h-11 rounded-xl border border-[#CBD5E1] dark:border-[#334155] bg-[#FAF9F5] dark:bg-[#0F172A] px-3 text-sm font-bold outline-none"
+              />
+            </div>
+          </div>
+
+          <button
+            type="button"
+            data-testid="bulk_generate_submit_btn"
+            disabled={isBusy}
+            onClick={() => void handleBulkGenerateSubmit()}
+            className="w-full min-h-[46px] rounded-xl bg-[#1E3A8A] hover:bg-[#172554] text-white text-xs sm:text-sm font-extrabold flex items-center justify-center gap-2 disabled:opacity-60 cursor-pointer transition-colors"
+          >
+            {isBusy ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <PlusCircle className="h-4 w-4" />
+            )}
+            <span>
+              {lang === 'en'
+                ? `Generate ${Math.min(500, Math.max(1, Number.parseInt(countInputText, 10) || 10))} Codes into "${batchName.trim() || suggestedNextBatch}"`
+                : `"${batchName.trim() || suggestedNextBatch}" ફોલ્ડરમાં ${Math.min(500, Math.max(1, Number.parseInt(countInputText, 10) || 10))} નવા કોડ બનાવો`}
+            </span>
+          </button>
+
           {lastGeneratedBatch.length > 0 && (
             <button
               type="button"
               onClick={() =>
                 void copyText(lastGeneratedBatch.join('\n'), `Copied ${lastGeneratedBatch.length} codes`)
               }
-              className="w-full h-9 rounded-xl border border-[#1E3A8A] text-xs font-bold cursor-pointer"
+              className="w-full h-10 rounded-xl border border-[#1E3A8A] text-[#1E3A8A] dark:text-[#93C5FD] text-xs font-bold cursor-pointer"
             >
-              Copy Last Generated ({lastGeneratedBatch.length})
+              {lang === 'en'
+                ? `Copy Last Generated (${lastGeneratedBatch.length})`
+                : `છેલ્લે બનાવેલા કોડ કોપી કરો (${lastGeneratedBatch.length})`}
             </button>
           )}
         </div>
       )}
 
-      {/* Search + Export Controls */}
-      <div className="flex flex-col sm:flex-row gap-2.5">
-        <div className="flex-1 flex items-center rounded-xl border border-[#CBD5E1] dark:border-[#334155] bg-white dark:bg-[#1E293B] px-3.5 h-11">
-          <Search className="h-4 w-4 text-slate-400 mr-2 shrink-0" />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder={t.searchCodesPlaceholder}
-            className="w-full bg-transparent text-sm outline-none"
-          />
+      {/* Just-Generated Quick PDF Banner */}
+      {justCreatedBatch && activeFolder && activeFolder.folderKey === justCreatedBatch.batchName && (
+        <div
+          data-testid="just_created_batch_banner"
+          className="rounded-2xl bg-[#ECFDF5] dark:bg-[#064E3B]/45 border border-[#10B981]/50 p-3.5 flex flex-wrap items-center justify-between gap-3"
+        >
+          <div className="space-y-0.5">
+            <p className="text-xs sm:text-sm font-extrabold text-[#065F46] dark:text-[#A7F3D0]">
+              {lang === 'en'
+                ? `Folder "${justCreatedBatch.batchName}" ready with ${justCreatedBatch.count} codes!`
+                : `"${justCreatedBatch.batchName}" ફોલ્ડરમાં ${justCreatedBatch.count} નવા કોડ તૈયાર થઈ ગયા!`}
+            </p>
+            <p className="text-[11px] font-semibold text-[#047857] dark:text-[#6EE7B7]">
+              {lang === 'en'
+                ? 'Tap below to download the printable A4 PDF for this batch.'
+                : 'નીચે ક્લિક કરીને આ બેચની પ્રિન્ટ-રેડી A4 PDF ડાઉનલોડ કરો.'}
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={exportingPdfKey !== null}
+              onClick={() => void handleDownloadBatchPdf(activeFolder, false)}
+              className="min-h-[42px] px-4 rounded-xl bg-[#047857] hover:bg-[#065F46] text-white text-xs font-extrabold flex items-center gap-1.5 cursor-pointer transition-colors"
+            >
+              {exportingPdfKey === `${activeFolder.folderKey}_all` ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Download className="h-4 w-4" />
+              )}
+              <span>
+                {lang === 'en'
+                  ? `Download Batch PDF (${activeFolder.totalCount})`
+                  : `બેચ PDF ડાઉનલોડ (${activeFolder.totalCount})`}
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setJustCreatedBatch(null)}
+              className="p-2 rounded-lg text-[#065F46] dark:text-[#A7F3D0] hover:bg-emerald-200/40 cursor-pointer"
+              aria-label="Dismiss"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         </div>
+      )}
 
-        <div className="flex gap-2 shrink-0">
+      {/* View Mode Tabs: Batch Folders vs All Codes */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="inline-flex rounded-xl bg-white dark:bg-[#1E293B] border border-[#CBD5E1] dark:border-[#334155] p-1 gap-1">
           <button
             type="button"
-            disabled={filteredCodes.length === 0}
+            data-testid="codes_view_folders_btn"
             onClick={() => {
-              exportAccessCodesToCsv(filteredCodes, `codes_${statusFilter}`);
-              onNotify?.(`${t.exportCsvBtn} (${filteredCodes.length})`);
+              setViewMode('folders');
+              setSelectedFolderKey(null);
             }}
-            className="h-11 px-3.5 rounded-xl bg-[#047857] hover:bg-[#065F46] text-white text-xs font-bold flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
-          >
-            <FileSpreadsheet className="h-4 w-4" />
-            <span>{t.exportCsvBtn}</span>
-          </button>
-
-          <button
-            type="button"
-            disabled={filteredCodes.length === 0}
-            onClick={async () => {
-              try {
-                const { exportAccessCodesA4Pdf } = await import('../services/pdfGenerator');
-                exportAccessCodesA4Pdf(filteredCodes, statusFilter);
-                onNotify?.(`${t.exportPdfBtn} (${filteredCodes.length})`);
-              } catch (err) {
-                onNotify?.(err instanceof Error ? err.message : 'PDF error', true);
-              }
-            }}
-            className="h-11 px-3.5 rounded-xl border border-[#CBD5E1] dark:border-[#334155] bg-white dark:bg-[#1E293B] text-xs font-bold flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
-          >
-            <FileText className="h-4 w-4" />
-            <span>{t.exportPdfBtn}</span>
-          </button>
-        </div>
-      </div>
-
-      {/* Status Filter Chips */}
-      <div className="flex flex-wrap gap-2">
-        {[
-          { id: 'all' as const, label: `${t.filterAll} (${accessCodes.length})` },
-          { id: 'unused' as const, label: `${t.filterUnused} (${unusedCount})` },
-          { id: 'used' as const, label: `${t.filterUsed} (${usedCount})` },
-        ].map((chip) => (
-          <button
-            key={chip.id}
-            type="button"
-            onClick={() => setStatusFilter(chip.id)}
-            className={`rounded-xl px-3 py-1.5 text-xs font-bold border transition-colors cursor-pointer ${
-              statusFilter === chip.id
-                ? 'bg-[#1E3A8A] text-white border-[#1E3A8A]'
-                : 'bg-white dark:bg-[#1E293B] border-[#CBD5E1] dark:border-[#334155]'
+            className={`min-h-[38px] px-3.5 rounded-lg text-xs font-extrabold flex items-center gap-1.5 cursor-pointer transition-colors ${
+              viewMode === 'folders'
+                ? 'bg-[#1E3A8A] text-white shadow-sm'
+                : 'text-[#334155] dark:text-[#CBD5E1] hover:bg-slate-100 dark:hover:bg-slate-800'
             }`}
           >
-            {chip.label}
+            <Folder className="h-3.5 w-3.5" />
+            <span>
+              {lang === 'en'
+                ? `Batch Folders (${batchFolders.length})`
+                : `બેચ ફોલ્ડર્સ (${batchFolders.length})`}
+            </span>
           </button>
-        ))}
+          <button
+            type="button"
+            data-testid="codes_view_all_btn"
+            onClick={() => {
+              setViewMode('all');
+              setSelectedFolderKey(null);
+            }}
+            className={`min-h-[38px] px-3.5 rounded-lg text-xs font-extrabold flex items-center gap-1.5 cursor-pointer transition-colors ${
+              viewMode === 'all'
+                ? 'bg-[#1E3A8A] text-white shadow-sm'
+                : 'text-[#334155] dark:text-[#CBD5E1] hover:bg-slate-100 dark:hover:bg-slate-800'
+            }`}
+          >
+            <Layers className="h-3.5 w-3.5" />
+            <span>
+              {lang === 'en'
+                ? `All Codes (${accessCodes.length})`
+                : `બધા કોડ (${accessCodes.length})`}
+            </span>
+          </button>
+        </div>
+
+        <div className="flex items-center gap-2 text-[11px] font-bold text-[#475569] dark:text-[#94A3B8]">
+          <span className="rounded-lg bg-[#D1FAE5] dark:bg-[#064E3B] text-[#065F46] dark:text-[#A7F3D0] px-2.5 py-1">
+            {lang === 'en' ? `Unused: ${totalUnusedCount}` : `બાકી: ${totalUnusedCount}`}
+          </span>
+          <span className="rounded-lg bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 px-2.5 py-1">
+            {lang === 'en' ? `Used: ${totalUsedCount}` : `વપરાયેલા: ${totalUsedCount}`}
+          </span>
+        </div>
       </div>
 
-      {filteredCodes.length === 0 ? (
-        <EmptyStateCard message={t.noCodesFound} />
-      ) : (
-        <div
-          className={`grid grid-cols-1 md:grid-cols-2 ${isLargeScreen ? '2xl:grid-cols-3' : ''} gap-3`}
-        >
-          {filteredCodes.map((item) => {
-            const isUsed = item.status === 'used' || item.isUsed;
-            const resolvedSub = resolveCodeSubjectId(item.code, item.batchName, item.subjectId);
-            return (
-              <div
-                key={item.code}
-                className="rounded-2xl bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] p-4 space-y-2 shadow-sm"
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div>
-                    <p className="text-base font-extrabold tracking-widest font-mono text-[#1E3A8A] dark:text-[#93C5FD]">
-                      {item.code}
-                    </p>
-                    <p className="text-[11px] text-[#475569] dark:text-[#94A3B8]">
-                      {formatTimestampLabel(item.createdAt, lang)}
-                      {item.amountRupees > 0 ? ` • ₹${item.amountRupees}` : ''}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <span
-                      className={`rounded-md px-2 py-0.5 text-[11px] font-bold ${
-                        isUsed
-                          ? 'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200'
-                          : 'bg-[#D1FAE5] text-[#064E3B] dark:bg-[#064E3B] dark:text-[#D1FAE5]'
-                      }`}
-                    >
-                      {isUsed ? t.filterUsed : t.filterUnused}
-                    </span>
+      {/* MODE A: BATCH FOLDERS GRID */}
+      {viewMode === 'folders' && !activeFolder && (
+        <div className="space-y-3" data-testid="batch_folders_grid">
+          {batchFolders.length === 0 ? (
+            <EmptyStateCard message={t.noCodesFound} />
+          ) : (
+            <div
+              className={`grid grid-cols-1 md:grid-cols-2 ${isLargeScreen ? '2xl:grid-cols-3' : ''} gap-3.5`}
+            >
+              {batchFolders.map((folder) => {
+                const isExportingThis =
+                  exportingPdfKey === `${folder.folderKey}_all` ||
+                  exportingPdfKey === `${folder.folderKey}_unused`;
+                const isLoadingThis = loadingFolderKey === folder.folderKey;
+                return (
+                  <div
+                    key={folder.folderKey}
+                    data-testid={`batch_folder_card_${folder.folderKey}`}
+                    className="rounded-2xl bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] p-4 shadow-sm hover:border-[#1E3A8A]/45 dark:hover:border-[#60A5FA]/45 transition-colors flex flex-col justify-between gap-3.5"
+                  >
                     <button
                       type="button"
-                      onClick={() => void copyText(item.code, `${t.payUpiCopied}: ${item.code}`)}
-                      className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
-                      aria-label={t.copyCode}
+                      onClick={() => void openBatchFolder(folder)}
+                      className="text-left space-y-2.5 cursor-pointer group"
                     >
-                      <Copy className="h-4 w-4" />
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div
+                            className={`h-11 w-11 rounded-xl flex items-center justify-center shrink-0 ${
+                              folder.isDirectOrUntagged
+                                ? 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+                                : 'bg-[#DBEAFE] dark:bg-[#1E3A5F] text-[#1E3A8A] dark:text-[#93C5FD]'
+                            }`}
+                          >
+                            <Folder className="h-5.5 w-5.5" />
+                          </div>
+                          <div className="min-w-0">
+                            <h4 className="text-sm sm:text-base font-extrabold text-[#0F172A] dark:text-[#F8FAFC] truncate group-hover:text-[#1E3A8A] dark:group-hover:text-[#93C5FD]">
+                              {folder.displayName}
+                            </h4>
+                            <span className="inline-block mt-0.5 rounded-md bg-[#DBEAFE] dark:bg-[#1E3A5F] text-[#1E3A8A] dark:text-[#DBEAFE] px-2 py-0.5 text-[10px] font-bold">
+                              {getSubjectDisplayName(folder.subjectId, lang)}
+                            </span>
+                          </div>
+                        </div>
+                        <span className="rounded-xl bg-slate-100 dark:bg-slate-800 px-2.5 py-1 text-xs font-extrabold tabular-nums shrink-0">
+                          {folder.totalCount} {lang === 'en' ? 'Codes' : 'કોડ'}
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-2 text-center">
+                        <div className="rounded-xl bg-[#F8FAFC] dark:bg-[#0F172A] py-1.5 px-2">
+                          <p className="text-[10px] font-bold text-[#64748B] dark:text-[#94A3B8]">
+                            {lang === 'en' ? 'Total' : 'કુલ'}
+                          </p>
+                          <p className="text-sm font-extrabold tabular-nums">{folder.totalCount}</p>
+                        </div>
+                        <div className="rounded-xl bg-[#ECFDF5] dark:bg-[#064E3B]/40 py-1.5 px-2">
+                          <p className="text-[10px] font-bold text-[#047857] dark:text-[#6EE7B7]">
+                            {lang === 'en' ? 'Unused' : 'બાકી'}
+                          </p>
+                          <p className="text-sm font-extrabold tabular-nums text-[#047857] dark:text-[#6EE7B7]">
+                            {folder.unusedCount}
+                          </p>
+                        </div>
+                        <div className="rounded-xl bg-slate-100 dark:bg-slate-800/80 py-1.5 px-2">
+                          <p className="text-[10px] font-bold text-[#64748B] dark:text-[#94A3B8]">
+                            {lang === 'en' ? 'Used' : 'વપરાયેલા'}
+                          </p>
+                          <p className="text-sm font-extrabold tabular-nums">{folder.usedCount}</p>
+                        </div>
+                      </div>
                     </button>
-                    <button
-                      type="button"
-                      disabled={isBusy}
-                      onClick={() => onDeleteCode(item)}
-                      title={t.deleteBtn}
-                      aria-label={`${t.deleteBtn} ${item.code}`}
-                      className="p-2 rounded-lg text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 disabled:opacity-50 cursor-pointer"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
+
+                    {/* Folder Card Action Buttons */}
+                    <div className="flex flex-wrap gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                      <button
+                        type="button"
+                        disabled={isLoadingThis}
+                        onClick={() => void openBatchFolder(folder)}
+                        className="flex-1 min-h-[42px] px-3 rounded-xl bg-[#1E3A8A] hover:bg-[#172554] text-white text-xs font-extrabold flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+                      >
+                        {isLoadingThis ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <FolderOpen className="h-3.5 w-3.5" />
+                        )}
+                        <span>{lang === 'en' ? 'Open' : 'ખોલો'}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        data-testid={`batch_pdf_btn_${folder.folderKey}`}
+                        disabled={isExportingThis || folder.totalCount === 0}
+                        onClick={() => void handleDownloadBatchPdf(folder, false)}
+                        className="flex-1 min-h-[42px] px-3 rounded-xl bg-[#047857] hover:bg-[#065F46] text-white text-xs font-extrabold flex items-center justify-center gap-1.5 disabled:opacity-50 cursor-pointer transition-colors"
+                      >
+                        {isExportingThis ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <FileText className="h-3.5 w-3.5" />
+                        )}
+                        <span>{lang === 'en' ? 'PDF' : 'PDF ડાઉનલોડ'}</span>
+                      </button>
+
+                      {onDeleteUnusedCodes && folder.unusedCount > 0 && (
+                        <button
+                          type="button"
+                          data-testid={`batch_delete_unused_btn_${folder.folderKey}`}
+                          disabled={isBusy || isDeletingUnused}
+                          onClick={() =>
+                            setPendingDeleteUnused({
+                              batchKey: folder.folderKey,
+                              label: folder.displayName,
+                              unusedCount: folder.unusedCount,
+                            })
+                          }
+                          title={
+                            lang === 'en'
+                              ? `Delete ${folder.unusedCount} unused codes in ${folder.displayName}`
+                              : `${folder.displayName} ના ${folder.unusedCount} ન વપરાયેલા કોડ ડિલીટ કરો`
+                          }
+                          className="min-h-[42px] px-3 rounded-xl border border-red-300 dark:border-red-800 bg-red-50/70 dark:bg-red-950/30 text-red-700 dark:text-red-300 hover:bg-red-100 dark:hover:bg-red-950/60 text-xs font-extrabold flex items-center justify-center gap-1.5 disabled:opacity-50 cursor-pointer transition-colors"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                          <span>
+                            {lang === 'en'
+                              ? `Unused (${folder.unusedCount})`
+                              : `ન વપરાયેલા (${folder.unusedCount})`}
+                          </span>
+                        </button>
+                      )}
+                    </div>
                   </div>
-                </div>
+                );
+              })}
+            </div>
+          )}
 
-                <div className="flex flex-wrap gap-1.5 text-[11px]">
-                  <span className="rounded-md bg-[#DBEAFE] dark:bg-[#1E3A5F] text-[#1E3A8A] dark:text-[#DBEAFE] px-2 py-0.5 font-bold">
-                    {getSubjectDisplayName(resolvedSub, lang)}
-                  </span>
-                  {item.requestId && (
-                    <span className="rounded-md bg-slate-100 dark:bg-slate-800 px-2 py-0.5 font-mono">
-                      {item.requestId}
-                    </span>
-                  )}
-                </div>
+          <LoadMoreButton
+            hasMore={hasMore}
+            isLoadingMore={isLoadingMore}
+            onLoadMore={onLoadMore}
+          />
+        </div>
+      )}
 
-                {item.userName && (
-                  <p className="text-xs text-[#475569] dark:text-[#94A3B8]">
-                    {t.buyerHeader}: <span className="font-bold">{item.userName}</span> (+91{' '}
-                    {item.mobileNumber})
-                  </p>
-                )}
-
-                {!isUsed && /^[0-9]{10}$/.test(item.mobileNumber.replace(/\D/g, '').slice(-10)) && (
+      {/* MODE B: INSIDE AN OPENED BATCH FOLDER OR ALL CODES VIEW */}
+      {(viewMode === 'all' || activeFolder !== null) && (
+        <div className="space-y-3.5">
+          {/* Active Batch Folder Header Card */}
+          {activeFolder && (
+            <div
+              data-testid="opened_batch_folder_header"
+              className="rounded-2xl bg-white dark:bg-[#1E293B] border-2 border-[#1E3A8A]/25 dark:border-[#60A5FA]/35 p-4 space-y-3 shadow-sm"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2.5">
+                <div className="flex items-center gap-2.5 min-w-0">
                   <button
                     type="button"
-                    onClick={() =>
-                      launchExternalUrl(
-                        buildDirectCodeWhatsAppHref(
-                          {
-                            code: item.code,
-                            mobileNumber: item.mobileNumber,
-                            userName: item.userName,
-                            subjectId: resolvedSub,
-                            amountRupees: item.amountRupees || getFixedPlanPrice(resolvedSub),
-                          },
-                          lang
-                        )
-                      )
-                    }
-                    className="w-full h-10 rounded-xl bg-[#047857] hover:bg-[#065F46] text-white text-xs font-extrabold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                    data-testid="back_to_batch_folders_btn"
+                    onClick={() => {
+                      setSelectedFolderKey(null);
+                      setSearchQuery('');
+                      setStatusFilter('all');
+                    }}
+                    className="min-h-[40px] px-3 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-xs font-extrabold flex items-center gap-1.5 cursor-pointer shrink-0"
                   >
-                    <Send className="h-3.5 w-3.5" />
+                    <ArrowLeft className="h-4 w-4" />
+                    <span>{lang === 'en' ? 'All Folders' : 'બધા ફોલ્ડર્સ'}</span>
+                  </button>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <FolderOpen className="h-4.5 w-4.5 text-[#1E3A8A] dark:text-[#93C5FD] shrink-0" />
+                      <h3 className="text-sm sm:text-base font-extrabold truncate">
+                        {activeFolder.displayName}
+                      </h3>
+                    </div>
+                    <p className="text-[11px] font-bold text-[#475569] dark:text-[#94A3B8]">
+                      {getSubjectDisplayName(activeFolder.subjectId, lang)} •{' '}
+                      {lang === 'en'
+                        ? `Total ${activeFolder.totalCount} | Unused ${activeFolder.unusedCount} | Used ${activeFolder.usedCount}`
+                        : `કુલ ${activeFolder.totalCount} | બાકી ${activeFolder.unusedCount} | વપરાયેલા ${activeFolder.usedCount}`}
+                    </p>
+                  </div>
+                </div>
+                {loadingFolderKey === activeFolder.folderKey && (
+                  <span className="inline-flex items-center gap-1 text-xs font-bold text-[#1E3A8A] dark:text-[#93C5FD]">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <span>{lang === 'en' ? 'Loading all codes...' : 'બધા કોડ લોડ થાય છે...'}</span>
+                  </span>
+                )}
+              </div>
+
+              {/* Batch Folder Primary Action Buttons */}
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  data-testid="opened_folder_pdf_all_btn"
+                  disabled={exportingPdfKey !== null || activeFolder.totalCount === 0}
+                  onClick={() => void handleDownloadBatchPdf(activeFolder, false)}
+                  className="min-h-[42px] px-3.5 rounded-xl bg-[#047857] hover:bg-[#065F46] text-white text-xs font-extrabold flex items-center gap-1.5 disabled:opacity-50 cursor-pointer transition-colors"
+                >
+                  {exportingPdfKey === `${activeFolder.folderKey}_all` ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <FileText className="h-4 w-4" />
+                  )}
+                  <span>
+                    {lang === 'en'
+                      ? `Download Batch PDF (${activeFolder.totalCount})`
+                      : `આ બેચની PDF ડાઉનલોડ (${activeFolder.totalCount})`}
+                  </span>
+                </button>
+
+                {activeFolder.unusedCount > 0 && activeFolder.usedCount > 0 && (
+                  <button
+                    type="button"
+                    data-testid="opened_folder_pdf_unused_btn"
+                    disabled={exportingPdfKey !== null}
+                    onClick={() => void handleDownloadBatchPdf(activeFolder, true)}
+                    className="min-h-[42px] px-3.5 rounded-xl border border-[#047857] text-[#047857] dark:text-[#6EE7B7] bg-white dark:bg-[#0F172A] text-xs font-extrabold flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
+                  >
+                    {exportingPdfKey === `${activeFolder.folderKey}_unused` ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <FileText className="h-4 w-4" />
+                    )}
                     <span>
-                      {t.directCodeSendWhatsAppBtn} (+91{' '}
-                      {item.mobileNumber.replace(/\D/g, '').slice(-10)})
+                      {lang === 'en'
+                        ? `PDF Unused Only (${activeFolder.unusedCount})`
+                        : `ફક્ત બાકીની PDF (${activeFolder.unusedCount})`}
                     </span>
                   </button>
                 )}
 
-                {isUsed && (
-                  <div className="rounded-xl bg-[#EFF4FA] dark:bg-[#0F172A] p-2.5 text-xs space-y-0.5">
-                    <p className="font-bold text-[#047857] dark:text-[#6EE7B7]">
-                      {t.usedByHeader}: {item.usedBy?.name || item.usedByName} (+91{' '}
-                      {item.usedBy?.mobile || item.usedByMobile})
-                    </p>
-                    <p className="text-[11px] text-[#475569] dark:text-[#94A3B8]">
-                      {t.usedAtLabel} {formatTimestampLabel(item.usedAt ?? item.updatedAt, lang)}
-                    </p>
-                  </div>
+                <button
+                  type="button"
+                  disabled={activeFolder.totalCount === 0}
+                  onClick={() => {
+                    exportAccessCodesToCsv(
+                      activeFolder.codes,
+                      activeFolder.displayName.replace(/[^a-zA-Z0-9_-]+/g, '_')
+                    );
+                    onNotify?.(`${t.exportCsvBtn} (${activeFolder.totalCount})`);
+                  }}
+                  className="min-h-[42px] px-3.5 rounded-xl border border-[#CBD5E1] dark:border-[#334155] bg-[#FAF9F5] dark:bg-[#0F172A] text-xs font-bold flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
+                >
+                  <FileSpreadsheet className="h-4 w-4" />
+                  <span>{t.exportCsvBtn}</span>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={activeFolder.unusedCount === 0}
+                  onClick={() =>
+                    void copyText(
+                      activeFolder.unusedCodes.map((c) => c.code).join('\n'),
+                      lang === 'en'
+                        ? `Copied ${activeFolder.unusedCount} unused codes`
+                        : `${activeFolder.unusedCount} ન વપરાયેલા કોડ કોપી થઈ ગયા`
+                    )
+                  }
+                  className="min-h-[42px] px-3.5 rounded-xl border border-[#CBD5E1] dark:border-[#334155] bg-[#FAF9F5] dark:bg-[#0F172A] text-xs font-bold flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
+                >
+                  <Copy className="h-4 w-4" />
+                  <span>{lang === 'en' ? 'Copy Unused' : 'બાકી કોપી'}</span>
+                </button>
+
+                {onDeleteUnusedCodes && activeFolder.unusedCount > 0 && (
+                  <button
+                    type="button"
+                    data-testid="opened_folder_delete_unused_btn"
+                    disabled={isBusy || isDeletingUnused}
+                    onClick={() =>
+                      setPendingDeleteUnused({
+                        batchKey: activeFolder.folderKey,
+                        label: activeFolder.displayName,
+                        unusedCount: activeFolder.unusedCount,
+                      })
+                    }
+                    className="min-h-[42px] px-3.5 rounded-xl bg-[#DC2626] hover:bg-[#B91C1C] text-white text-xs font-extrabold flex items-center gap-1.5 disabled:opacity-50 cursor-pointer transition-colors"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    <span>
+                      {lang === 'en'
+                        ? `Delete Unused in Batch (${activeFolder.unusedCount})`
+                        : `આ બેચના ન વપરાયેલા ડિલીટ (${activeFolder.unusedCount})`}
+                    </span>
+                  </button>
                 )}
               </div>
-            );
-          })}
+            </div>
+          )}
+
+          {/* Search + Export Controls (for All Codes view or within opened folder) */}
+          <div className="flex flex-col sm:flex-row gap-2.5">
+            <div className="flex-1 flex items-center rounded-xl border border-[#CBD5E1] dark:border-[#334155] bg-white dark:bg-[#1E293B] px-3.5 h-11">
+              <Search className="h-4 w-4 text-slate-400 mr-2 shrink-0" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder={t.searchCodesPlaceholder}
+                className="w-full bg-transparent text-sm outline-none"
+              />
+            </div>
+
+            {!activeFolder && (
+              <div className="flex gap-2 shrink-0">
+                <button
+                  type="button"
+                  disabled={filteredCodes.length === 0}
+                  onClick={() => {
+                    exportAccessCodesToCsv(filteredCodes, `codes_${statusFilter}`);
+                    onNotify?.(`${t.exportCsvBtn} (${filteredCodes.length})`);
+                  }}
+                  className="h-11 px-3.5 rounded-xl bg-[#047857] hover:bg-[#065F46] text-white text-xs font-bold flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
+                >
+                  <FileSpreadsheet className="h-4 w-4" />
+                  <span>{t.exportCsvBtn}</span>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={filteredCodes.length === 0}
+                  onClick={async () => {
+                    try {
+                      const { exportAccessCodesA4Pdf } = await import('../services/pdfGenerator');
+                      exportAccessCodesA4Pdf(filteredCodes, `All Codes ${statusFilter}`);
+                      onNotify?.(`${t.exportPdfBtn} (${filteredCodes.length})`);
+                    } catch (err) {
+                      onNotify?.(err instanceof Error ? err.message : 'PDF error', true);
+                    }
+                  }}
+                  className="h-11 px-3.5 rounded-xl border border-[#CBD5E1] dark:border-[#334155] bg-white dark:bg-[#1E293B] text-xs font-bold flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
+                >
+                  <FileText className="h-4 w-4" />
+                  <span>{t.exportPdfBtn}</span>
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Status Filter Chips */}
+          <div className="flex flex-wrap gap-2">
+            {[
+              { id: 'all' as const, label: `${t.filterAll} (${scopedCodes.length})` },
+              { id: 'unused' as const, label: `${t.filterUnused} (${scopedUnusedCount})` },
+              { id: 'used' as const, label: `${t.filterUsed} (${scopedUsedCount})` },
+            ].map((chip) => (
+              <button
+                key={chip.id}
+                type="button"
+                onClick={() => setStatusFilter(chip.id)}
+                className={`rounded-xl px-3 py-1.5 text-xs font-bold border transition-colors cursor-pointer ${
+                  statusFilter === chip.id
+                    ? 'bg-[#1E3A8A] text-white border-[#1E3A8A]'
+                    : 'bg-white dark:bg-[#1E293B] border-[#CBD5E1] dark:border-[#334155]'
+                }`}
+              >
+                {chip.label}
+              </button>
+            ))}
+          </div>
+
+          {filteredCodes.length === 0 ? (
+            <EmptyStateCard message={t.noCodesFound} />
+          ) : (
+            <>
+              <div
+                className={`grid grid-cols-1 md:grid-cols-2 ${isLargeScreen ? '2xl:grid-cols-3' : ''} gap-3`}
+              >
+                {visibleCodes.map((item) => {
+                  const isUsed = isAccessCodeUsed(item);
+                  const resolvedSub = resolveCodeSubjectId(item.code, item.batchName, item.subjectId);
+                  return (
+                    <div
+                      key={item.code}
+                      className="rounded-2xl bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] p-4 space-y-2 shadow-sm"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <p className="text-base font-extrabold tracking-widest font-mono text-[#1E3A8A] dark:text-[#93C5FD]">
+                            {item.code}
+                          </p>
+                          <p className="text-[11px] text-[#475569] dark:text-[#94A3B8]">
+                            {formatTimestampLabel(item.createdAt, lang)}
+                            {item.amountRupees > 0 ? ` • ₹${item.amountRupees}` : ''}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <span
+                            className={`rounded-md px-2 py-0.5 text-[11px] font-bold ${
+                              isUsed
+                                ? 'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200'
+                                : 'bg-[#D1FAE5] text-[#064E3B] dark:bg-[#064E3B] dark:text-[#D1FAE5]'
+                            }`}
+                          >
+                            {isUsed ? t.filterUsed : t.filterUnused}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => void copyText(item.code, `${t.payUpiCopied}: ${item.code}`)}
+                            className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                            aria-label={t.copyCode}
+                          >
+                            <Copy className="h-4 w-4" />
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isBusy}
+                            onClick={() => onDeleteCode(item)}
+                            title={t.deleteBtn}
+                            aria-label={`${t.deleteBtn} ${item.code}`}
+                            className="p-2 rounded-lg text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 disabled:opacity-50 cursor-pointer"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap gap-1.5 text-[11px]">
+                        <span className="rounded-md bg-[#DBEAFE] dark:bg-[#1E3A5F] text-[#1E3A8A] dark:text-[#DBEAFE] px-2 py-0.5 font-bold">
+                          {getSubjectDisplayName(resolvedSub, lang)}
+                        </span>
+                        {item.batchName && (
+                          <span className="rounded-md bg-amber-100 dark:bg-amber-950/60 text-amber-900 dark:text-amber-200 px-2 py-0.5 font-bold inline-flex items-center gap-1">
+                            <Folder className="h-3 w-3" />
+                            <span>{item.batchName}</span>
+                          </span>
+                        )}
+                        {item.requestId && (
+                          <span className="rounded-md bg-slate-100 dark:bg-slate-800 px-2 py-0.5 font-mono">
+                            {item.requestId}
+                          </span>
+                        )}
+                      </div>
+
+                      {item.userName && (
+                        <p className="text-xs text-[#475569] dark:text-[#94A3B8]">
+                          {t.buyerHeader}: <span className="font-bold">{item.userName}</span> (+91{' '}
+                          {item.mobileNumber})
+                        </p>
+                      )}
+
+                      {!isUsed &&
+                        /^[0-9]{10}$/.test(item.mobileNumber.replace(/\D/g, '').slice(-10)) && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              launchExternalUrl(
+                                buildDirectCodeWhatsAppHref(
+                                  {
+                                    code: item.code,
+                                    mobileNumber: item.mobileNumber,
+                                    userName: item.userName,
+                                    subjectId: resolvedSub,
+                                    amountRupees: item.amountRupees || getFixedPlanPrice(resolvedSub),
+                                  },
+                                  lang
+                                )
+                              )
+                            }
+                            className="w-full h-10 rounded-xl bg-[#047857] hover:bg-[#065F46] text-white text-xs font-extrabold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                          >
+                            <Send className="h-3.5 w-3.5" />
+                            <span>
+                              {t.directCodeSendWhatsAppBtn} (+91{' '}
+                              {item.mobileNumber.replace(/\D/g, '').slice(-10)})
+                            </span>
+                          </button>
+                        )}
+
+                      {isUsed && (
+                        <div className="rounded-xl bg-[#EFF4FA] dark:bg-[#0F172A] p-2.5 text-xs space-y-0.5">
+                          <p className="font-bold text-[#047857] dark:text-[#6EE7B7]">
+                            {t.usedByHeader}: {item.usedBy?.name || item.usedByName} (+91{' '}
+                            {item.usedBy?.mobile || item.usedByMobile})
+                          </p>
+                          <p className="text-[11px] text-[#475569] dark:text-[#94A3B8]">
+                            {t.usedAtLabel}{' '}
+                            {formatTimestampLabel(item.usedAt ?? item.updatedAt, lang)}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {visibleLimit < filteredCodes.length && (
+                <div className="flex justify-center pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setVisibleLimit((prev) => prev + 100)}
+                    className="min-h-[44px] px-5 rounded-xl border border-[#CBD5E1] dark:border-[#334155] bg-white dark:bg-[#1E293B] text-xs font-extrabold text-[#1E3A8A] dark:text-[#93C5FD] cursor-pointer"
+                  >
+                    {lang === 'en'
+                      ? `Show More Codes (${visibleCodes.length} / ${filteredCodes.length})`
+                      : `વધુ કોડ બતાવો (${visibleCodes.length} / ${filteredCodes.length})`}
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+
+          {!activeFolder && (
+            <LoadMoreButton
+              hasMore={hasMore}
+              isLoadingMore={isLoadingMore}
+              onLoadMore={onLoadMore}
+            />
+          )}
         </div>
       )}
 
-      <LoadMoreButton
-        hasMore={hasMore}
-        isLoadingMore={isLoadingMore}
-        onLoadMore={onLoadMore}
-      />
+      {/* 1-Click Delete Unused Codes Confirmation Modal */}
+      {pendingDeleteUnused && (
+        <div
+          data-testid="confirm_delete_unused_modal"
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="w-full max-w-md rounded-2xl bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] p-5 shadow-2xl space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="h-11 w-11 rounded-xl bg-red-100 dark:bg-red-950/60 text-red-600 dark:text-red-400 flex items-center justify-center shrink-0">
+                <AlertTriangle className="h-6 w-6" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="text-base font-extrabold text-[#0F172A] dark:text-[#F8FAFC]">
+                  {lang === 'en'
+                    ? 'Delete All Unused Codes?'
+                    : 'બધા ન વપરાયેલા કોડ ડિલીટ કરવા છે?'}
+                </h3>
+                <p className="text-xs font-semibold text-[#475569] dark:text-[#CBD5E1]">
+                  {lang === 'en'
+                    ? `Target: "${pendingDeleteUnused.label}" — ${pendingDeleteUnused.unusedCount} unused codes will be permanently deleted.`
+                    : `ફોલ્ડર: "${pendingDeleteUnused.label}" ના કુલ ${pendingDeleteUnused.unusedCount} ન વપરાયેલા કોડ કાયમ માટે ડિલીટ થઈ જશે.`}
+                </p>
+              </div>
+            </div>
+
+            <div className="rounded-xl bg-[#ECFDF5] dark:bg-[#064E3B]/45 border border-[#10B981]/40 p-3 text-xs font-bold text-[#065F46] dark:text-[#A7F3D0]">
+              {lang === 'en'
+                ? 'Used codes are 100% safe and will NOT be deleted.'
+                : 'વપરાયેલા કોડ (Used Codes) ૧૦૦% સુરક્ષિત રહેશે — ફક્ત ન વપરાયેલા કોડ જ ડિલીટ થશે.'}
+            </div>
+
+            <div className="flex gap-2.5 pt-1">
+              <button
+                type="button"
+                disabled={isDeletingUnused}
+                onClick={() => setPendingDeleteUnused(null)}
+                className="flex-1 min-h-[44px] rounded-xl border border-[#CBD5E1] dark:border-[#334155] text-xs font-extrabold cursor-pointer disabled:opacity-50"
+              >
+                {t.cancelBtn}
+              </button>
+              <button
+                type="button"
+                data-testid="confirm_delete_unused_submit_btn"
+                disabled={isDeletingUnused}
+                onClick={() => void handleConfirmDeleteUnused()}
+                className="flex-[1.5] min-h-[44px] rounded-xl bg-[#DC2626] hover:bg-[#B91C1C] text-white text-xs font-extrabold flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-60"
+              >
+                {isDeletingUnused ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Trash2 className="h-4 w-4" />
+                )}
+                <span>
+                  {isDeletingUnused
+                    ? lang === 'en'
+                      ? 'Deleting...'
+                      : 'ડિલીટ થઈ રહ્યું છે...'
+                    : lang === 'en'
+                      ? `Yes, Delete (${pendingDeleteUnused.unusedCount})`
+                      : `હા, ડિલીટ કરો (${pendingDeleteUnused.unusedCount})`}
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
