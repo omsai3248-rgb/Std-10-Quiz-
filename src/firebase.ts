@@ -12,7 +12,20 @@ import firebaseConfig from '../firebase-applet-config.json';
 
 export const app = initializeApp(firebaseConfig);
 
+function isRunningInsideAndroidApk(): boolean {
+  if (typeof window === 'undefined') return false;
+  return (
+    window.location.hostname === 'appassets.androidplatform.net' ||
+    Boolean((window as Window & { AndroidFirebaseBridge?: unknown }).AndroidFirebaseBridge)
+  );
+}
+
 function createFirestore(): Firestore {
+  // On Android APK, NativeFirebaseBridge uses the native Android Firestore SDK with its own 100MB cache.
+  // Skipping Web IndexedDB multi-tab locking prevents Samsung/Android WebView startup stalls.
+  if (isRunningInsideAndroidApk()) {
+    return getFirestore(app, firebaseConfig.firestoreDatabaseId);
+  }
   try {
     return initializeFirestore(
       app,

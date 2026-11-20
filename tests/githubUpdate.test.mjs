@@ -305,7 +305,8 @@ test('Installed APK update popup and WebView prevent blank white screens after n
   );
   assert.equal(mainActivity.includes('Cache-Control'), true);
   assert.equal(mainActivity.includes('no-store, no-cache, must-revalidate'), true);
-  assert.equal(mainActivity.includes('KEY_LAST_WEBVIEW_VERSION_CODE'), true);
+  assert.equal(mainActivity.includes('KEY_LAST_WEBVIEW_INSTALL_STAMP'), true);
+  assert.equal(mainActivity.includes('pkgInfo.lastUpdateTime'), true);
   assert.equal(mainActivity.includes('clearCache(true)'), true);
   assert.equal(mainActivity.includes('override fun onRenderProcessGone'), true);
 

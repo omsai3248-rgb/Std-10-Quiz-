@@ -15,12 +15,15 @@ import android.provider.MediaStore
 import android.util.Base64
 import android.util.Log
 import android.view.KeyEvent
+import android.view.ViewGroup
+import android.webkit.ConsoleMessage
 import android.webkit.JavascriptInterface
 import android.webkit.MimeTypeMap
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.URLUtil
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
@@ -45,10 +48,15 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -68,17 +76,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.constraintlayout.compose.ConstraintLayout
-import androidx.constraintlayout.compose.Dimension
 import androidx.core.content.FileProvider
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
@@ -87,13 +96,14 @@ import androidx.window.layout.WindowInfoTracker
 import androidx.window.layout.WindowLayoutInfo
 import com.aistudio.std10quiz.kqxmtv.ui.theme.Std10QuizTheme
 import kotlinx.coroutines.delay
+import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.IOException
 
 private const val APP_HOST = "appassets.androidplatform.net"
 private const val START_URL = "https://$APP_HOST/index.html"
 private const val WEBVIEW_PREFS_NAME = "quick_quiz_webview_prefs"
-private const val KEY_LAST_WEBVIEW_VERSION_CODE = "last_loaded_webview_version_code"
+private const val KEY_LAST_WEBVIEW_INSTALL_STAMP = "last_loaded_webview_install_stamp"
 
 class MainActivity : ComponentActivity() {
     private var activeBridgeRef: NativeFirebaseBridge? = null
@@ -151,6 +161,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        activeWebViewRef?.onResume()
+        activeWebViewRef?.resumeTimers()
         val settings = AdaptiveDisplayManager.loadSettings(this)
         val telemetry = AdaptiveDisplayManager.collectTelemetry(this, latestLayoutInfoRef, settings)
         AdaptiveDisplayManager.applyActivityDisplaySettings(this, settings, telemetry)
@@ -191,8 +203,16 @@ class MainActivity : ComponentActivity() {
 }
 
 private class AndroidExportBridge(
-    private val activity: ComponentActivity
+    private val activity: ComponentActivity,
+    private val onAppMounted: () -> Unit = {}
 ) {
+    @JavascriptInterface
+    fun notifyAppMounted() {
+        activity.runOnUiThread {
+            onAppMounted()
+        }
+    }
+
     @JavascriptInterface
     fun saveExportedFile(suggestedName: String, dataUrl: String) {
         activity.runOnUiThread {
@@ -501,15 +521,53 @@ private fun PortalWebContainer(
         mutableStateOf(AdaptiveDisplayManager.loadSettings(activity))
     }
     var loadProgress by remember { mutableIntStateOf(0) }
-    var isInitialPageLoaded by remember { mutableStateOf(false) }
+    var isWebAppMounted by remember { mutableStateOf(false) }
+    var startupLoadError by remember { mutableStateOf<String?>(null) }
+    var autoRecoveryAttempted by remember { mutableStateOf(false) }
+    var reloadTrigger by remember { mutableIntStateOf(0) }
     var canGoBack by remember { mutableStateOf(false) }
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
     var firebaseBridgeRef by remember { mutableStateOf<NativeFirebaseBridge?>(null) }
     var pendingFileCallback by remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
+    val surfaceBgColor = MaterialTheme.colorScheme.background
+    val surfaceBgArgb = surfaceBgColor.toArgb()
 
-    LaunchedEffect(Unit) {
-        delay(2600)
-        isInitialPageLoaded = true
+    // Two-stage startup watchdog: prevents ever showing a blank white/cream screen if WebView stalls
+    LaunchedEffect(isWebAppMounted, reloadTrigger) {
+        if (isWebAppMounted) return@LaunchedEffect
+        delay(4500)
+        if (!isWebAppMounted && !autoRecoveryAttempted) {
+            val wv = webViewRef
+            if (wv != null) {
+                wv.evaluateJavascript("(function(){return Boolean(window.__QQ_APP_MOUNTED__);})()") { res ->
+                    if (res?.trim() == "true") {
+                        isWebAppMounted = true
+                        startupLoadError = null
+                    } else if (!autoRecoveryAttempted) {
+                        autoRecoveryAttempted = true
+                        Log.w("MainActivity", "Web UI not mounted after 4.5s; clearing cache and retrying once.")
+                        runCatching { wv.clearCache(true) }
+                        wv.loadUrl("$START_URL?recover=${System.currentTimeMillis()}")
+                    }
+                }
+            }
+        }
+        delay(5500)
+        if (!isWebAppMounted) {
+            val wv = webViewRef
+            if (wv != null) {
+                wv.evaluateJavascript("(function(){return Boolean(window.__QQ_APP_MOUNTED__);})()") { res ->
+                    if (res?.trim() == "true") {
+                        isWebAppMounted = true
+                        startupLoadError = null
+                    } else if (startupLoadError == null) {
+                        startupLoadError = "WebView startup timeout"
+                    }
+                }
+            } else if (startupLoadError == null) {
+                startupLoadError = "WebView unavailable"
+            }
+        }
     }
 
     LaunchedEffect(layoutInfo) {
@@ -568,78 +626,84 @@ private fun PortalWebContainer(
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
             modifier = Modifier.fillMaxSize(),
-            containerColor = MaterialTheme.colorScheme.background,
+            containerColor = if (isWebAppMounted) surfaceBgColor else Color.Black,
             contentWindowInsets = WindowInsets.safeDrawing
         ) { innerPadding ->
-            ConstraintLayout(
+            Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(innerPadding)
             ) {
-                val (webContainerRef, progressBarRef) = createRefs()
-
-            AndroidView(
-                modifier = Modifier.constrainAs(webContainerRef) {
-                    top.linkTo(parent.top)
-                    bottom.linkTo(parent.bottom)
-                    start.linkTo(parent.start)
-                    end.linkTo(parent.end)
-                    width = Dimension.fillToConstraints
-                    height = Dimension.fillToConstraints
-                },
-                factory = { ctx ->
-                    WebView(ctx).apply {
-                        webViewRef = this
-                        onWebViewChanged(this)
-                        isFocusable = true
-                        isFocusableInTouchMode = true
-                        setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                        // Clear stale HTTP cache automatically whenever a newer APK version is installed
-                        runCatching {
-                            val pkgInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                ctx.packageManager.getPackageInfo(
-                                    ctx.packageName,
-                                    android.content.pm.PackageManager.PackageInfoFlags.of(0)
-                                )
-                            } else {
-                                @Suppress("DEPRECATION")
-                                ctx.packageManager.getPackageInfo(ctx.packageName, 0)
-                            }
-                            val currentVerCode = PackageInfoCompat.getLongVersionCode(pkgInfo)
-                            val prefs = ctx.getSharedPreferences(WEBVIEW_PREFS_NAME, Context.MODE_PRIVATE)
-                            val lastVerCode = prefs.getLong(KEY_LAST_WEBVIEW_VERSION_CODE, -1L)
-                            if (lastVerCode != currentVerCode) {
-                                clearCache(true)
-                                clearFormData()
-                                prefs.edit().putLong(KEY_LAST_WEBVIEW_VERSION_CODE, currentVerCode).apply()
-                            }
-                        }.onFailure { err ->
-                            Log.w("MainActivity", "WebView version cache check skipped", err)
-                        }
-                        settings.apply {
-                            javaScriptEnabled = true
-                            domStorageEnabled = true
-                            allowContentAccess = true
-                            allowFileAccess = false
-                            mediaPlaybackRequiresUserGesture = false
-                            mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-                            useWideViewPort = true
-                            loadWithOverviewMode = true
-                            textZoom = 100
-                        }
-
-                        addJavascriptInterface(AndroidExportBridge(activity), "AndroidBridge")
-                        addJavascriptInterface(
-                            AndroidDisplayBridge(
-                                activity = activity,
-                                getLayoutInfo = { layoutInfo },
-                                onSettingsApplied = { nextSettings, telemetry ->
-                                    displaySettings = nextSettings
-                                    AdaptiveDisplayManager.pushTelemetryToWebView(this, telemetry)
+                AndroidView(
+                    modifier = Modifier.fillMaxSize(),
+                    factory = {
+                        WebView(activity).apply {
+                            layoutParams = ViewGroup.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                ViewGroup.LayoutParams.MATCH_PARENT
+                            )
+                            webViewRef = this
+                            onWebViewChanged(this)
+                            isFocusable = true
+                            isFocusableInTouchMode = true
+                            setBackgroundColor(android.graphics.Color.BLACK)
+                            // Clear stale HTTP cache automatically whenever ANY APK update/reinstall happens
+                            runCatching {
+                                val pkgInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                    activity.packageManager.getPackageInfo(
+                                        activity.packageName,
+                                        android.content.pm.PackageManager.PackageInfoFlags.of(0)
+                                    )
+                                } else {
+                                    @Suppress("DEPRECATION")
+                                    activity.packageManager.getPackageInfo(activity.packageName, 0)
                                 }
-                            ),
-                            "AndroidDisplayBridge"
-                        )
+                                val currentVerCode = PackageInfoCompat.getLongVersionCode(pkgInfo)
+                                val installStamp = "${currentVerCode}_${pkgInfo.lastUpdateTime}_${BuildConfig.VERSION_NAME}"
+                                val prefs = activity.getSharedPreferences(WEBVIEW_PREFS_NAME, Context.MODE_PRIVATE)
+                                val lastStamp = prefs.getString(KEY_LAST_WEBVIEW_INSTALL_STAMP, null)
+                                if (lastStamp != installStamp) {
+                                    clearCache(true)
+                                    clearFormData()
+                                    prefs.edit().putString(KEY_LAST_WEBVIEW_INSTALL_STAMP, installStamp).apply()
+                                }
+                            }.onFailure { err ->
+                                Log.w("MainActivity", "WebView install cache check skipped", err)
+                            }
+                            settings.apply {
+                                javaScriptEnabled = true
+                                domStorageEnabled = true
+                                allowContentAccess = true
+                                allowFileAccess = false
+                                cacheMode = WebSettings.LOAD_NO_CACHE
+                                mediaPlaybackRequiresUserGesture = false
+                                mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                                useWideViewPort = true
+                                loadWithOverviewMode = true
+                                textZoom = 100
+                            }
+
+                            addJavascriptInterface(
+                                AndroidExportBridge(
+                                    activity = activity,
+                                    onAppMounted = {
+                                        isWebAppMounted = true
+                                        startupLoadError = null
+                                    }
+                                ),
+                                "AndroidBridge"
+                            )
+                            addJavascriptInterface(
+                                AndroidDisplayBridge(
+                                    activity = activity,
+                                    getLayoutInfo = { layoutInfo },
+                                    onSettingsApplied = { nextSettings, telemetry ->
+                                        displaySettings = nextSettings
+                                        AdaptiveDisplayManager.pushTelemetryToWebView(this, telemetry)
+                                    }
+                                ),
+                                "AndroidDisplayBridge"
+                            )
 
                         runCatching {
                             val firebaseBridge = NativeFirebaseBridge(
@@ -702,11 +766,12 @@ private fun PortalWebContainer(
 
                                 val relPath = url.path.orEmpty().trimStart('/')
                                 val targetPath = if (relPath.isEmpty()) "www/index.html" else "www/$relPath"
-                                return openAssetResponse(ctx, targetPath)
+                                return openAssetResponse(activity, targetPath)
                                     ?: if (!relPath.contains('.')) {
-                                        openAssetResponse(ctx, "www/index.html")
+                                        openAssetResponse(activity, "www/index.html")
                                     } else {
-                                        null
+                                        Log.w("MainActivity", "Missing bundled asset: $targetPath")
+                                        notFoundAssetResponse()
                                     }
                             }
 
@@ -729,7 +794,7 @@ private fun PortalWebContainer(
                                 }
 
                                 if (scheme in setOf("upi", "tez", "phonepe", "paytmmp")) {
-                                    launchUpiUriWithFallback(ctx, uri.toString(), "")
+                                    launchUpiUriWithFallback(activity, uri.toString(), "")
                                     return true
                                 }
 
@@ -741,15 +806,15 @@ private fun PortalWebContainer(
                                             selector = null
                                         }
                                         try {
-                                            ctx.startActivity(parsedIntent)
+                                            activity.startActivity(parsedIntent)
                                         } catch (_: ActivityNotFoundException) {
                                             val fallbackUrl = parsedIntent.getStringExtra("browser_fallback_url")
                                             if (!fallbackUrl.isNullOrBlank()) {
                                                 view?.loadUrl(fallbackUrl)
                                             } else {
                                                 Toast.makeText(
-                                                    ctx,
-                                                    ctx.getString(R.string.error_no_upi_app),
+                                                    activity,
+                                                    activity.getString(R.string.error_no_upi_app),
                                                     Toast.LENGTH_SHORT
                                                 ).show()
                                             }
@@ -764,28 +829,46 @@ private fun PortalWebContainer(
                                     val intent = Intent(Intent.ACTION_VIEW, uri).apply {
                                         addCategory(Intent.CATEGORY_BROWSABLE)
                                     }
-                                    ctx.startActivity(intent)
+                                    activity.startActivity(intent)
                                     true
                                 } catch (_: Exception) {
                                     Toast.makeText(
-                                        ctx,
-                                        ctx.getString(R.string.error_no_app),
+                                        activity,
+                                        activity.getString(R.string.error_no_app),
                                         Toast.LENGTH_SHORT
                                     ).show()
                                     true
                                 }
                             }
 
+                            override fun onReceivedError(
+                                view: WebView?,
+                                request: WebResourceRequest?,
+                                error: WebResourceError?
+                            ) {
+                                super.onReceivedError(view, request, error)
+                                if (request?.isForMainFrame == true) {
+                                    val detail = "Error ${error?.errorCode ?: -1}: ${error?.description ?: "Load failed"}"
+                                    Log.e("MainActivity", "Main frame load error: $detail")
+                                    startupLoadError = detail
+                                }
+                            }
+
                             override fun onPageFinished(view: WebView?, url: String?) {
                                 super.onPageFinished(view, url)
                                 canGoBack = view?.canGoBack() == true
-                                isInitialPageLoaded = true
                                 val telemetry = AdaptiveDisplayManager.collectTelemetry(
                                     activity,
                                     layoutInfo,
                                     displaySettings
                                 )
                                 AdaptiveDisplayManager.pushTelemetryToWebView(view, telemetry)
+                                view?.evaluateJavascript("(function(){return Boolean(window.__QQ_APP_MOUNTED__);})()") { result ->
+                                    if (result?.trim() == "true") {
+                                        isWebAppMounted = true
+                                        startupLoadError = null
+                                    }
+                                }
                             }
 
                             override fun onRenderProcessGone(
@@ -806,6 +889,16 @@ private fun PortalWebContainer(
                         }
 
                         webChromeClient = object : WebChromeClient() {
+                            override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
+                                if (consoleMessage != null && consoleMessage.messageLevel() == ConsoleMessage.MessageLevel.ERROR) {
+                                    Log.e(
+                                        "QuickQuizWeb",
+                                        "${consoleMessage.message()} (${consoleMessage.sourceId()}:${consoleMessage.lineNumber()})"
+                                    )
+                                }
+                                return super.onConsoleMessage(consoleMessage)
+                            }
+
                             override fun onProgressChanged(view: WebView?, newProgress: Int) {
                                 loadProgress = newProgress
                                 canGoBack = view?.canGoBack() == true
@@ -874,11 +967,11 @@ private fun PortalWebContainer(
                                 evaluateJavascript(js, null)
                             } else {
                                 try {
-                                    ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                                    activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
                                 } catch (_: Exception) {
                                     Toast.makeText(
-                                        ctx,
-                                        ctx.getString(R.string.error_no_app),
+                                        activity,
+                                        activity.getString(R.string.error_no_app),
                                         Toast.LENGTH_SHORT
                                     ).show()
                                 }
@@ -887,18 +980,29 @@ private fun PortalWebContainer(
 
                         loadUrl(START_URL)
                     }
+                },
+                update = { wv ->
+                    val lp = wv.layoutParams
+                    if (lp == null ||
+                        lp.width != ViewGroup.LayoutParams.MATCH_PARENT ||
+                        lp.height != ViewGroup.LayoutParams.MATCH_PARENT
+                    ) {
+                        wv.layoutParams = ViewGroup.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.MATCH_PARENT
+                        )
+                        wv.requestLayout()
+                    }
+                    wv.setBackgroundColor(if (isWebAppMounted) surfaceBgArgb else android.graphics.Color.BLACK)
                 }
             )
 
-            if (loadProgress in 1..99) {
+            if (loadProgress in 1..99 && isWebAppMounted) {
                 LinearProgressIndicator(
                     progress = { loadProgress / 100f },
-                    modifier = Modifier.constrainAs(progressBarRef) {
-                        top.linkTo(parent.top)
-                        start.linkTo(parent.start)
-                        end.linkTo(parent.end)
-                        width = Dimension.fillToConstraints
-                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .align(Alignment.TopCenter),
                     color = MaterialTheme.colorScheme.primary
                 )
             }
@@ -906,7 +1010,7 @@ private fun PortalWebContainer(
     }
 
         AnimatedVisibility(
-            visible = !isInitialPageLoaded,
+            visible = !isWebAppMounted && startupLoadError == null,
             exit = fadeOut()
         ) {
             Box(
@@ -942,6 +1046,71 @@ private fun PortalWebContainer(
                 }
             }
         }
+
+        if (!isWebAppMounted && startupLoadError != null) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                    modifier = Modifier
+                        .widthIn(max = 420.dp)
+                        .padding(24.dp)
+                ) {
+                    Image(
+                        painter = painterResource(id = R.drawable.ic_app_logo),
+                        contentDescription = stringResource(id = R.string.app_name),
+                        modifier = Modifier.size(120.dp),
+                        contentScale = ContentScale.Fit
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = stringResource(id = R.string.startup_load_error_title),
+                        color = Color(0xFFFACC15),
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = stringResource(id = R.string.startup_load_error_desc),
+                        color = Color(0xFFCBD5E1),
+                        fontSize = 14.sp,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(20.dp))
+                    Button(
+                        onClick = {
+                            startupLoadError = null
+                            autoRecoveryAttempted = false
+                            reloadTrigger += 1
+                            webViewRef?.let { wv ->
+                                runCatching { wv.clearCache(true) }
+                                wv.loadUrl("$START_URL?reload=${System.currentTimeMillis()}")
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFFFACC15),
+                            contentColor = Color(0xFF0F172A)
+                        ),
+                        modifier = Modifier
+                            .testTag("startup_reload_button")
+                            .fillMaxWidth()
+                            .heightIn(min = 52.dp)
+                    ) {
+                        Text(
+                            text = stringResource(id = R.string.startup_reload_button),
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.ExtraBold
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -962,6 +1131,17 @@ private fun openAssetResponse(
     } catch (_: IOException) {
         null
     }
+}
+
+private fun notFoundAssetResponse(): WebResourceResponse {
+    return WebResourceResponse(
+        "text/plain",
+        "UTF-8",
+        404,
+        "Not Found",
+        mapOf("Cache-Control" to "no-store, no-cache, must-revalidate, max-age=0"),
+        ByteArrayInputStream(ByteArray(0))
+    )
 }
 
 private fun guessMimeType(path: String): String {

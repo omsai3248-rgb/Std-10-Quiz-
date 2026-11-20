@@ -39,6 +39,11 @@ export class ErrorBoundary extends React.Component<
               <p className="text-xs text-[#475569] dark:text-[#94A3B8]">
                 Something went wrong. Please reload the page to continue.
               </p>
+              {this.state.message && (
+                <p className="mt-2 rounded-lg bg-slate-100 dark:bg-slate-800 px-2.5 py-1.5 text-[11px] text-slate-600 dark:text-slate-300 break-words">
+                  {this.state.message.slice(0, 180)}
+                </p>
+              )}
             </div>
             <button
               type="button"

@@ -7,4 +7,7 @@
     <string name="upi_chooser_title">UPI એપ પસંદ કરો</string>
     <string name="share_export_title">એક્સપોર્ટ ફાઇલ શેર / સેવ કરો</string>
     <string name="qr_downloaded_gallery">QR કોડ Gallery (Pictures/QuickQuiz) માં ડાઉનલોડ થઈ ગયો છે.</string>
+    <string name="startup_load_error_title">એપ લોડ થવામાં સમય લાગી રહ્યો છે</string>
+    <string name="startup_load_error_desc">કૃપા કરીને નીચેના બટન પર ક્લિક કરીને Quick Quiz ફરી લોડ કરો.</string>
+    <string name="startup_reload_button">ફરી લોડ કરો / Reload</string>
 </resources>

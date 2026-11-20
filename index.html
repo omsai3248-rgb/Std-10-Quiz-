@@ -90,6 +90,28 @@
     </div>
     <script>
       (function () {
+        if (window.location.hostname === 'appassets.androidplatform.net') {
+          try {
+            if ('serviceWorker' in navigator && navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
+              navigator.serviceWorker.getRegistrations().then(function (regs) {
+                regs.forEach(function (reg) {
+                  reg.unregister().catch(function () {});
+                });
+              }).catch(function () {});
+            }
+            if ('caches' in window && window.caches && window.caches.keys) {
+              window.caches.keys().then(function (keys) {
+                keys.forEach(function (k) {
+                  if (k.indexOf('quick-quiz') !== -1) {
+                    window.caches.delete(k).catch(function () {});
+                  }
+                });
+              }).catch(function () {});
+            }
+          } catch (_) {
+            // Ignore restricted WebView SW/Cache access
+          }
+        }
         function showBootError(detail) {
           if (window.__QQ_APP_MOUNTED__) return;
           var msg = document.getElementById('qq-boot-msg');

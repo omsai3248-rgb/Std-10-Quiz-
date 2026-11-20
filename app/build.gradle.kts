@@ -80,7 +80,7 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.material3.windowsize)
-    implementation(libs.androidx.constraintlayout.compose)
+    // implementation(libs.androidx.constraintlayout.compose) // Unused after replacing ConstraintLayout with Box
     implementation(libs.androidx.window)
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.firestore)
