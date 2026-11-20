@@ -83,3 +83,24 @@ test('App.tsx and AdminTabs.tsx route cold-start Admin notifications directly to
   assert.match(adminTabs, /focused_student_card/);
   assert.match(adminTabs, /નોટિફિકેશનમાંથી ખુલ્યું/);
 });
+
+test('100% FREE Spark-plan WorkManager background worker polls closed-app notifications without Blaze plan', () => {
+  const toml = read('gradle/libs.versions.toml');
+  const gradle = read('app/build.gradle.kts');
+  assert.match(toml, /androidx-work-runtime-ktx/);
+  assert.match(gradle, /libs\.androidx\.work\.runtime\.ktx/);
+
+  const worker = read('app/src/main/java/com/aistudio/std10quiz/kqxmtv/AdminBackgroundNotificationWorker.kt');
+  assert.match(worker, /class AdminBackgroundNotificationWorker/);
+  assert.match(worker, /PeriodicWorkRequestBuilder<AdminBackgroundNotificationWorker>/);
+  assert.match(worker, /OneTimeWorkRequestBuilder<AdminBackgroundNotificationWorker>/);
+  assert.match(worker, /db\.collection\("admin_notifications"\)/);
+  assert.match(worker, /db\.collection\("admin_chats"\)/);
+  assert.match(worker, /db\.collection\("push_broadcasts"\)/);
+  assert.match(worker, /showAdminActivityNotification\(/);
+
+  const mainActivity = read('app/src/main/java/com/aistudio/std10quiz/kqxmtv/MainActivity.kt');
+  assert.match(mainActivity, /AdminBackgroundNotificationWorker\.ensurePeriodicScheduled\(this\)/);
+  assert.match(mainActivity, /AdminBackgroundNotificationWorker\.scheduleQuickBackgroundCheck\(this\)/);
+});
+

@@ -123,6 +123,8 @@ class MainActivity : ComponentActivity() {
 
         AdminNotificationHelper.clearStaleFcmTopicQueue(this)
         AdminNotificationHelper.ensureChannels(this)
+        AdminBackgroundNotificationWorker.initializeWatermarksIfNeeded(this)
+        AdminBackgroundNotificationWorker.ensurePeriodicScheduled(this)
         AdminNotificationHelper.extractDeepLinkFromIntent(intent)?.let { deepLink ->
             AdminNotificationHelper.savePendingDeepLink(this, deepLink)
         }
@@ -148,6 +150,11 @@ class MainActivity : ComponentActivity() {
         val settings = AdaptiveDisplayManager.loadSettings(this)
         val telemetry = AdaptiveDisplayManager.collectTelemetry(this, latestLayoutInfoRef, settings)
         AdaptiveDisplayManager.applyActivityDisplaySettings(this, settings, telemetry)
+    }
+
+    override fun onStop() {
+        super.onStop()
+        AdminBackgroundNotificationWorker.scheduleQuickBackgroundCheck(this)
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {

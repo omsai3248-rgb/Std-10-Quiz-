@@ -2884,6 +2884,7 @@ class NativeFirebaseBridge(
         if (granted) {
             syncPublicDeviceFcmRegistration()
             syncCurrentAdminFcmTokenIfSignedIn()
+            AdminBackgroundNotificationWorker.ensurePeriodicScheduled(appContext)
         }
         emitToJs("window.__onNativeNotificationPermissionChanged", JSONObject.quote(status))
     }
@@ -3034,6 +3035,7 @@ class NativeFirebaseBridge(
                     adminName = displayName,
                     prefsJson = prefsJsonObj.toString()
                 )
+                AdminBackgroundNotificationWorker.ensurePeriodicScheduled(appContext)
 
                 var fcmTokenRegistered = false
                 val token = runCatching {
@@ -3294,6 +3296,10 @@ class NativeFirebaseBridge(
                         snap.documentChanges.forEach { change ->
                             if (change.type == com.google.firebase.firestore.DocumentChange.Type.ADDED) {
                                 val doc = change.document
+                                val createdMs = doc.getTimestamp("createdAt")?.toDate()?.time ?: 0L
+                                if (createdMs > 0L) {
+                                    AdminBackgroundNotificationWorker.advanceAdminNotifWatermark(appContext, createdMs)
+                                }
                                 val isRead = doc.getBoolean("isRead") == true
                                 if (!isRead) {
                                     AdminNotificationHelper.showAdminActivityNotification(
