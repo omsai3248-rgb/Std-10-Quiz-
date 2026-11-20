@@ -24,7 +24,15 @@ export function sanitizeOwnerRepo(raw: string): string {
   return /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(trimmed) ? trimmed : '';
 }
 
+export const LATEST_APK_ASSET_NAME = 'Quick-Quiz-Latest.apk';
+export const FALLBACK_GITHUB_OWNER_REPO = 'omsai3248-rgb/Quick-book';
 export const DEFAULT_GITHUB_OWNER_REPO = sanitizeOwnerRepo(metaEnv.VITE_GITHUB_REPO ?? '');
+
+export function buildPermanentLatestApkUrl(ownerRepo: string): string {
+  const cleanRepo = sanitizeOwnerRepo(ownerRepo);
+  if (!cleanRepo) return '';
+  return `https://github.com/${cleanRepo}/releases/latest/download/${LATEST_APK_ASSET_NAME}`;
+}
 
 export function loadSavedGithubOwnerRepo(): string {
   if (typeof localStorage === 'undefined') return '';
@@ -54,7 +62,8 @@ export function resolveEffectiveGithubRepo(configuredRepo = ''): string {
   return (
     sanitizeOwnerRepo(configuredRepo) ||
     DEFAULT_GITHUB_OWNER_REPO ||
-    loadSavedGithubOwnerRepo()
+    loadSavedGithubOwnerRepo() ||
+    FALLBACK_GITHUB_OWNER_REPO
   );
 }
 
@@ -265,15 +274,16 @@ export async function fetchLatestRelease(
   const releaseTitle = (root.name ?? tagName).trim() || tagName;
   const htmlUrl = root.html_url ?? '';
 
-  let apkDownloadUrl = '';
-  let apkSizeBytes = 0;
-  for (const asset of root.assets ?? []) {
-    if (asset.name?.toLowerCase().endsWith('.apk')) {
-      apkDownloadUrl = asset.browser_download_url ?? '';
-      apkSizeBytes = Number(asset.size ?? 0);
-      break;
-    }
-  }
+  const apkAssets = (root.assets ?? []).filter((asset) =>
+    asset.name?.toLowerCase().endsWith('.apk')
+  );
+  const preferredAsset =
+    apkAssets.find(
+      (asset) => asset.name?.toLowerCase() === LATEST_APK_ASSET_NAME.toLowerCase()
+    ) ?? apkAssets[0];
+  const apkDownloadUrl =
+    preferredAsset?.browser_download_url?.trim() || buildPermanentLatestApkUrl(cleanRepo);
+  const apkSizeBytes = Number(preferredAsset?.size ?? 0);
 
   const versionCode = parseVersionCodeFromRelease(tagName, releaseTitle, rawBody);
   const apkSha256 = parseSha256FromReleaseNotes(rawBody);

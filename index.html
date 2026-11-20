@@ -20,10 +20,55 @@
         src: url("/fonts/anek_gujarati.ttf") format("truetype");
         font-weight: 100 900;
         font-style: normal;
-        font-display: block;
+        font-display: swap;
       }
       html, body, #root {
-        font-family: "Anek Gujarati", sans-serif;
+        font-family: "Anek Gujarati", system-ui, -apple-system, sans-serif;
+        min-height: 100dvh;
+        margin: 0;
+      }
+      #qq-boot-shell {
+        min-height: 100dvh;
+        background: #000000;
+        color: #ffffff;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 14px;
+        padding: 24px;
+        text-align: center;
+      }
+      #qq-boot-shell img {
+        width: 112px;
+        height: 112px;
+        border-radius: 18px;
+        object-fit: contain;
+      }
+      #qq-boot-shell h1 {
+        margin: 0;
+        font-size: 24px;
+        font-weight: 800;
+        color: #facc15;
+      }
+      #qq-boot-msg {
+        margin: 0;
+        font-size: 13px;
+        color: #cbd5e1;
+        max-width: 320px;
+        line-height: 1.5;
+      }
+      #qq-boot-retry {
+        display: none;
+        margin-top: 8px;
+        padding: 10px 20px;
+        border-radius: 12px;
+        border: none;
+        background: #facc15;
+        color: #0f172a;
+        font-size: 14px;
+        font-weight: 800;
+        cursor: pointer;
       }
     </style>
     <link rel="manifest" href="/manifest.webmanifest" />
@@ -35,7 +80,44 @@
     <link rel="icon" type="image/png" href="/images/ic_app_logo.png" />
   </head>
   <body class="bg-[#FAF9F5] text-[#0F172A] dark:bg-[#0B1120] dark:text-[#F8FAFC] antialiased">
-    <div id="root"></div>
+    <div id="root">
+      <div id="qq-boot-shell">
+        <img src="/images/ic_app_logo.png" alt="Quick Quiz" />
+        <h1>Quick Quiz</h1>
+        <p id="qq-boot-msg">એપ લોડ થઈ રહી છે...</p>
+        <button id="qq-boot-retry" type="button" onclick="window.location.reload()">ફરી લોડ કરો / Reload</button>
+      </div>
+    </div>
+    <script>
+      (function () {
+        function showBootError(detail) {
+          if (window.__QQ_APP_MOUNTED__) return;
+          var msg = document.getElementById('qq-boot-msg');
+          var btn = document.getElementById('qq-boot-retry');
+          if (msg) {
+            msg.textContent = 'એપ લોડ થવામાં સમસ્યા આવી. કૃપા કરીને Reload દબાવો.' + (detail ? ' (' + detail + ')' : '');
+          }
+          if (btn) btn.style.display = 'inline-block';
+        }
+        window.addEventListener('error', function (ev) {
+          if (!window.__QQ_APP_MOUNTED__) {
+            showBootError(ev && ev.message ? String(ev.message).slice(0, 120) : '');
+          }
+        });
+        window.addEventListener('unhandledrejection', function (ev) {
+          if (!window.__QQ_APP_MOUNTED__) {
+            var reason = ev && ev.reason ? (ev.reason.message || String(ev.reason)) : '';
+            showBootError(String(reason).slice(0, 120));
+          }
+        });
+        setTimeout(function () {
+          if (!window.__QQ_APP_MOUNTED__) {
+            var btn = document.getElementById('qq-boot-retry');
+            if (btn) btn.style.display = 'inline-block';
+          }
+        }, 7000);
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

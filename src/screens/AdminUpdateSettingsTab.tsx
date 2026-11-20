@@ -4,8 +4,11 @@ import {
   Bell,
   CheckCircle2,
   CloudUpload,
+  Copy,
+  ExternalLink,
   FileArchive,
   GitBranch,
+  Link2,
   RefreshCw,
   Save,
   Send,
@@ -17,6 +20,7 @@ import {
 import { useAdaptiveDisplay } from '../context/AdaptiveDisplayContext';
 import { useTranslation } from '../i18n/translations';
 import {
+  buildPermanentLatestApkUrl,
   resolveEffectiveGithubRepo,
   sanitizeOwnerRepo,
 } from '../services/githubUpdateChecker';
@@ -586,6 +590,61 @@ export const AdminUpdateSettingsTab: React.FC<AdminUpdateSettingsTabProps> = ({
               )}
             </div>
           </div>
+
+          {(() => {
+            const permanentUrl = buildPermanentLatestApkUrl(
+              githubRepoInput || releaseConfig?.githubOwnerRepo || ''
+            );
+            if (!permanentUrl) return null;
+            return (
+              <div
+                data-testid="permanent_latest_apk_link_card"
+                className="rounded-xl bg-[#ECFDF5] dark:bg-[#064E3B]/40 border border-[#A7F3D0] dark:border-[#047857] p-3.5 space-y-2.5"
+              >
+                <div className="flex items-center gap-2 text-[#047857] dark:text-[#6EE7B7]">
+                  <Link2 className="h-4 w-4 shrink-0" />
+                  <p className="text-xs font-extrabold">
+                    {lang === 'en'
+                      ? 'Single Permanent Latest APK Link (Always downloads newest build)'
+                      : 'કાયમી Latest APK લિંક (હંમેશા છેલ્લે બનેલો APK જ ડાઉનલોડ થશે)'}
+                  </p>
+                </div>
+                <p className="text-[11px] font-semibold text-[#0F172A] dark:text-[#E2E8F0] bg-white/85 dark:bg-[#0F172A]/75 border border-[#A7F3D0] dark:border-[#065F46] rounded-lg px-2.5 py-2 break-all select-all">
+                  {permanentUrl}
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    data-testid="copy_permanent_apk_link_btn"
+                    onClick={() => {
+                      if (navigator.clipboard?.writeText) {
+                        void navigator.clipboard.writeText(permanentUrl);
+                      }
+                      onNotify?.(
+                        lang === 'en'
+                          ? 'Permanent latest APK link copied!'
+                          : 'કાયમી Latest APK લિંક કૉપી થઈ ગઈ છે!'
+                      );
+                    }}
+                    className="min-h-[48px] flex-1 px-3 rounded-xl bg-[#047857] hover:bg-[#065F46] text-white text-xs font-extrabold inline-flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <Copy className="h-4 w-4 shrink-0" />
+                    <span>{lang === 'en' ? 'Copy Link' : 'લિંક કૉપી કરો'}</span>
+                  </button>
+                  <a
+                    href={permanentUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    data-testid="open_permanent_apk_link_btn"
+                    className="min-h-[48px] flex-1 px-3 rounded-xl border border-[#047857] text-[#047857] dark:text-[#6EE7B7] dark:border-[#6EE7B7] text-xs font-extrabold inline-flex items-center justify-center gap-1.5 hover:bg-[#D1FAE5]/60 dark:hover:bg-[#065F46]/40"
+                  >
+                    <ExternalLink className="h-4 w-4 shrink-0" />
+                    <span>{lang === 'en' ? 'Download APK' : 'APK ડાઉનલોડ'}</span>
+                  </a>
+                </div>
+              </div>
+            );
+          })()}
         </div>
 
         <div className="rounded-2xl bg-[#DBEAFE]/60 dark:bg-[#1E3A5F] border border-[#BFDBFE] dark:border-[#1E40AF] p-5 space-y-2.5">

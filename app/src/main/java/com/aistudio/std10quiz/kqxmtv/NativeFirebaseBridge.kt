@@ -72,8 +72,7 @@ class NativeFirebaseBridge(
     private val activity: ComponentActivity,
     private val webView: WebView,
     private val onRequestPostNotificationsPermission: () -> Unit = {},
-    private val onLaunchApkPicker: () -> Unit = {},
-    private val onLaunchUnknownSourcesSettings: () -> Unit = {}
+    private val onLaunchApkPicker: () -> Unit = {}
 ) {
     private val appContext = activity.applicationContext
     private val secureRandom = SecureRandom()
@@ -82,8 +81,6 @@ class NativeFirebaseBridge(
     private var pendingNotificationPermissionCallId: String? = null
     @Volatile
     private var pendingApkPickCallId: String? = null
-    @Volatile
-    private var pendingDownloadInstallCallId: String? = null
     @Volatile
     private var adminDirectoryReg: ListenerRegistration? = null
     @Volatile
@@ -2581,54 +2578,20 @@ class NativeFirebaseBridge(
 
     @JavascriptInterface
     fun downloadAndInstallAppUpdate(callId: String, payloadJson: String) {
-        pendingDownloadInstallCallId = callId
-        activity.lifecycleScope.launch(Dispatchers.IO) {
+        activity.lifecycleScope.launch(Dispatchers.Main) {
             try {
                 val obj = JSONObject(payloadJson)
                 val downloadUrl = obj.getString("apkDownloadUrl").trim()
-                val versionName = obj.optString("versionName", "1.0.1").trim()
-                val versionCode = obj.optLong("versionCode", 1L)
-                val expectedSha256 = obj.optString("apkSha256", "").trim()
-                val expectedCertSha256 = obj.optString("signingCertSha256", "").trim()
-
-                emitUpdateProgress("downloading", 0, 0L, obj.optLong("apkSizeBytes", 0L), "")
-                val apkFile = AppUpdateManager.downloadAndVerifyUpdateApk(
-                    context = appContext,
-                    downloadUrl = downloadUrl,
-                    versionName = versionName,
-                    versionCode = versionCode,
-                    expectedSha256 = expectedSha256,
-                    expectedCertSha256 = expectedCertSha256
-                ) { pct, downloaded, total ->
-                    val status = if (pct >= 100) "verifying" else "downloading"
-                    emitUpdateProgress(status, pct, downloaded, total, "")
-                }
-
-                AppUpdateManager.savePendingInstallApkPath(appContext, apkFile.absolutePath)
-                if (!AppUpdateManager.canRequestPackageInstalls(appContext)) {
-                    emitUpdateProgress(
-                        "permission_required",
-                        100,
-                        apkFile.length(),
-                        apkFile.length(),
-                        "Please allow 'Install unknown apps' to install this update."
-                    )
-                    activity.runOnUiThread {
-                        onLaunchUnknownSourcesSettings()
-                    }
-                    return@launch
-                }
-
-                AppUpdateManager.consumePendingInstallApkPath(appContext)
-                emitUpdateProgress("installing", 100, apkFile.length(), apkFile.length(), "")
-                withContext(Dispatchers.Main) {
-                    AppUpdateManager.launchSystemInstaller(activity, apkFile)
-                }
-                pendingDownloadInstallCallId = null
-                resolveCallSuccess(callId, JSONObject().apply { put("status", "installing") }.toString())
+                val totalBytes = obj.optLong("apkSizeBytes", 0L)
+                emitUpdateProgress("downloading", 35, 0L, totalBytes, "")
+                AppUpdateManager.openTrustedUpdateUrl(activity, downloadUrl)
+                emitUpdateProgress("installing", 100, totalBytes, totalBytes, "")
+                resolveCallSuccess(
+                    callId,
+                    JSONObject().apply { put("status", "opened_browser") }.toString()
+                )
             } catch (e: Exception) {
-                pendingDownloadInstallCallId = null
-                val msg = e.localizedMessage ?: "Update download failed"
+                val msg = e.localizedMessage ?: "Unable to open update link"
                 emitUpdateProgress("error", 0, 0L, 0L, msg)
                 resolveCallError(callId, msg)
             }
@@ -2637,66 +2600,7 @@ class NativeFirebaseBridge(
 
     @JavascriptInterface
     fun retryInstallPendingApk(callId: String) {
-        val pendingPath = AppUpdateManager.consumePendingInstallApkPath(appContext)
-        if (pendingPath.isBlank()) {
-            resolveCallError(callId, "NO_PENDING_APK")
-            return
-        }
-        val file = File(pendingPath)
-        if (!file.exists() || file.length() <= 0L) {
-            resolveCallError(callId, "NO_PENDING_APK")
-            return
-        }
-        AppUpdateManager.savePendingInstallApkPath(appContext, pendingPath)
-        if (!AppUpdateManager.canRequestPackageInstalls(appContext)) {
-            pendingDownloadInstallCallId = callId
-            emitUpdateProgress("permission_required", 100, file.length(), file.length(), "")
-            activity.runOnUiThread { onLaunchUnknownSourcesSettings() }
-            return
-        }
-        AppUpdateManager.consumePendingInstallApkPath(appContext)
-        activity.runOnUiThread {
-            runCatching {
-                AppUpdateManager.launchSystemInstaller(activity, file)
-                emitUpdateProgress("installing", 100, file.length(), file.length(), "")
-                resolveCallSuccess(callId, JSONObject().apply { put("status", "installing") }.toString())
-            }.onFailure { err ->
-                resolveCallError(callId, err.localizedMessage ?: "Installer launch failed")
-            }
-        }
-    }
-
-    fun onUnknownSourcesSettingsReturned() {
-        val callId = pendingDownloadInstallCallId
-        pendingDownloadInstallCallId = null
-        val path = AppUpdateManager.consumePendingInstallApkPath(appContext)
-        if (path.isBlank()) {
-            if (callId != null) resolveCallError(callId, "NO_PENDING_APK")
-            return
-        }
-        val file = File(path)
-        if (!file.exists()) {
-            if (callId != null) resolveCallError(callId, "APK_MISSING")
-            return
-        }
-        if (AppUpdateManager.canRequestPackageInstalls(appContext)) {
-            runCatching {
-                AppUpdateManager.launchSystemInstaller(activity, file)
-                emitUpdateProgress("installing", 100, file.length(), file.length(), "")
-                if (callId != null) {
-                    resolveCallSuccess(callId, JSONObject().apply { put("status", "installing") }.toString())
-                }
-            }.onFailure { err ->
-                val msg = err.localizedMessage ?: "Unable to launch installer"
-                emitUpdateProgress("error", 0, 0L, 0L, msg)
-                if (callId != null) resolveCallError(callId, msg)
-            }
-        } else {
-            AppUpdateManager.savePendingInstallApkPath(appContext, path)
-            val msg = "Install permission not granted. Allow 'Install unknown apps' and tap Update Now again."
-            emitUpdateProgress("permission_denied", 100, file.length(), file.length(), msg)
-            if (callId != null) resolveCallError(callId, msg)
-        }
+        resolveCallError(callId, "NO_PENDING_APK")
     }
 
     private fun emitUpdateProgress(

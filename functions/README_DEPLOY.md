@@ -1,9 +1,10 @@
 # Firebase Cloud Functions Deployment Guide
 
-This folder contains the Firebase Cloud Functions (2nd Gen) backend for:
-- Automatic Admin Notification generation (`onStudentCreated`, `onPaymentRequestCreated`, `onPaymentRequestUpdated`, `onAccessCodeRedeemed`, `onQuizAttemptCreated`, `onAppConfigWritten`)
-- High-priority FCM push delivery with stale-token cleanup (`onAdminNotificationCreated`)
-- 1-to-1 Admin Personal Messaging push notifications + automatic `delivered` receipt progression (`onAdminChatMessageCreated`)
+This folder contains the Firebase Cloud Functions (2nd Gen) backend for **Quick Quiz**:
+- **Real-Time Public Push Broadcasts (`onPushBroadcastCreated`)**: Dispatches WhatsApp-style high-priority FCM banners (sound, vibration, Quick Quiz branding, deep-link route, strict tag deduplication) to all opted-in user devices across Foreground, Background, and Completely Closed states for Admin messages, Exam Notices, and App Update alerts.
+- **Verified Admin HTTPS Push API (`sendAdminPushNotification`)**: Authenticated HTTPS endpoint (`Authorization: Bearer <Firebase ID Token>`) allowing Admins or backend tooling to queue real-time push notifications.
+- **App Update Push Broadcaster (`onAppReleaseCreated` & `onGitHubReleasePush`)**: Automatically notifies all opted-in Android & Web devices whenever an Admin publishes a release or GitHub Actions pushes a new APK build.
+- **Admin Activity & 1-to-1 Admin Messaging (`onStudentCreated`, `onPaymentRequestCreated`, `onPaymentRequestUpdated`, `onAccessCodeRedeemed`, `onQuizAttemptCreated`, `onAppConfigWritten`, `onAdminNotificationCreated`, `onAdminChatMessageCreated`)**.
 
 ## Prerequisites
 - Firebase project: `gen-lang-client-0958586856` (Blaze plan required by Firebase Cloud Functions v2 & Artifact Registry)
@@ -28,3 +29,4 @@ This folder contains the Firebase Cloud Functions (2nd Gen) backend for:
    ```bash
    firebase functions:log
    ```
+5. (Optional for Web Push on browsers) Copy your Web Push VAPID key from **Firebase Console → Project Settings → Cloud Messaging → Web Push certificates** into AI Studio Secrets as `VITE_FIREBASE_VAPID_KEY`.

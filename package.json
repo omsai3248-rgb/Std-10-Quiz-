@@ -8,7 +8,7 @@
     "build": "tsc && vite build",
     "lint": "eslint .",
     "preview": "vite preview --host 0.0.0.0 --port 3000",
-    "android:sync": "npm run build && rm -rf app/src/main/assets/www && mkdir -p app/src/main/assets/www && cp -r dist/. app/src/main/assets/www/"
+    "android:sync": "npm run build && rm -rf app/src/main/assets/www && mkdir -p app/src/main/assets/www && cp -r dist/. app/src/main/assets/www/ && rm -rf app/src/main/assets/www/assets/aistudio"
   },
   "dependencies": {
     "firebase": "^11.4.0",

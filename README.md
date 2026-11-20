@@ -1,6 +1,16 @@
-# Quick-book — Payment Verification, Permanent Codes & Std 10 Quiz Portal
+# Quick Quiz — Payment Verification, Permanent Codes & Std 10 Quiz Portal
 
-A mobile-first **React + TypeScript + Vite + Tailwind CSS + Firebase** web application (`omsai3248-rgb/Quick-book`) with live Firestore `onSnapshot` listeners, Firebase Storage screenshot uploads, strict Phone OTP Admin login, and a **Gujarati / English (`ગુજરાતી / EN`)** language toggle.
+## 📥 Download Latest Android APK (Single Permanent Link)
+
+Open this **single permanent link** anytime — it automatically downloads the **last generated APK** built by GitHub Actions:
+
+👉 **[Download Quick-Quiz-Latest.apk](https://github.com/omsai3248-rgb/Quick-book/releases/latest/download/Quick-Quiz-Latest.apk)**
+
+```text
+https://github.com/omsai3248-rgb/Quick-book/releases/latest/download/Quick-Quiz-Latest.apk
+```
+
+A mobile-first **React + TypeScript + Vite + Tailwind CSS + Firebase** web & Android application (`omsai3248-rgb/Quick-book`) with live Firestore `onSnapshot` listeners, Firebase Storage screenshot uploads, Admin Panel, and a **Gujarati / English (`ગુજરાતી / EN`)** language toggle.
 
 ## Features
 

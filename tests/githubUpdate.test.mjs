@@ -246,4 +246,58 @@ test('AppUpdateComponents and App toast/notification render full-screen 100dvh x
   assert.equal(appSource.includes('min-w-0 flex-1 whitespace-pre-line break-words leading-relaxed'), true);
 });
 
+test('Android manifest, updater, and build comply with Google Play Protect (no REQUEST_INSTALL_PACKAGES or in-app APK dropper)', () => {
+  const manifest = fs.readFileSync(path.resolve('app/src/main/AndroidManifest.xml'), 'utf8');
+  assert.equal(manifest.includes('REQUEST_INSTALL_PACKAGES'), false);
+  assert.equal(manifest.includes('usesCleartextTraffic="false"'), true);
+
+  const mainActivity = fs.readFileSync(
+    path.resolve('app/src/main/java/com/aistudio/std10quiz/kqxmtv/MainActivity.kt'),
+    'utf8'
+  );
+  assert.equal(mainActivity.includes('ACTION_MANAGE_UNKNOWN_APP_SOURCES'), false);
+  assert.equal(mainActivity.includes('application/vnd.android.package-archive'), false);
+  assert.equal(mainActivity.includes('component = null'), true);
+  assert.equal(mainActivity.includes('selector = null'), true);
+
+  const updateMgr = fs.readFileSync(
+    path.resolve('app/src/main/java/com/aistudio/std10quiz/kqxmtv/AppUpdateManager.kt'),
+    'utf8'
+  );
+  assert.equal(updateMgr.includes('application/vnd.android.package-archive'), false);
+  assert.equal(updateMgr.includes('canRequestPackageInstalls()'), false);
+  assert.equal(updateMgr.includes('Intent.CATEGORY_BROWSABLE'), true);
+
+  const viteConfig = fs.readFileSync(path.resolve('vite.config.ts'), 'utf8');
+  assert.equal(viteConfig.includes("path.resolve(__dirname, 'dist', 'assets', 'aistudio')"), true);
+});
+
+test('GitHub CI workflow, README, and updater provide a single permanent latest APK direct download link', () => {
+  assert.equal(
+    updater.buildPermanentLatestApkUrl('omsai3248-rgb/Quick-book'),
+    'https://github.com/omsai3248-rgb/Quick-book/releases/latest/download/Quick-Quiz-Latest.apk'
+  );
+  assert.equal(
+    updater.buildPermanentLatestApkUrl('https://github.com/omsai3248-rgb/Quick-book.git'),
+    'https://github.com/omsai3248-rgb/Quick-book/releases/latest/download/Quick-Quiz-Latest.apk'
+  );
+
+  const ciYml = fs.readFileSync(path.resolve('.github/workflows/ci.yml'), 'utf8');
+  assert.equal(ciYml.includes('build-artifacts/Quick-Quiz-Latest.apk'), true);
+  assert.equal(
+    ciYml.includes('https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/Quick-Quiz-Latest.apk'),
+    true
+  );
+  assert.equal(ciYml.includes('--latest'), true);
+  assert.equal(ciYml.includes('GITHUB_STEP_SUMMARY'), true);
+
+  const readme = fs.readFileSync(path.resolve('README.md'), 'utf8');
+  assert.equal(
+    readme.includes('https://github.com/omsai3248-rgb/Quick-book/releases/latest/download/Quick-Quiz-Latest.apk'),
+    true
+  );
+});
+
+
+
 

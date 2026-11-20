@@ -61,6 +61,11 @@ function createAutoUpdateManifestPlugin(): Plugin {
           );
         }
       }
+      // Exclude AI Studio chat upload attachments from production web & Android APK bundles
+      const distChatAttachments = path.resolve(__dirname, 'dist', 'assets', 'aistudio');
+      if (fs.existsSync(distChatAttachments)) {
+        fs.rmSync(distChatAttachments, { recursive: true, force: true });
+      }
     },
   };
 }

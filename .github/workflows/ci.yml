@@ -12,7 +12,7 @@ on:
         description: 'Publish APK as a GitHub Release'
         required: false
         type: boolean
-        default: false
+        default: true
 
 permissions:
   contents: write
@@ -193,11 +193,14 @@ jobs:
             echo "ERROR: Signed release APK not found at app/build/outputs/apk/release/app-release.apk" >&2
             exit 1
           fi
+          cp app/build/outputs/apk/release/app-release.apk build-artifacts/Quick-Quiz-Latest.apk
           cp app/build/outputs/apk/release/app-release.apk build-artifacts/Std10-Quiz.apk
-          APK_SHA256="$(sha256sum build-artifacts/Std10-Quiz.apk | awk '{print $1}')"
-          APK_SIZE_BYTES="$(wc -c < build-artifacts/Std10-Quiz.apk | tr -d ' ')"
+          APK_SHA256="$(sha256sum build-artifacts/Quick-Quiz-Latest.apk | awk '{print $1}')"
+          APK_SIZE_BYTES="$(wc -c < build-artifacts/Quick-Quiz-Latest.apk | tr -d ' ')"
+          PERMANENT_LATEST_APK_URL="https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/Quick-Quiz-Latest.apk"
           echo "APK_SHA256=$APK_SHA256" >> "$GITHUB_ENV"
           echo "APK_SIZE_BYTES=$APK_SIZE_BYTES" >> "$GITHUB_ENV"
+          echo "PERMANENT_LATEST_APK_URL=$PERMANENT_LATEST_APK_URL" >> "$GITHUB_ENV"
 
           node -e '
             const fs = require("fs");
@@ -207,8 +210,9 @@ jobs:
               tagName: process.env.RELEASE_TAG,
               releaseTitle: `Quick Quiz v${process.env.VERSION_NAME}`,
               releaseNotes: process.env.RELEASE_NOTES_TEXT || existing.releaseNotes || "",
-              apkFileName: "Std10-Quiz.apk",
-              apkDownloadUrl: `https://github.com/${process.env.GITHUB_REPOSITORY}/releases/download/${process.env.RELEASE_TAG}/Std10-Quiz.apk`,
+              apkFileName: "Quick-Quiz-Latest.apk",
+              apkDownloadUrl: process.env.PERMANENT_LATEST_APK_URL,
+              apkTaggedDownloadUrl: `https://github.com/${process.env.GITHUB_REPOSITORY}/releases/download/${process.env.RELEASE_TAG}/Quick-Quiz-Latest.apk`,
               apkSizeBytes: Number(process.env.APK_SIZE_BYTES || 0),
               apkSha256: process.env.APK_SHA256 || "",
               signingCertSha256: process.env.SIGNING_CERT_SHA256 || "",
@@ -223,7 +227,7 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: std10-quiz-android-apk
-          path: build-artifacts/Std10-Quiz.apk
+          path: build-artifacts/Quick-Quiz-Latest.apk
           retention-days: 30
           if-no-files-found: error
 
@@ -235,7 +239,7 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
-      - name: Publish GitHub Release
+      - name: Publish GitHub Release & Update Permanent Latest APK Link
         if: github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -244,18 +248,33 @@ jobs:
           TAG="${RELEASE_TAG}"
           FULL_NOTES="${BASE_NOTES}
 
+          **Permanent Latest APK Direct Download Link (Always downloads the newest build):**
+          ${PERMANENT_LATEST_APK_URL}
+
           <!-- versionCode:${VERSION_CODE} -->
           <!-- apkSha256:${APK_SHA256} -->"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" build-artifacts/Std10-Quiz.apk build-artifacts/version.json --clobber
+            gh release upload "$TAG" build-artifacts/Quick-Quiz-Latest.apk build-artifacts/Std10-Quiz.apk build-artifacts/version.json --clobber
             gh release edit "$TAG" --title "Quick Quiz v${VERSION_NAME} ($TAG)" --notes "$FULL_NOTES" --latest
           else
-            gh release create "$TAG" build-artifacts/Std10-Quiz.apk build-artifacts/version.json \
+            gh release create "$TAG" build-artifacts/Quick-Quiz-Latest.apk build-artifacts/Std10-Quiz.apk build-artifacts/version.json \
               --target "$GITHUB_SHA" \
               --title "Quick Quiz v${VERSION_NAME} ($TAG)" \
               --notes "$FULL_NOTES" \
               --latest
           fi
+
+          {
+            echo "## Quick Quiz — Permanent Latest APK Link"
+            echo ""
+            echo "Open this single link anytime to automatically download the **last generated APK**:"
+            echo ""
+            echo "**Direct Download URL:** ${PERMANENT_LATEST_APK_URL}"
+            echo ""
+            echo "- **Version:** v${VERSION_NAME} (Build #${VERSION_CODE})"
+            echo "- **APK File:** \`Quick-Quiz-Latest.apk\`"
+            echo "- **SHA-256:** \`${APK_SHA256}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Dispatch Closed-App FCM Push Notification (optional webhook)
         if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))

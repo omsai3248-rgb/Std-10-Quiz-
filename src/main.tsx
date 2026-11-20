@@ -8,12 +8,16 @@ import { initWebServiceWorkerUpdater } from './services/webSwUpdateService';
 
 void initWebServiceWorkerUpdater();
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <ErrorBoundary>
-      <LanguageProvider>
-        <App />
-      </LanguageProvider>
-    </ErrorBoundary>
-  </React.StrictMode>
-);
+const rootEl = document.getElementById('root');
+if (rootEl) {
+  ReactDOM.createRoot(rootEl).render(
+    <React.StrictMode>
+      <ErrorBoundary>
+        <LanguageProvider>
+          <App />
+        </LanguageProvider>
+      </ErrorBoundary>
+    </React.StrictMode>
+  );
+  (window as Window & { __QQ_APP_MOUNTED__?: boolean }).__QQ_APP_MOUNTED__ = true;
+}

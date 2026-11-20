@@ -12,7 +12,6 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.provider.MediaStore
-import android.provider.Settings
 import android.util.Base64
 import android.util.Log
 import android.view.KeyEvent
@@ -538,12 +537,6 @@ private fun PortalWebContainer(
         firebaseBridgeRef?.onApkFilePickedResult(uri)
     }
 
-    val unknownSourcesLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.StartActivityForResult()
-    ) {
-        firebaseBridgeRef?.onUnknownSourcesSettingsReturned()
-    }
-
     BackHandler(enabled = canGoBack) {
         webViewRef?.goBack()
     }
@@ -629,22 +622,10 @@ private fun PortalWebContainer(
                                 onLaunchApkPicker = {
                                     adminApkPickerLauncher.launch(
                                         arrayOf(
-                                            "application/vnd.android.package-archive",
                                             "application/octet-stream",
                                             "*/*"
                                         )
                                     )
-                                },
-                                onLaunchUnknownSourcesSettings = {
-                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                                        val intent = Intent(
-                                            Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                                            Uri.parse("package:${activity.packageName}")
-                                        )
-                                        unknownSourcesLauncher.launch(intent)
-                                    } else {
-                                        firebaseBridgeRef?.onUnknownSourcesSettingsReturned()
-                                    }
                                 }
                             )
                             firebaseBridgeRef = firebaseBridge
@@ -721,7 +702,11 @@ private fun PortalWebContainer(
 
                                 if (scheme == "intent") {
                                     return try {
-                                        val parsedIntent = Intent.parseUri(uri.toString(), Intent.URI_INTENT_SCHEME)
+                                        val parsedIntent = Intent.parseUri(uri.toString(), Intent.URI_INTENT_SCHEME).apply {
+                                            addCategory(Intent.CATEGORY_BROWSABLE)
+                                            component = null
+                                            selector = null
+                                        }
                                         try {
                                             ctx.startActivity(parsedIntent)
                                         } catch (_: ActivityNotFoundException) {
@@ -795,7 +780,6 @@ private fun PortalWebContainer(
                                     if (wantsNonImage) {
                                         webDocumentPickerLauncher.launch(
                                             arrayOf(
-                                                "application/vnd.android.package-archive",
                                                 "application/octet-stream",
                                                 "*/*"
                                             )

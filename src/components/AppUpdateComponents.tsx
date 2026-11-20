@@ -222,7 +222,7 @@ export const UpdateAvailableModal: React.FC<UpdateAvailableModalProps> = ({
     });
 
     try {
-      await downloadAndInstallNativeAppUpdate({
+      const result = await downloadAndInstallNativeAppUpdate({
         apkDownloadUrl: release.apkDownloadUrl,
         versionName: release.versionName,
         versionCode: release.versionCode ?? currentVersionCode + 1,
@@ -230,6 +230,20 @@ export const UpdateAvailableModal: React.FC<UpdateAvailableModalProps> = ({
         apkSha256: release.apkSha256,
         signingCertSha256: release.signingCertSha256,
       });
+      if (result?.status === 'opened_browser') {
+        onNotify?.(
+          lang === 'en'
+            ? 'Update download opened in your browser.'
+            : 'અપડેટ ડાઉનલોડ તમારા બ્રાઉઝરમાં ખુલી ગયું છે.'
+        );
+        setProgressState({
+          status: 'idle',
+          progressPercent: 100,
+          bytesDownloaded: release.apkSizeBytes || 0,
+          totalBytes: release.apkSizeBytes || 0,
+          message: '',
+        });
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Update download failed';
       setProgressState((prev) => ({
