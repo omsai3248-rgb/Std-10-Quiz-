@@ -49,7 +49,7 @@ interface AdminNotificationsTabProps {
   onMarkRead: (notifId: string) => Promise<void> | void;
   onMarkAllRead: () => Promise<void> | void;
   onDeleteNotif: (notifId: string) => Promise<void> | void;
-  onOpenRoute: (targetRoute: AdminNotificationRoute) => void;
+  onOpenRoute: (targetRoute: AdminNotificationRoute, item?: AdminNotificationItem) => void;
 }
 
 function formatNotifDateTime(ts: AdminNotificationItem['createdAt']): string {
@@ -600,7 +600,7 @@ export const AdminNotificationsTab: React.FC<AdminNotificationsTabProps> = ({
                       type="button"
                       onClick={() => {
                         if (!read) void onMarkRead(item.id);
-                        onOpenRoute(item.targetRoute);
+                        onOpenRoute(item.targetRoute, item);
                       }}
                       className="min-h-[44px] px-3 rounded-xl bg-[#1E3A8A] hover:bg-[#172554] dark:bg-[#2563EB] text-white text-xs font-extrabold cursor-pointer"
                     >

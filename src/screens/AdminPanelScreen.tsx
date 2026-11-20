@@ -43,6 +43,7 @@ import {
   type AccessCode,
   type AdminChatMessage,
   type AdminChatThread,
+  type AdminFocusedTarget,
   type AdminInvite,
   type AdminNotificationItem,
   type AdminNotificationPrefs,
@@ -179,6 +180,9 @@ interface AdminPanelScreenProps {
   onOpenNotificationSettings?: () => void;
   onSendPushBroadcast?: (input: SendPushBroadcastInput) => Promise<void>;
   onDeletePushBroadcast?: (broadcastId: string) => Promise<void>;
+  focusedTarget?: AdminFocusedTarget | null;
+  onClearFocusedTarget?: () => void;
+  onFocusNotificationTarget?: (target: AdminFocusedTarget | null) => void;
 }
 
 type PendingDeleteTarget =
@@ -260,6 +264,9 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
   onOpenNotificationSettings,
   onSendPushBroadcast,
   onDeletePushBroadcast,
+  focusedTarget = null,
+  onClearFocusedTarget,
+  onFocusNotificationTarget,
 }) => {
   const { lang, toggleLang, t } = useTranslation();
   const { useNavigationRail, isLargeScreen, isTvOrSmartBoard } = useAdaptiveDisplay();
@@ -328,23 +335,40 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
     0
   );
 
-  const handleOpenNotificationRoute = (targetRoute: AdminNotificationRoute) => {
+  const handleOpenNotificationRoute = (
+    targetRoute: AdminNotificationRoute,
+    item?: AdminNotificationItem
+  ) => {
+    let targetTab: AdminTabId = 'notifications';
     switch (targetRoute) {
       case 'admin_requests':
-        selectTab('requests');
+        targetTab = 'requests';
         break;
       case 'admin_codes':
-        selectTab('used_codes');
+        targetTab = 'used_codes';
         break;
       case 'admin_students':
-        selectTab('students');
+        targetTab = 'students';
         break;
       case 'admin_updates':
-        selectTab('updates');
+        targetTab = 'updates';
         break;
       default:
-        selectTab('notifications');
+        targetTab = 'notifications';
         break;
+    }
+    selectTab(targetTab);
+    if (item && onFocusNotificationTarget) {
+      onFocusNotificationTarget({
+        tab: targetTab,
+        referenceId: item.referenceId || item.actorId || undefined,
+        actorName: item.actorName || undefined,
+        actorMobile: item.actorMobile || undefined,
+        category: item.category,
+        title: item.title,
+        body: item.body,
+        notifId: item.id,
+      });
     }
   };
 
@@ -775,6 +799,8 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
             hasMore={hasMorePayments}
             isLoadingMore={isLoadingMorePayments}
             onLoadMore={onLoadMorePayments}
+            focusedTarget={focusedTarget?.tab === 'requests' ? focusedTarget : null}
+            onClearFocusedTarget={onClearFocusedTarget}
             onZoomScreenshot={setZoomedScreenshotUrl}
             onApprove={onApprovePayment}
             onReject={onRejectPayment}
@@ -820,6 +846,8 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
           <AdminUsedCodesTab
             accessCodes={accessCodes}
             isBusy={isBusy}
+            focusedTarget={focusedTarget?.tab === 'used_codes' ? focusedTarget : null}
+            onClearFocusedTarget={onClearFocusedTarget}
             onDeleteCode={(item) =>
               openDeleteModal({
                 kind: 'code',
@@ -838,6 +866,8 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
             hasMore={hasMoreStudents}
             isLoadingMore={isLoadingMoreStudents}
             onLoadMore={onLoadMoreStudents}
+            focusedTarget={focusedTarget?.tab === 'students' ? focusedTarget : null}
+            onClearFocusedTarget={onClearFocusedTarget}
             onToggleStudentAccess={onToggleStudentAccess}
             onUpdateStudentSubjectAccess={onUpdateStudentSubjectAccess}
             onDeleteStudent={(st) =>

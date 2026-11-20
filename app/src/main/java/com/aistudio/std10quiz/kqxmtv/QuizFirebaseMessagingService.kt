@@ -149,8 +149,18 @@ class QuizFirebaseMessagingService : FirebaseMessagingService() {
         val category = data["category"].orEmpty().ifBlank { "data_update" }
         val title = data["title"].orEmpty().ifBlank { message.notification?.title.orEmpty() }
         val body = data["body"].orEmpty().ifBlank { message.notification?.body.orEmpty() }
-        val targetRoute = data["targetRoute"].orEmpty().ifBlank { "admin_notifications" }
+        val targetRoute = data["targetRoute"].orEmpty().ifBlank {
+            when (category) {
+                "registration", "login", "quiz_activity" -> "admin_students"
+                "payment" -> "admin_requests"
+                "code_redeem" -> "admin_codes"
+                "admin_chat" -> "admin_chat"
+                else -> "admin_notifications"
+            }
+        }
         val referenceId = data["referenceId"].orEmpty()
+        val actorName = data["actorName"].orEmpty()
+        val actorMobile = data["actorMobile"].orEmpty()
 
         if (title.isBlank() && body.isBlank()) return
 
@@ -161,7 +171,9 @@ class QuizFirebaseMessagingService : FirebaseMessagingService() {
             title = title,
             body = body,
             targetRoute = targetRoute,
-            referenceId = referenceId
+            referenceId = referenceId,
+            actorName = actorName,
+            actorMobile = actorMobile
         )
     }
 

@@ -104,10 +104,10 @@ exports.onStudentCreated = onDocumentCreated(
     const mobile = safeString(data.mobileNumber, 15);
     await createDeterministicNotification(`reg_${userId}`, {
       category: "registration",
-      title: "નવું વિદ્યાર્થી રજિસ્ટ્રેશન",
+      title: `નવો વિદ્યાર્થી લૉગિન: ${name}`,
       body: mobile
-        ? `${name} (${mobile}) એ નવું એકાઉન્ટ બનાવ્યું.`
-        : `${name} એ નવું એકાઉન્ટ બનાવ્યું.`,
+        ? `${name} (+91 ${mobile}) એ નવું એકાઉન્ટ બનાવી લૉગિન કર્યું.`
+        : `${name} એ નવું એકાઉન્ટ બનાવી લૉગિન કર્યું.`,
       actorName: name,
       actorMobile: mobile,
       actorId: userId,
@@ -281,11 +281,13 @@ exports.onAdminNotificationCreated = onDocumentCreated(
 
     const targetTokenDocs = [];
     const tokens = [];
+    const seenTokens = new Set();
     tokensSnap.forEach((docSnap) => {
       const tokenData = docSnap.data();
-      if (!tokenData.token) return;
+      if (!tokenData.token || seenTokens.has(tokenData.token)) return;
       // Send if admin opted in or if admin directory hasn't been synced yet for that UID
       if (allowedAdminUids.size === 0 || allowedAdminUids.has(tokenData.adminUid)) {
+        seenTokens.add(tokenData.token);
         targetTokenDocs.push(docSnap);
         tokens.push(tokenData.token);
       }
@@ -297,42 +299,98 @@ exports.onAdminNotificationCreated = onDocumentCreated(
     }
 
     const notifId = event.params.notifId;
-    const response = await messaging.sendEachForMulticast({
-      tokens,
-      data: {
-        type: "admin_activity",
-        notifId,
-        category: safeString(data.category, 40),
-        title: safeString(data.title, 120),
-        body: safeString(data.body, 400),
-        actorName: safeString(data.actorName, 80),
-        actorMobile: safeString(data.actorMobile, 15),
-        targetRoute: safeString(data.targetRoute, 60) || "admin_notifications",
-        referenceId: safeString(data.referenceId, 128),
-        timestampMs: String(Date.now()),
-      },
-      android: {
-        priority: "high",
-        ttl: 3600 * 1000,
-      },
-      webpush: {
-        headers: {
-          Urgency: "high",
-        },
+    const category = safeString(data.category, 40) || "data_update";
+    const title = safeString(data.title, 120) || "Quick Quiz Admin Alert";
+    const body = safeString(data.body, 400) || "નવી Admin પ્રવૃત્તિ નોંધાઈ છે.";
+    const actorName = safeString(data.actorName, 80);
+    const actorMobile = safeString(data.actorMobile, 15);
+    const targetRoute =
+      safeString(data.targetRoute, 60) ||
+      (category === "registration" || category === "login" || category === "quiz_activity"
+        ? "admin_students"
+        : category === "payment"
+          ? "admin_requests"
+          : category === "code_redeem"
+            ? "admin_codes"
+            : "admin_notifications");
+    const referenceId = safeString(data.referenceId, 128);
+    const dedupeTag = `act_${notifId}`;
+
+    let totalSuccess = 0;
+    let totalFailure = 0;
+    for (let i = 0; i < tokens.length; i += 450) {
+      const chunkTokens = tokens.slice(i, i + 450);
+      const chunkDocs = targetTokenDocs.slice(i, i + 450);
+      // Hybrid notification + data payload guarantees immediate system-tray display
+      // even when the Android app is completely CLOSED (terminated) or in Doze mode.
+      const response = await messaging.sendEachForMulticast({
+        tokens: chunkTokens,
         notification: {
-          title: safeString(data.title, 120),
-          body: safeString(data.body, 400),
+          title,
+          body,
         },
-      },
-    });
+        data: {
+          type: "admin_activity",
+          notifId,
+          category,
+          title,
+          body,
+          actorName,
+          actorMobile,
+          targetRoute,
+          referenceId,
+          timestampMs: String(Date.now()),
+        },
+        android: {
+          priority: "high",
+          ttl: 86400 * 1000,
+          collapseKey: dedupeTag,
+          notification: {
+            title,
+            body,
+            channelId: "admin_alerts_high",
+            sound: "default",
+            defaultSound: true,
+            defaultVibrateTimings: true,
+            notificationPriority: "PRIORITY_MAX",
+            visibility: "PUBLIC",
+            tag: dedupeTag,
+            clickAction: "OPEN_QUICK_QUIZ_NOTIFICATION",
+          },
+        },
+        webpush: {
+          headers: {
+            Urgency: "high",
+          },
+          notification: {
+            title,
+            body,
+            tag: dedupeTag,
+            data: {
+              type: "admin_activity",
+              notifId,
+              category,
+              targetRoute,
+              referenceId,
+              actorName,
+              actorMobile,
+            },
+          },
+        },
+      });
+      totalSuccess += response.successCount;
+      totalFailure += response.failureCount;
+      await pruneFailedTokens(chunkDocs, response.responses);
+    }
 
     logger.info("Dispatched admin notification push", {
       notifId,
-      successCount: response.successCount,
-      failureCount: response.failureCount,
+      category,
+      targetRoute,
+      successCount: totalSuccess,
+      failureCount: totalFailure,
     });
 
-    await pruneFailedTokens(targetTokenDocs, response.responses);
     await snap.ref.update({ pushDispatched: true, updatedAt: FieldValue.serverTimestamp() });
   }
 );
@@ -377,30 +435,56 @@ exports.onAdminChatMessageCreated = onDocumentCreated(
 
     if (tokens.length === 0) return;
 
+    const senderName = safeString(msg.senderName, 80) || "Admin Message";
+    const msgText = safeString(msg.text, 500) || "નવો Admin સંદેશ આવ્યો છે.";
+    const chatTag = `chat_${chatId}`;
+
     const response = await messaging.sendEachForMulticast({
       tokens,
+      notification: {
+        title: senderName,
+        body: msgText.slice(0, 400),
+      },
       data: {
         type: "admin_chat",
         chatId,
         messageId,
+        notifId: messageId,
         senderUid: safeString(msg.senderUid, 128),
-        senderName: safeString(msg.senderName, 80) || "Admin",
+        senderName,
         senderPhotoUrl: safeString(msg.senderPhotoUrl, 500),
-        text: safeString(msg.text, 500),
+        text: msgText,
+        title: senderName,
+        body: msgText.slice(0, 400),
         targetRoute: "admin_chat",
+        referenceId: chatId,
         timestampMs: String(Date.now()),
       },
       android: {
         priority: "high",
         ttl: 86400 * 1000,
+        collapseKey: chatTag,
+        notification: {
+          title: senderName,
+          body: msgText.slice(0, 400),
+          channelId: "admin_chat_messages",
+          sound: "default",
+          defaultSound: true,
+          defaultVibrateTimings: true,
+          notificationPriority: "PRIORITY_MAX",
+          visibility: "PRIVATE",
+          tag: chatTag,
+          clickAction: "OPEN_QUICK_QUIZ_NOTIFICATION",
+        },
       },
       webpush: {
         headers: {
           Urgency: "high",
         },
         notification: {
-          title: safeString(msg.senderName, 80) || "Admin Message",
-          body: safeString(msg.text, 400),
+          title: senderName,
+          body: msgText.slice(0, 400),
+          tag: chatTag,
         },
       },
     });

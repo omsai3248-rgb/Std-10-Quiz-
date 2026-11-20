@@ -552,6 +552,9 @@ export interface AdminChatMessage {
 
 export interface AdminDeepLinkPayload {
   targetRoute: AdminDeepLinkRoute;
+  category?: AdminNotificationCategory | string;
+  actorName?: string;
+  actorMobile?: string;
   chatId?: string;
   senderUid?: string;
   notifId?: string;
@@ -568,4 +571,13 @@ export interface AdminDeepLinkPayload {
   isMandatory?: boolean;
 }
 
-
+export interface AdminFocusedTarget {
+  tab: 'requests' | 'all_codes' | 'used_codes' | 'students' | 'notifications' | 'chat' | 'updates';
+  referenceId?: string;
+  actorName?: string;
+  actorMobile?: string;
+  category?: string;
+  title?: string;
+  body?: string;
+  notifId?: string;
+}

@@ -2883,8 +2883,61 @@ class NativeFirebaseBridge(
         }
         if (granted) {
             syncPublicDeviceFcmRegistration()
+            syncCurrentAdminFcmTokenIfSignedIn()
         }
         emitToJs("window.__onNativeNotificationPermissionChanged", JSONObject.quote(status))
+    }
+
+    private fun syncCurrentAdminFcmTokenIfSignedIn() {
+        val localDb = db ?: return
+        val user = auth?.currentUser ?: return
+        activity.lifecycleScope.launch(Dispatchers.IO) {
+            runCatching {
+                if (!AdminNotificationHelper.isAdminSessionActive(appContext) && !verifyAuthorizedAdminSuspended(user)) {
+                    return@runCatching
+                }
+                val token = withTimeoutOrNull(4_500L) {
+                    FirebaseMessaging.getInstance().token.awaitResult()
+                }.orEmpty()
+                if (token.length < 20) return@runCatching
+
+                AdminNotificationHelper.saveFcmToken(appContext, token)
+                val deviceId = AdminNotificationHelper.getOrCreateDeviceId(appContext)
+                val tokenDocId = "${user.uid}_$deviceId"
+                val deviceName = "${Build.MANUFACTURER} ${Build.MODEL}".trim().ifBlank { "Android Device" }.take(120)
+                val appVersion = runCatching {
+                    appContext.packageManager.getPackageInfo(appContext.packageName, 0).versionName.orEmpty().ifBlank { "1.0.0" }
+                }.getOrDefault("1.0.0").take(32)
+                val email = (user.email ?: AdminNotificationHelper.getSavedAdminEmail(appContext)).trim().lowercase().take(120)
+                val displayName = (user.displayName?.takeIf { it.isNotBlank() }
+                    ?: AdminNotificationHelper.getSavedAdminName(appContext).ifBlank { email.substringBefore('@').ifBlank { "Admin" } }).take(80)
+
+                val tokenRef = localDb.collection("admin_fcm_tokens").document(tokenDocId)
+                val existingToken = runCatching {
+                    withTimeoutOrNull(2_500L) { tokenRef.get().awaitResult() }
+                }.getOrNull()
+                val tokenPayload = hashMapOf<String, Any>(
+                    "adminUid" to user.uid,
+                    "adminEmail" to email,
+                    "adminName" to displayName,
+                    "token" to token,
+                    "platform" to "android",
+                    "deviceId" to deviceId,
+                    "deviceName" to deviceName,
+                    "appVersion" to appVersion,
+                    "enabled" to true,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+                if (existingToken == null || !existingToken.exists()) {
+                    tokenPayload["createdAt"] = FieldValue.serverTimestamp()
+                    tokenRef.set(tokenPayload).awaitResult()
+                } else {
+                    tokenRef.set(tokenPayload, SetOptions.merge()).awaitResult()
+                }
+            }.onFailure { err ->
+                Log.w("NativeFirebase", "syncCurrentAdminFcmTokenIfSignedIn failed", err)
+            }
+        }
     }
 
     @JavascriptInterface
@@ -3162,30 +3215,27 @@ class NativeFirebaseBridge(
                 val targetRoute = obj.optString("targetRoute", "admin_notifications")
                 val validRoute = if (targetRoute in listOf("admin_requests", "admin_codes", "admin_students", "admin_updates", "admin_notifications")) targetRoute else "admin_notifications"
                 val ref = localDb.collection("admin_notifications").document(notifId)
-                val existing = runCatching {
-                    withTimeoutOrNull(2_000L) { ref.get().awaitResult() }
-                }.getOrNull()
-                if (existing == null || !existing.exists()) {
-                    ref.set(
-                        mapOf(
-                            "category" to validCategory,
-                            "title" to obj.optString("title", "નવી સૂચના").take(120),
-                            "body" to obj.optString("body", "").ifBlank { "એપ અપડેટ" }.take(400),
-                            "actorName" to obj.optString("actorName", "").take(80),
-                            "actorMobile" to obj.optString("actorMobile", "").take(15),
-                            "actorId" to obj.optString("actorId", "").take(128),
-                            "targetRoute" to validRoute,
-                            "referenceId" to obj.optString("referenceId", "").take(128),
-                            "isRead" to false,
-                            "readBy" to emptyList<String>(),
-                            "pushDispatched" to false,
-                            "createdAt" to FieldValue.serverTimestamp(),
-                            "updatedAt" to FieldValue.serverTimestamp()
-                        )
-                    ).awaitResult()
-                }
+                // Direct create write (non-admin students have allow create but NOT allow get on admin_notifications)
+                ref.set(
+                    mapOf(
+                        "category" to validCategory,
+                        "title" to obj.optString("title", "નવી સૂચના").ifBlank { "નવી સૂચના" }.take(120),
+                        "body" to obj.optString("body", "").ifBlank { "એપ અપડેટ" }.take(400),
+                        "actorName" to obj.optString("actorName", "").take(80),
+                        "actorMobile" to obj.optString("actorMobile", "").take(15),
+                        "actorId" to obj.optString("actorId", "").take(128),
+                        "targetRoute" to validRoute,
+                        "referenceId" to obj.optString("referenceId", "").take(128),
+                        "isRead" to false,
+                        "readBy" to emptyList<String>(),
+                        "pushDispatched" to false,
+                        "createdAt" to FieldValue.serverTimestamp(),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                ).awaitResult()
                 resolveCallSuccess(callId, JSONObject.quote(notifId))
             } catch (_: Exception) {
+                // Non-fatal if deterministic notification doc already exists or device is offline
                 resolveCallSuccess(callId, "\"skipped\"")
             }
         }
@@ -3253,7 +3303,9 @@ class NativeFirebaseBridge(
                                         title = doc.getString("title").orEmpty(),
                                         body = doc.getString("body").orEmpty(),
                                         targetRoute = doc.getString("targetRoute").orEmpty(),
-                                        referenceId = doc.getString("referenceId").orEmpty()
+                                        referenceId = doc.getString("referenceId").orEmpty(),
+                                        actorName = doc.getString("actorName").orEmpty(),
+                                        actorMobile = doc.getString("actorMobile").orEmpty()
                                     )
                                 }
                             }

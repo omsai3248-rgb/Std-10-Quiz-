@@ -1,5 +1,6 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
+  BellRing,
   Check,
   Copy,
   Download,
@@ -29,6 +30,7 @@ import {
   resolveCodeSubjectId,
   resolvePaymentSubjectId,
   type AccessCode,
+  type AdminFocusedTarget,
   type PaymentRequest,
   type StudentProfile,
   type SubjectId,
@@ -266,6 +268,48 @@ const LoadMoreButton: React.FC<{
   );
 };
 
+const FocusedNotificationBanner: React.FC<{
+  target: AdminFocusedTarget | null | undefined;
+  onClear?: () => void;
+}> = ({ target, onClear }) => {
+  if (!target) return null;
+  const heading =
+    target.title ||
+    (target.actorName ? `${target.actorName}` : 'નોટિફિકેશનમાંથી ખુલેલ વિગત');
+  const detail =
+    target.body ||
+    (target.actorMobile ? `+91 ${target.actorMobile}` : target.referenceId || '');
+  return (
+    <div
+      data-testid="admin_focused_notification_banner"
+      className="rounded-2xl bg-[#DBEAFE] dark:bg-[#1E3A5F] border-2 border-[#2563EB] dark:border-[#60A5FA] p-3.5 flex items-start justify-between gap-3 text-[#1E3A8A] dark:text-[#EFF6FF] shadow-sm"
+    >
+      <div className="flex items-start gap-2.5 min-w-0">
+        <div className="h-9 w-9 rounded-xl bg-[#1E3A8A] dark:bg-[#2563EB] text-white flex items-center justify-center shrink-0 mt-0.5">
+          <BellRing className="h-4 w-4" />
+        </div>
+        <div className="min-w-0">
+          <p className="text-[11px] font-extrabold uppercase tracking-wide opacity-80">
+            નોટિફિકેશનમાંથી ખુલ્યું
+          </p>
+          <p className="text-sm font-extrabold break-words">{heading}</p>
+          {detail && <p className="text-xs opacity-90 break-words mt-0.5">{detail}</p>}
+        </div>
+      </div>
+      {onClear && (
+        <button
+          type="button"
+          onClick={onClear}
+          aria-label="Clear highlight"
+          className="min-h-[36px] min-w-[36px] rounded-xl bg-white/80 dark:bg-black/25 hover:bg-white dark:hover:bg-black/40 flex items-center justify-center shrink-0 cursor-pointer"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      )}
+    </div>
+  );
+};
+
 /* --- Tab 1: Live Payment Requests --- */
 export const AdminRequestsTab: React.FC<{
   payments: PaymentRequest[];
@@ -274,6 +318,8 @@ export const AdminRequestsTab: React.FC<{
   hasMore?: boolean;
   isLoadingMore?: boolean;
   onLoadMore?: () => void;
+  focusedTarget?: AdminFocusedTarget | null;
+  onClearFocusedTarget?: () => void;
   onZoomScreenshot: (url: string) => void;
   onApprove: (req: PaymentRequest, adminNote: string, subjectId: string) => void;
   onReject: (req: PaymentRequest, reason: string) => void;
@@ -291,6 +337,8 @@ export const AdminRequestsTab: React.FC<{
   hasMore,
   isLoadingMore,
   onLoadMore,
+  focusedTarget = null,
+  onClearFocusedTarget,
   onZoomScreenshot,
   onApprove,
   onReject,
@@ -303,11 +351,35 @@ export const AdminRequestsTab: React.FC<{
   const [statusFilter, setStatusFilter] = useState<'pending' | 'approved' | 'rejected' | 'all'>('pending');
   const [showQuickCodeGen, setShowQuickCodeGen] = useState(false);
 
+  const focusedRefId = focusedTarget?.referenceId?.trim() ?? '';
+  const focusedMobile = focusedTarget?.actorMobile?.replace(/\D/g, '').slice(-10) ?? '';
+
+  const isFocusedPayment = (req: PaymentRequest): boolean => {
+    if (!focusedTarget) return false;
+    if (focusedRefId && req.id === focusedRefId) return true;
+    if (focusedMobile && req.mobileNumber.replace(/\D/g, '').slice(-10) === focusedMobile) return true;
+    return false;
+  };
+
+  useEffect(() => {
+    if (!focusedTarget) return;
+    const matched = payments.find(
+      (p) =>
+        (focusedRefId && p.id === focusedRefId) ||
+        (focusedMobile && p.mobileNumber.replace(/\D/g, '').slice(-10) === focusedMobile)
+    );
+    if (matched) {
+      setStatusFilter(matched.status);
+    } else if (focusedRefId || focusedMobile) {
+      setStatusFilter('all');
+    }
+  }, [focusedMobile, focusedRefId, focusedTarget, payments]);
+
   const pendingPayments = useMemo(() => payments.filter((p) => p.status === 'pending'), [payments]);
   const approvedPayments = useMemo(() => payments.filter((p) => p.status === 'approved'), [payments]);
   const rejectedPayments = useMemo(() => payments.filter((p) => p.status === 'rejected'), [payments]);
 
-  const list =
+  const baseList =
     statusFilter === 'pending'
       ? pendingPayments
       : statusFilter === 'approved'
@@ -316,8 +388,19 @@ export const AdminRequestsTab: React.FC<{
           ? rejectedPayments
           : payments;
 
+  const list = useMemo(() => {
+    if (!focusedTarget) return baseList;
+    return [...baseList].sort((a, b) => {
+      const aHit = (focusedRefId && a.id === focusedRefId) || (focusedMobile && a.mobileNumber.replace(/\D/g, '').slice(-10) === focusedMobile) ? 1 : 0;
+      const bHit = (focusedRefId && b.id === focusedRefId) || (focusedMobile && b.mobileNumber.replace(/\D/g, '').slice(-10) === focusedMobile) ? 1 : 0;
+      return bHit - aHit;
+    });
+  }, [baseList, focusedMobile, focusedRefId, focusedTarget]);
+
   return (
     <div className="p-3 sm:p-4 space-y-4">
+      <FocusedNotificationBanner target={focusedTarget} onClear={onClearFocusedTarget} />
+
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap gap-2">
           {[
@@ -372,6 +455,7 @@ export const AdminRequestsTab: React.FC<{
               req={req}
               lang={lang}
               isBusy={isBusy}
+              isHighlighted={isFocusedPayment(req)}
               onZoomScreenshot={onZoomScreenshot}
               onApprove={onApprove}
               onReject={onReject}
@@ -395,12 +479,23 @@ const PaymentRequestCard: React.FC<{
   req: PaymentRequest;
   lang: 'gu' | 'en';
   isBusy: boolean;
+  isHighlighted?: boolean;
   onZoomScreenshot: (url: string) => void;
   onApprove: (req: PaymentRequest, adminNote: string, subjectId: string) => void;
   onReject: (req: PaymentRequest, reason: string) => void;
   onDeleteRequest: (req: PaymentRequest) => void;
   onNotify?: (message: string, isError?: boolean) => void;
-}> = ({ req, lang, isBusy, onZoomScreenshot, onApprove, onReject, onDeleteRequest, onNotify }) => {
+}> = ({
+  req,
+  lang,
+  isBusy,
+  isHighlighted = false,
+  onZoomScreenshot,
+  onApprove,
+  onReject,
+  onDeleteRequest,
+  onNotify,
+}) => {
   const { t } = useTranslation();
   const requestedSubject = resolvePaymentSubjectId(req);
   const [selectedApproveSubject, setSelectedApproveSubject] = useState<string>(requestedSubject);
@@ -420,7 +515,13 @@ const PaymentRequestCard: React.FC<{
   };
 
   return (
-    <div className="rounded-2xl bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] shadow-sm p-4 space-y-3">
+    <div
+      className={`rounded-2xl bg-white dark:bg-[#1E293B] shadow-sm p-4 space-y-3 transition-all ${
+        isHighlighted
+          ? 'border-2 border-[#2563EB] dark:border-[#60A5FA] ring-4 ring-[#2563EB]/15'
+          : 'border border-[#E2E8F0] dark:border-[#334155]'
+      }`}
+    >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <h4 className="text-base font-extrabold truncate">{req.studentName}</h4>
@@ -963,25 +1064,36 @@ export const AdminAllCodesTab: React.FC<{
 export const AdminUsedCodesTab: React.FC<{
   accessCodes: AccessCode[];
   isBusy: boolean;
+  focusedTarget?: AdminFocusedTarget | null;
+  onClearFocusedTarget?: () => void;
   onDeleteCode: (item: AccessCode) => void;
-}> = ({ accessCodes, isBusy, onDeleteCode }) => {
+}> = ({ accessCodes, isBusy, focusedTarget = null, onClearFocusedTarget, onDeleteCode }) => {
   const { lang, t } = useTranslation();
   const { isLargeScreen } = useAdaptiveDisplay();
+
+  const focusedCodeRef = focusedTarget?.referenceId?.trim().toUpperCase() ?? '';
 
   const usedCodes = useMemo(() => {
     return accessCodes
       .filter((c) => c.status === 'used' || c.isUsed)
       .sort((a, b) => {
+        if (focusedCodeRef) {
+          const aHit = a.code.toUpperCase() === focusedCodeRef || a.id.toUpperCase() === focusedCodeRef ? 1 : 0;
+          const bHit = b.code.toUpperCase() === focusedCodeRef || b.id.toUpperCase() === focusedCodeRef ? 1 : 0;
+          if (aHit !== bHit) return bHit - aHit;
+        }
         const aSec = (a.usedAt ?? a.updatedAt)?.seconds ?? 0;
         const bSec = (b.usedAt ?? b.updatedAt)?.seconds ?? 0;
         return bSec - aSec;
       });
-  }, [accessCodes]);
+  }, [accessCodes, focusedCodeRef]);
 
   return (
     <div
       className={`p-3 sm:p-4 space-y-4 ${isLargeScreen ? 'max-w-[1600px]' : 'max-w-5xl'} mx-auto`}
     >
+      <FocusedNotificationBanner target={focusedTarget} onClear={onClearFocusedTarget} />
+
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <UserCheck className="h-5 w-5 text-[#047857] dark:text-[#6EE7B7]" />
@@ -1012,11 +1124,19 @@ export const AdminUsedCodesTab: React.FC<{
             const usedName = item.usedBy?.name || item.usedByName || '-';
             const usedMobile = item.usedBy?.mobile || item.usedByMobile || '-';
             const device = item.usedBy?.deviceInfo || 'Web Browser';
+            const isHighlighted =
+              Boolean(focusedCodeRef) &&
+              (item.code.toUpperCase() === focusedCodeRef ||
+                item.id.toUpperCase() === focusedCodeRef);
 
             return (
               <div
                 key={item.code}
-                className="rounded-2xl bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] p-4 space-y-3 shadow-sm"
+                className={`rounded-2xl bg-white dark:bg-[#1E293B] p-4 space-y-3 shadow-sm transition-all ${
+                  isHighlighted
+                    ? 'border-2 border-[#2563EB] dark:border-[#60A5FA] ring-4 ring-[#2563EB]/15'
+                    : 'border border-[#E2E8F0] dark:border-[#334155]'
+                }`}
               >
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-base font-extrabold tracking-widest font-mono text-[#1E3A8A] dark:text-[#93C5FD]">
@@ -1085,6 +1205,8 @@ export const AdminStudentsTab: React.FC<{
   hasMore?: boolean;
   isLoadingMore?: boolean;
   onLoadMore?: () => void;
+  focusedTarget?: AdminFocusedTarget | null;
+  onClearFocusedTarget?: () => void;
   onToggleStudentAccess: (student: StudentProfile, grantAccess: boolean) => void;
   onUpdateStudentSubjectAccess: (
     student: StudentProfile,
@@ -1098,6 +1220,8 @@ export const AdminStudentsTab: React.FC<{
   hasMore,
   isLoadingMore,
   onLoadMore,
+  focusedTarget = null,
+  onClearFocusedTarget,
   onToggleStudentAccess,
   onUpdateStudentSubjectAccess,
   onDeleteStudent,
@@ -1106,21 +1230,53 @@ export const AdminStudentsTab: React.FC<{
   const { isLargeScreen } = useAdaptiveDisplay();
   const [searchQuery, setSearchQuery] = useState('');
 
+  const focusedRefId = focusedTarget?.referenceId?.trim() ?? '';
+  const focusedMobile = focusedTarget?.actorMobile?.replace(/\D/g, '').slice(-10) ?? '';
+  const focusedNameLower = focusedTarget?.actorName?.trim().toLowerCase() ?? '';
+
+  const isFocusedStudent = (st: StudentProfile): boolean => {
+    if (!focusedTarget) return false;
+    if (focusedRefId && (st.id === focusedRefId || st.userId === focusedRefId)) return true;
+    const stMob = st.mobileNumber.replace(/\D/g, '').slice(-10);
+    if (focusedMobile && stMob === focusedMobile) return true;
+    if (!focusedRefId && !focusedMobile && focusedNameLower && st.fullName.trim().toLowerCase() === focusedNameLower) {
+      return true;
+    }
+    return false;
+  };
+
   const filteredStudents = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    if (!q) return students;
-    return students.filter(
-      (st) =>
-        st.fullName.toLowerCase().includes(q) ||
-        st.mobileNumber.includes(q) ||
-        st.redeemedCode.toLowerCase().includes(q)
-    );
-  }, [students, searchQuery]);
+    const base = !q
+      ? students
+      : students.filter(
+          (st) =>
+            st.fullName.toLowerCase().includes(q) ||
+            st.mobileNumber.includes(q) ||
+            st.redeemedCode.toLowerCase().includes(q)
+        );
+    if (!focusedTarget) return base;
+    return [...base].sort((a, b) => {
+      const aHit =
+        (focusedRefId && (a.id === focusedRefId || a.userId === focusedRefId)) ||
+        (focusedMobile && a.mobileNumber.replace(/\D/g, '').slice(-10) === focusedMobile)
+          ? 1
+          : 0;
+      const bHit =
+        (focusedRefId && (b.id === focusedRefId || b.userId === focusedRefId)) ||
+        (focusedMobile && b.mobileNumber.replace(/\D/g, '').slice(-10) === focusedMobile)
+          ? 1
+          : 0;
+      return bHit - aHit;
+    });
+  }, [students, searchQuery, focusedMobile, focusedRefId, focusedTarget]);
 
   return (
     <div
       className={`p-3 sm:p-4 space-y-4 ${isLargeScreen ? 'max-w-[1600px]' : 'max-w-5xl'} mx-auto`}
     >
+      <FocusedNotificationBanner target={focusedTarget} onClear={onClearFocusedTarget} />
+
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
         <div className="flex items-center gap-2">
           <UserCheck className="h-5 w-5 text-[#1E3A8A] dark:text-[#93C5FD]" />
@@ -1154,14 +1310,28 @@ export const AdminStudentsTab: React.FC<{
                 : (st.unlockedSubjects ?? []).filter((s) => s !== 'all')
             );
             const hasFull = st.hasQuizAccess || ALL_SUBJECT_IDS.every((s) => unlockedSet.has(s));
+            const highlighted = isFocusedStudent(st);
             return (
               <div
                 key={st.id || st.userId}
-                className="rounded-2xl bg-white dark:bg-[#1E293B] border border-[#E2E8F0] dark:border-[#334155] p-4 space-y-3 shadow-sm"
+                data-testid={highlighted ? 'focused_student_card' : undefined}
+                className={`rounded-2xl bg-white dark:bg-[#1E293B] p-4 space-y-3 shadow-sm transition-all ${
+                  highlighted
+                    ? 'border-2 border-[#047857] dark:border-[#34D399] ring-4 ring-[#047857]/15'
+                    : 'border border-[#E2E8F0] dark:border-[#334155]'
+                }`}
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <h4 className="text-sm sm:text-base font-extrabold truncate">{st.fullName}</h4>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <h4 className="text-sm sm:text-base font-extrabold truncate">{st.fullName}</h4>
+                      {highlighted && (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-[#D1FAE5] dark:bg-[#064E3B] text-[#065F46] dark:text-[#6EE7B7] px-2 py-0.5 text-[10px] font-extrabold shrink-0">
+                          <BellRing className="h-3 w-3" />
+                          <span>{focusedTarget?.category === 'registration' ? 'નવો યુઝર' : 'નોટિફિકેશન'}</span>
+                        </span>
+                      )}
+                    </div>
                     <p className="text-xs text-[#475569] dark:text-[#94A3B8] tabular-nums">
                       +91 {st.mobileNumber} • {formatTimestampLabel(st.updatedAt ?? st.createdAt, lang)}
                     </p>

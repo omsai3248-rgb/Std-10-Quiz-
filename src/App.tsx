@@ -127,6 +127,7 @@ import {
   type AdminChatMessage,
   type AdminChatThread,
   type AdminDeepLinkPayload,
+  type AdminFocusedTarget,
   type AdminInvite,
   type AdminNotificationCategory,
   type AdminNotificationItem,
@@ -377,6 +378,7 @@ const AppContent: React.FC = () => {
 
   // Admin Notifications Center, Push Permission & 1-to-1 Messaging
   const [adminSelectedTab, setAdminSelectedTab] = useState<AdminTabId>('requests');
+  const [focusedAdminTarget, setFocusedAdminTarget] = useState<AdminFocusedTarget | null>(null);
   const [adminProfile, setAdminProfile] = useState<AdminUser | null>(null);
   const [adminDirectory, setAdminDirectory] = useState<AdminUser[]>([]);
   const [adminInvites, setAdminInvites] = useState<AdminInvite[]>([]);
@@ -559,44 +561,71 @@ const AppContent: React.FC = () => {
     currentNotificationPrefsRef.current = currentNotificationPrefs;
   }, [currentNotificationPrefs]);
 
+  const resolveAdminTabFromPayload = useCallback((payload: AdminDeepLinkPayload): AdminTabId => {
+    switch (payload.targetRoute) {
+      case 'admin_chat':
+        return 'chat';
+      case 'admin_requests':
+        return 'requests';
+      case 'admin_codes':
+        return 'used_codes';
+      case 'admin_students':
+        return 'students';
+      case 'admin_updates':
+        return 'updates';
+      default: {
+        const cat = String(payload.category ?? payload.broadcastCategory ?? '').trim();
+        if (cat === 'registration' || cat === 'login' || cat === 'quiz_activity') return 'students';
+        if (cat === 'payment') return 'requests';
+        if (cat === 'code_redeem') return 'used_codes';
+        if (cat === 'admin_chat') return 'chat';
+        return 'notifications';
+      }
+    }
+  }, []);
+
   const applyAdminDeepLink = useCallback(
     (payload: AdminDeepLinkPayload) => {
+      const targetTab = resolveAdminTabFromPayload(payload);
       setRoute({ name: 'public', tab: 'admin' });
-      switch (payload.targetRoute) {
-        case 'admin_chat': {
-          setAdminSelectedTab('chat');
-          const resolvedChatId =
-            payload.chatId?.trim() ||
-            (payload.senderUid && authUser?.uid
-              ? getAdminChatId(authUser.uid, payload.senderUid)
-              : '');
-          if (resolvedChatId) {
-            setActiveAdminChatId(resolvedChatId);
-            void markAdminChatMessagesRead(resolvedChatId);
-          }
-          break;
+      setAdminSelectedTab(targetTab);
+
+      if (targetTab === 'chat') {
+        setFocusedAdminTarget(null);
+        const resolvedChatId =
+          payload.chatId?.trim() ||
+          (payload.senderUid && authUser?.uid
+            ? getAdminChatId(authUser.uid, payload.senderUid)
+            : '');
+        if (resolvedChatId) {
+          setActiveAdminChatId(resolvedChatId);
+          void markAdminChatMessagesRead(resolvedChatId);
         }
-        case 'admin_requests':
-          setAdminSelectedTab('requests');
-          break;
-        case 'admin_codes':
-          setAdminSelectedTab('used_codes');
-          break;
-        case 'admin_students':
-          setAdminSelectedTab('students');
-          break;
-        case 'admin_updates':
-          setAdminSelectedTab('updates');
-          break;
-        default:
-          setAdminSelectedTab('notifications');
-          break;
+      } else if (
+        payload.referenceId?.trim() ||
+        payload.actorMobile?.trim() ||
+        payload.actorName?.trim() ||
+        payload.broadcastTitle?.trim()
+      ) {
+        setFocusedAdminTarget({
+          tab: targetTab,
+          referenceId: payload.referenceId?.trim() || undefined,
+          actorName: payload.actorName?.trim() || undefined,
+          actorMobile: payload.actorMobile?.trim() || undefined,
+          category: String(payload.category ?? payload.broadcastCategory ?? '').trim() || undefined,
+          title: payload.broadcastTitle?.trim() || payload.updateTitle?.trim() || undefined,
+          body: payload.broadcastBody?.trim() || payload.releaseNotes?.trim() || undefined,
+          notifId: payload.notifId?.trim() || undefined,
+        });
+      } else {
+        setFocusedAdminTarget(null);
       }
-      if (payload.notifId) {
+
+      if (payload.notifId && authUser?.uid) {
         void markAdminNotificationAsRead(payload.notifId).catch(() => {});
       }
     },
-    [authUser?.uid]
+    [authUser?.uid, resolveAdminTabFromPayload]
   );
 
   // Observe public App Release Config, Update History & Push Broadcasts for ALL users
@@ -694,9 +723,9 @@ const AppContent: React.FC = () => {
         handlePublicPushDeepLinkRef.current(payload);
         return;
       }
-      if (isFirebaseAdmin) {
-        applyAdminDeepLink(payload);
-      } else {
+      // Immediately route to Admin screen + matching tab even during cold start before Auth hydrates
+      applyAdminDeepLink(payload);
+      if (!isFirebaseAdmin) {
         pendingDeepLinkRef.current = payload;
       }
     };
@@ -2324,6 +2353,9 @@ const AppContent: React.FC = () => {
           onOpenNotificationSettings={openAppNotificationSettings}
           onSendPushBroadcast={handleSendPushBroadcast}
           onDeletePushBroadcast={handleDeletePushBroadcast}
+          focusedTarget={focusedAdminTarget}
+          onClearFocusedTarget={() => setFocusedAdminTarget(null)}
+          onFocusNotificationTarget={setFocusedAdminTarget}
         />
       </Suspense>
     );

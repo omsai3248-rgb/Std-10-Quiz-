@@ -42,6 +42,8 @@ object AdminNotificationHelper {
     const val EXTRA_SENDER_UID = "extra_sender_uid"
     const val EXTRA_NOTIF_ID = "extra_notif_id"
     const val EXTRA_REFERENCE_ID = "extra_reference_id"
+    const val EXTRA_ACTOR_NAME = "extra_actor_name"
+    const val EXTRA_ACTOR_MOBILE = "extra_actor_mobile"
     const val EXTRA_BROADCAST_CATEGORY = "extra_broadcast_category"
     const val EXTRA_BROADCAST_TITLE = "extra_broadcast_title"
     const val EXTRA_BROADCAST_BODY = "extra_broadcast_body"
@@ -107,7 +109,7 @@ object AdminNotificationHelper {
             vibrationPattern = VIBRATION_PATTERN
             setSound(soundUri, audioAttrs)
             setShowBadge(true)
-            lockscreenVisibility = Notification.VISIBILITY_PRIVATE
+            lockscreenVisibility = Notification.VISIBILITY_PUBLIC
         }
 
         val chatChannel = NotificationChannel(
@@ -284,13 +286,21 @@ object AdminNotificationHelper {
         if (intent == null) return null
         val extras = intent.extras ?: return null
         val pushType = intent.getStringExtra("type").orEmpty().trim()
+        val broadcastCategory = (intent.getStringExtra(EXTRA_BROADCAST_CATEGORY)
+            ?: intent.getStringExtra("category")).orEmpty().trim()
         val rawRoute = intent.getStringExtra(EXTRA_TARGET_ROUTE)
             ?: intent.getStringExtra("targetRoute")
             ?: when (pushType) {
                 "app_update" -> "app_update"
                 "push_broadcast" -> "home"
                 "admin_chat" -> "admin_chat"
-                "admin_activity" -> "admin_notifications"
+                "admin_activity" -> when (broadcastCategory) {
+                    "registration", "login", "quiz_activity" -> "admin_students"
+                    "payment" -> "admin_requests"
+                    "code_redeem" -> "admin_codes"
+                    "admin_chat" -> "admin_chat"
+                    else -> "admin_notifications"
+                }
                 else -> null
             }
             ?: return null
@@ -300,12 +310,18 @@ object AdminNotificationHelper {
         val broadcastId = intent.getStringExtra("broadcastId").orEmpty()
         val notifId = (intent.getStringExtra(EXTRA_NOTIF_ID)
             ?: intent.getStringExtra("notifId")
+            ?: intent.getStringExtra("messageId")
             ?: intent.getStringExtra("releaseId")
             ?: broadcastId).orEmpty()
         val referenceId = (intent.getStringExtra(EXTRA_REFERENCE_ID)
             ?: intent.getStringExtra("referenceId")
             ?: intent.getStringExtra("releaseId")
             ?: broadcastId).orEmpty()
+        val actorName = (intent.getStringExtra(EXTRA_ACTOR_NAME)
+            ?: intent.getStringExtra("actorName")
+            ?: intent.getStringExtra("senderName")).orEmpty().trim()
+        val actorMobile = (intent.getStringExtra(EXTRA_ACTOR_MOBILE)
+            ?: intent.getStringExtra("actorMobile")).orEmpty().trim()
 
         val verCode: Long = when {
             intent.hasExtra(EXTRA_UPDATE_VERSION_CODE) -> intent.getLongExtra(EXTRA_UPDATE_VERSION_CODE, 0L)
@@ -334,14 +350,13 @@ object AdminNotificationHelper {
             else -> false
         }
 
-        val broadcastCategory = intent.getStringExtra(EXTRA_BROADCAST_CATEGORY)
-            ?: intent.getStringExtra("category").orEmpty()
         val broadcastTitle = intent.getStringExtra(EXTRA_BROADCAST_TITLE)
             ?: intent.getStringExtra(EXTRA_UPDATE_TITLE)
             ?: intent.getStringExtra("title").orEmpty()
         val broadcastBody = intent.getStringExtra(EXTRA_BROADCAST_BODY)
             ?: intent.getStringExtra(EXTRA_UPDATE_BODY)
-            ?: intent.getStringExtra("body").orEmpty()
+            ?: intent.getStringExtra("body")
+            ?: intent.getStringExtra("text").orEmpty()
 
         return JSONObject().apply {
             put("targetRoute", targetRoute)
@@ -350,7 +365,12 @@ object AdminNotificationHelper {
             put("notifId", notifId)
             put("referenceId", referenceId)
             if (broadcastId.isNotBlank()) put("broadcastId", broadcastId)
-            if (broadcastCategory.isNotBlank()) put("broadcastCategory", broadcastCategory)
+            if (broadcastCategory.isNotBlank()) {
+                put("category", broadcastCategory)
+                put("broadcastCategory", broadcastCategory)
+            }
+            if (actorName.isNotBlank()) put("actorName", actorName)
+            if (actorMobile.isNotBlank()) put("actorMobile", actorMobile)
             if (broadcastTitle.isNotBlank()) {
                 put("broadcastTitle", broadcastTitle)
                 put("updateTitle", broadcastTitle)
@@ -536,19 +556,36 @@ object AdminNotificationHelper {
         title: String,
         body: String,
         targetRoute: String,
-        referenceId: String
+        referenceId: String,
+        actorName: String = "",
+        actorMobile: String = ""
     ) {
         ensureChannels(context)
         if (!hasNotificationPermission(context)) return
         if (!isCategoryEnabled(context, category)) return
         if (!markDedupeShown(context, "act_$notifId")) return
 
+        val resolvedRoute = targetRoute.trim().ifBlank {
+            when (category) {
+                "registration", "login", "quiz_activity" -> "admin_students"
+                "payment" -> "admin_requests"
+                "code_redeem" -> "admin_codes"
+                "admin_chat" -> "admin_chat"
+                else -> "admin_notifications"
+            }
+        }
+
         val intent = Intent(context, MainActivity::class.java).apply {
             action = "OPEN_QUICK_QUIZ_NOTIFICATION"
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            putExtra(EXTRA_TARGET_ROUTE, targetRoute.ifBlank { "admin_notifications" })
+            putExtra(EXTRA_TARGET_ROUTE, resolvedRoute)
             putExtra(EXTRA_NOTIF_ID, notifId)
             putExtra(EXTRA_REFERENCE_ID, referenceId)
+            putExtra(EXTRA_BROADCAST_CATEGORY, category)
+            putExtra(EXTRA_BROADCAST_TITLE, title)
+            putExtra(EXTRA_BROADCAST_BODY, body)
+            if (actorName.isNotBlank()) putExtra(EXTRA_ACTOR_NAME, actorName)
+            if (actorMobile.isNotBlank()) putExtra(EXTRA_ACTOR_MOBILE, actorMobile)
         }
         val reqCode = (notifId.ifBlank { title + System.currentTimeMillis() }).hashCode()
         val pendingIntent = PendingIntent.getActivity(
@@ -559,23 +596,20 @@ object AdminNotificationHelper {
         )
 
         val appName = context.getString(R.string.app_name)
-        val publicFallback = NotificationCompat.Builder(context, CHANNEL_ADMIN_ALERTS)
-            .setSmallIcon(R.drawable.ic_stat_notification)
-            .setContentTitle("$appName • Admin Alert")
-            .setContentText("નવી Admin સૂચના આવી છે.")
-            .build()
-
         val builder = NotificationCompat.Builder(context, CHANNEL_ADMIN_ALERTS)
             .setSmallIcon(R.drawable.ic_stat_notification)
             .setColor(0xFF075E54.toInt())
             .setSubText("$appName • Admin")
             .setContentTitle(title.ifBlank { "Admin સૂચના" })
             .setContentText(body)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setStyle(
+                NotificationCompat.BigTextStyle()
+                    .setBigContentTitle(title.ifBlank { "Admin સૂચના" })
+                    .bigText(body)
+            )
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_EVENT)
-            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
-            .setPublicVersion(publicFallback)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setDefaults(NotificationCompat.DEFAULT_ALL)
             .setVibrate(VIBRATION_PATTERN)
             .setAutoCancel(true)
