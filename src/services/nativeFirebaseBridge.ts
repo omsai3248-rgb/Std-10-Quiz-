@@ -116,6 +116,9 @@ declare global {
     __onNativeMyAttempts?: (list: QuizAttempt[]) => void;
     __onNativeAllPayments?: (list: PaymentRequest[]) => void;
     __onNativeAllCodes?: (list: AccessCode[]) => void;
+    __onNativeAllCodesChunkStart?: (streamId: number, totalCount: number) => void;
+    __onNativeAllCodesChunk?: (streamId: number, chunk: AccessCode[]) => void;
+    __onNativeAllCodesChunkEnd?: (streamId: number) => void;
     __onNativeAllStudents?: (list: StudentProfile[]) => void;
     __onNativeAdminError?: (message: string) => void;
     __onNativeSyncState?: (state: Partial<SyncStatusSnapshot>) => void;
@@ -218,6 +221,8 @@ let latestStudentProfile: StudentProfile | null | undefined;
 let latestMyAttempts: QuizAttempt[] | undefined;
 let latestAllPayments: PaymentRequest[] | undefined;
 let latestAllCodes: AccessCode[] | undefined;
+let activeAllCodesStreamId = 0;
+let pendingAllCodesChunks: AccessCode[] = [];
 let latestAllStudents: StudentProfile[] | undefined;
 let latestAdminDirectory: AdminUser[] | undefined;
 let latestAdminInvites: AdminInvite[] | undefined;
@@ -297,7 +302,29 @@ if (typeof window !== 'undefined') {
   };
 
   window.__onNativeAllCodes = (list) => {
+    activeAllCodesStreamId = 0;
+    pendingAllCodesChunks = [];
     latestAllCodes = Array.isArray(list) ? list : [];
+    allCodeListeners.forEach((cb) => cb(latestAllCodes!));
+  };
+
+  window.__onNativeAllCodesChunkStart = (streamId) => {
+    activeAllCodesStreamId = Number(streamId) || 0;
+    pendingAllCodesChunks = [];
+  };
+
+  window.__onNativeAllCodesChunk = (streamId, chunk) => {
+    if (Number(streamId) !== activeAllCodesStreamId || !Array.isArray(chunk)) return;
+    for (let i = 0; i < chunk.length; i++) {
+      pendingAllCodesChunks.push(chunk[i]);
+    }
+  };
+
+  window.__onNativeAllCodesChunkEnd = (streamId) => {
+    if (Number(streamId) !== activeAllCodesStreamId) return;
+    latestAllCodes = pendingAllCodesChunks;
+    pendingAllCodesChunks = [];
+    activeAllCodesStreamId = 0;
     allCodeListeners.forEach((cb) => cb(latestAllCodes!));
   };
 

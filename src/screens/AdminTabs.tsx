@@ -717,7 +717,7 @@ const PaymentRequestCard: React.FC<{
 };
 
 /* --- Tab 2: Permanent All Codes Tab (Batch Folders + PDF + 1-Click Delete Unused) --- */
-const BULK_COUNT_PRESETS = [50, 100, 200, 400, 500] as const;
+const BULK_COUNT_PRESETS = [50, 100, 200, 400, 500, 1000] as const;
 const INITIAL_VISIBLE_CODES = 60;
 
 export const AdminAllCodesTab: React.FC<{
@@ -923,9 +923,9 @@ export const AdminAllCodesTab: React.FC<{
 
   const handleBulkGenerateSubmit = async () => {
     const parsedCount = Number.parseInt(countInputText, 10) || 10;
-    const clampedCount = Math.min(500, Math.max(1, parsedCount));
+    const effectiveCount = Math.max(1, parsedCount);
     const effectiveBatch = (batchName.trim() || suggestedNextBatch).slice(0, 60);
-    const result = await onGenerateBulkCodes(clampedCount, effectiveBatch, genSubjectId);
+    const result = await onGenerateBulkCodes(effectiveCount, effectiveBatch, genSubjectId);
     if (result && result.codes.length > 0) {
       setViewMode('folders');
       setSelectedFolderKey(result.batchName);
@@ -1062,7 +1062,7 @@ export const AdminAllCodesTab: React.FC<{
           {/* Quick Count Presets */}
           <div className="space-y-1.5">
             <p className="text-[11px] font-bold text-[#475569] dark:text-[#94A3B8]">
-              {lang === 'en' ? 'Quick Count (1–500)' : 'કેટલા કોડ બનાવવા? (1–500)'}
+              {lang === 'en' ? 'Quick Count (Unlimited)' : 'કેટલા કોડ બનાવવા? (અમર્યાદિત)'}
             </p>
             <div className="flex flex-wrap gap-1.5">
               {BULK_COUNT_PRESETS.map((preset) => {
@@ -1088,15 +1088,15 @@ export const AdminAllCodesTab: React.FC<{
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
             <div className="space-y-1">
               <label className="text-[11px] font-bold text-[#475569] dark:text-[#94A3B8]">
-                {lang === 'en' ? 'Number of Codes (1-500)' : 'કોડની સંખ્યા (1-500)'}
+                {lang === 'en' ? 'Number of Codes (Unlimited)' : 'કોડની સંખ્યા (અમર્યાદિત)'}
               </label>
               <input
                 type="text"
                 inputMode="numeric"
-                maxLength={3}
+                maxLength={5}
                 data-testid="bulk_count_input"
                 value={countInputText}
-                onChange={(e) => setCountInputText(e.target.value.replace(/\D/g, '').slice(0, 3))}
+                onChange={(e) => setCountInputText(e.target.value.replace(/\D/g, '').slice(0, 5))}
                 placeholder="400"
                 className="w-full h-11 rounded-xl border border-[#CBD5E1] dark:border-[#334155] bg-[#FAF9F5] dark:bg-[#0F172A] px-3 text-sm font-extrabold outline-none"
               />
@@ -1133,9 +1133,13 @@ export const AdminAllCodesTab: React.FC<{
               <PlusCircle className="h-4 w-4" />
             )}
             <span>
-              {lang === 'en'
-                ? `Generate ${Math.min(500, Math.max(1, Number.parseInt(countInputText, 10) || 10))} Codes into "${batchName.trim() || suggestedNextBatch}"`
-                : `"${batchName.trim() || suggestedNextBatch}" ફોલ્ડરમાં ${Math.min(500, Math.max(1, Number.parseInt(countInputText, 10) || 10))} નવા કોડ બનાવો`}
+              {isBusy
+                ? lang === 'en'
+                  ? `Generating ${Math.max(1, Number.parseInt(countInputText, 10) || 10)} Codes... Please wait`
+                  : `${Math.max(1, Number.parseInt(countInputText, 10) || 10)} કોડ બની રહ્યા છે... રાહ જુઓ`
+                : lang === 'en'
+                  ? `Generate ${Math.max(1, Number.parseInt(countInputText, 10) || 10)} Codes into "${batchName.trim() || suggestedNextBatch}"`
+                  : `"${batchName.trim() || suggestedNextBatch}" ફોલ્ડરમાં ${Math.max(1, Number.parseInt(countInputText, 10) || 10)} નવા કોડ બનાવો`}
             </span>
           </button>
 

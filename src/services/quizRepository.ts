@@ -1578,8 +1578,9 @@ export async function generateBulkAccessCodes(
   batchName: string,
   subjectId = 'all'
 ): Promise<string[]> {
-  if (count < 1 || count > 500) {
-    throw new Error('Can generate 1 to 500 codes per batch.');
+  const safeCount = Math.floor(Number(count));
+  if (!Number.isFinite(safeCount) || safeCount < 1) {
+    throw new Error('Please enter at least 1 code to generate.');
   }
 
   const normalizedSubject = ALL_SUBJECT_IDS.includes(subjectId as SubjectId) ? subjectId : 'all';
@@ -1590,7 +1591,7 @@ export async function generateBulkAccessCodes(
     return invokeNativeBridgeCall<string[]>((callId) => {
       window.AndroidFirebaseBridge?.generateBulkCodes?.(
         callId,
-        JSON.stringify({ count, batchName: cleanBatch, subjectId: normalizedSubject })
+        JSON.stringify({ count: safeCount, batchName: cleanBatch, subjectId: normalizedSubject })
       );
     });
   }
@@ -1599,7 +1600,7 @@ export async function generateBulkAccessCodes(
 
   const generated: string[] = [];
   const seen = new Set<string>();
-  while (generated.length < count) {
+  while (generated.length < safeCount) {
     const code = generateUnique8CharCode(normalizedSubject);
     if (!seen.has(code)) {
       seen.add(code);
@@ -2291,19 +2292,18 @@ export function observeAllAccessCodes(
   }
   setLiveSyncState('active');
   const colRef = collection(db, COLLECTION_ACCESS_CODES);
-  const q = query(colRef, orderBy('createdAt', 'desc'), limit(ADMIN_CODES_PAGE_SIZE));
+  const q = query(colRef, orderBy('createdAt', 'desc'));
   return onSnapshot(
     q,
     (snap) => {
       const items = snap.docs.map((docSnap) => mapAccessCodeDoc(docSnap.id, docSnap.data()));
-      const merged = mergeRecordsByIdNewer(loadCachedAdminCodes(), items, (x) => x.code);
-      merged.sort((a, b) => timestampSortValue(b.createdAt) - timestampSortValue(a.createdAt));
-      saveCachedAdminCodes(merged);
+      items.sort((a, b) => timestampSortValue(b.createdAt) - timestampSortValue(a.createdAt));
+      saveCachedAdminCodes(items);
       if (!snap.metadata.fromCache) {
         markServerSyncSuccess();
         saveCollectionLastSyncMs(COLLECTION_ACCESS_CODES, Date.now());
       }
-      onData(merged);
+      onData(items);
     },
     (error) => {
       markServerSyncError(error);

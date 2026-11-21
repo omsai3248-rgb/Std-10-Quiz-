@@ -582,9 +582,13 @@ export function loadCachedAdminCodes(): AccessCode[] {
 export function saveCachedAdminCodes(items: AccessCode[]): void {
   if (typeof localStorage === 'undefined') return;
   try {
-    localStorage.setItem(STORAGE_KEYS.ADMIN_CODES_CACHE, JSON.stringify(items.slice(0, 200)));
+    localStorage.setItem(STORAGE_KEYS.ADMIN_CODES_CACHE, JSON.stringify(items.slice(0, 1500)));
   } catch {
-    // Ignore
+    try {
+      localStorage.setItem(STORAGE_KEYS.ADMIN_CODES_CACHE, JSON.stringify(items.slice(0, 400)));
+    } catch {
+      // Ignore unrecoverable localStorage quota error
+    }
   }
 }
 

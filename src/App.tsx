@@ -1219,7 +1219,7 @@ const AppContent: React.FC = () => {
 
       observeAllAccessCodes((codes) => {
         setAllCodes(codes);
-        setHasMoreCodes(codes.length >= ADMIN_CODES_PAGE_SIZE);
+        setHasMoreCodes(false);
         const usedItems = codes.filter((c) => c.status === 'used' || c.isUsed);
         const usedCodeSet = new Set(usedItems.map((c) => c.code));
 

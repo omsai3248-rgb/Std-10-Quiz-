@@ -60,6 +60,7 @@ import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Collections
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
@@ -334,6 +335,7 @@ class NativeFirebaseBridge(
     private var lastPaymentIdsJson: String = "[]"
     @Volatile
     private var networkCallbackRegistered = false
+    private val codeSnapshotSeq = AtomicLong(0L)
 
     private val connectivityCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
@@ -1703,7 +1705,6 @@ class NativeFirebaseBridge(
             .limit(25)
         val codeQuery = localDb.collection("access_codes")
             .orderBy("createdAt", Query.Direction.DESCENDING)
-            .limit(600)
         val studentsQuery = localDb.collection("students")
             .orderBy("updatedAt", Query.Direction.DESCENDING)
             .limit(25)
@@ -1722,11 +1723,8 @@ class NativeFirebaseBridge(
 
             val codeCache = runCatching { codeQuery.get(Source.CACHE).awaitResult() }.getOrNull()
             if (codeCache != null && !codeCache.isEmpty) {
-                val arr = JSONArray()
-                codeCache.documents.forEach { arr.put(serializeAccessCode(it)) }
-                val jsonStr = arr.toString()
-                saveAdminListBackup("all_codes", jsonStr)
-                emitToJs("window.__onNativeAllCodes", jsonStr)
+                val seq = codeSnapshotSeq.incrementAndGet()
+                emitAllCodesChunked(codeCache.documents, seq)
             } else {
                 emitToJs("window.__onNativeAllCodes", loadAdminListBackup("all_codes"))
             }
@@ -1814,11 +1812,12 @@ class NativeFirebaseBridge(
             try {
                 val cursorTs = Timestamp(cursorSeconds, 0)
                 val orderField = if (collectionName == "students") "updatedAt" else "createdAt"
-                val snap = withTimeoutOrNull(8_000L) {
+                val pageLimit = if (collectionName == "access_codes") 1000L else 25L
+                val snap = withTimeoutOrNull(12_000L) {
                     localDb.collection(collectionName)
                         .orderBy(orderField, Query.Direction.DESCENDING)
                         .startAfter(cursorTs)
-                        .limit(25)
+                        .limit(pageLimit)
                         .get()
                         .awaitResult()
                 }
@@ -1916,7 +1915,6 @@ class NativeFirebaseBridge(
 
             val codeQuery = localDb.collection("access_codes")
                 .orderBy("createdAt", Query.Direction.DESCENDING)
-                .limit(600)
             val codeReg = codeQuery
                 .addSnapshotListener { snap, error ->
                     if (error != null) {
@@ -1928,20 +1926,21 @@ class NativeFirebaseBridge(
                         }
                         return@addSnapshotListener
                     }
-                    val arr = JSONArray()
-                    snap?.documents?.forEach { arr.put(serializeAccessCode(it)) }
-                    val jsonStr = arr.toString()
-                    saveAdminListBackup("all_codes", jsonStr)
-                    emitToJs("window.__onNativeAllCodes", jsonStr)
-                    if (snap != null && !snap.metadata.isFromCache) {
-                        emitNativeSyncState(
-                            serverConnected = true,
-                            liveSyncActive = adminListenersActive,
-                            lastSyncAtMs = System.currentTimeMillis(),
-                            errorKind = "none",
-                            quotaCooldownUntilMs = 0L,
-                            lastErrorMessage = ""
-                        )
+                    val docs = snap?.documents ?: emptyList()
+                    val isFromServer = snap != null && !snap.metadata.isFromCache
+                    val seq = codeSnapshotSeq.incrementAndGet()
+                    activity.lifecycleScope.launch(Dispatchers.IO) {
+                        emitAllCodesChunked(docs, seq)
+                        if (isFromServer) {
+                            emitNativeSyncState(
+                                serverConnected = true,
+                                liveSyncActive = adminListenersActive,
+                                lastSyncAtMs = System.currentTimeMillis(),
+                                errorKind = "none",
+                                quotaCooldownUntilMs = 0L,
+                                lastErrorMessage = ""
+                            )
+                        }
                     }
                 }
             adminListeners.add(codeReg)
@@ -2167,7 +2166,7 @@ class NativeFirebaseBridge(
                 return@launch
             }
             val obj = JSONObject(payloadJson)
-            val count = obj.getInt("count").coerceIn(1, 500)
+            val count = obj.getInt("count").coerceAtLeast(1)
             val batchName = obj.getString("batchName").take(60)
             val subjectId = obj.getString("subjectId")
 
@@ -2796,7 +2795,6 @@ class NativeFirebaseBridge(
                 } else {
                     localDb.collection("access_codes")
                         .orderBy("createdAt", Query.Direction.DESCENDING)
-                        .limit(600)
                         .get()
                         .awaitResult()
                 }
@@ -4093,6 +4091,39 @@ class NativeFirebaseBridge(
             "window.__resolveNativeFirebaseCall",
             "${JSONObject.quote(callId)}, false, ${JSONObject.quote(errorMsg)}"
         )
+    }
+
+    private fun emitAllCodesChunked(docs: List<DocumentSnapshot>, streamSeq: Long) {
+        if (!isAttached || streamSeq != codeSnapshotSeq.get()) return
+        val chunkSize = 500
+        if (docs.size <= chunkSize) {
+            val arr = JSONArray()
+            docs.forEach { arr.put(serializeAccessCode(it)) }
+            if (streamSeq != codeSnapshotSeq.get()) return
+            val jsonStr = arr.toString()
+            saveAdminListBackup("all_codes", jsonStr)
+            emitToJs("window.__onNativeAllCodes", jsonStr)
+            return
+        }
+
+        // Save a safe bounded SharedPreferences cold-fallback snapshot (Firestore persistent disk cache holds ALL docs)
+        val backupArr = JSONArray()
+        docs.take(chunkSize).forEach { backupArr.put(serializeAccessCode(it)) }
+        saveAdminListBackup("all_codes", backupArr.toString())
+
+        if (streamSeq != codeSnapshotSeq.get()) return
+        emitToJs("window.__onNativeAllCodesChunkStart", "$streamSeq, ${docs.size}")
+        for (start in docs.indices step chunkSize) {
+            if (!isAttached || streamSeq != codeSnapshotSeq.get()) return
+            val end = minOf(start + chunkSize, docs.size)
+            val chunkArr = JSONArray()
+            for (i in start until end) {
+                chunkArr.put(serializeAccessCode(docs[i]))
+            }
+            emitToJs("window.__onNativeAllCodesChunk", "$streamSeq, ${chunkArr.toString()}")
+        }
+        if (!isAttached || streamSeq != codeSnapshotSeq.get()) return
+        emitToJs("window.__onNativeAllCodesChunkEnd", "$streamSeq")
     }
 
     private fun emitToJs(fnPath: String, argsExpr: String) {
