@@ -386,17 +386,40 @@ if (typeof window !== 'undefined') {
 }
 
 export function invokeNativeBridgeCall<T>(
-  invoker: (callId: string) => void
+  invoker: (callId: string) => void,
+  timeoutMs = 0
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const callId = `nat_${++callSeq}_${Date.now()}`;
+    let timerId: ReturnType<typeof setTimeout> | undefined;
+    const clearTimer = () => {
+      if (timerId !== undefined) {
+        clearTimeout(timerId);
+        timerId = undefined;
+      }
+    };
     pendingCalls.set(callId, {
-      resolve: (val) => resolve(val as T),
-      reject,
+      resolve: (val) => {
+        clearTimer();
+        resolve(val as T);
+      },
+      reject: (err) => {
+        clearTimer();
+        reject(err);
+      },
     });
+    if (timeoutMs > 0) {
+      timerId = setTimeout(() => {
+        const entry = pendingCalls.get(callId);
+        if (!entry) return;
+        pendingCalls.delete(callId);
+        entry.reject(new Error('Operation timed out. Please try again.'));
+      }, timeoutMs);
+    }
     try {
       invoker(callId);
     } catch (err) {
+      clearTimer();
       pendingCalls.delete(callId);
       reject(err instanceof Error ? err : new Error(String(err)));
     }
@@ -953,7 +976,7 @@ export async function downloadAndInstallNativeAppUpdate(payload: {
 }): Promise<{ status: string }> {
   return invokeNativeBridgeCall((callId) => {
     window.AndroidFirebaseBridge?.downloadAndInstallAppUpdate?.(callId, JSON.stringify(payload));
-  });
+  }, 15000);
 }
 
 export async function retryNativePendingApkInstall(): Promise<{ status: string }> {

@@ -2461,7 +2461,13 @@ class NativeFirebaseBridge(
                 var packageName = obj.optString("packageName", appContext.packageName).trim().take(120)
 
                 if (stagedFilePath.isNotBlank()) {
-                    val inspected = AppUpdateManager.inspectLocalApkFile(appContext, File(stagedFilePath), apkFileName.ifBlank { null })
+                    val stageRoot = File(appContext.cacheDir, "release_stage").canonicalFile
+                    val targetFile = File(stagedFilePath).canonicalFile
+                    if (!targetFile.path.startsWith(stageRoot.path + File.separator)) {
+                        resolveCallError(callId, "Invalid staged release file path.")
+                        return@launch
+                    }
+                    val inspected = AppUpdateManager.inspectLocalApkFile(appContext, targetFile, apkFileName.ifBlank { null })
                     if (!inspected.packageMatches) {
                         resolveCallError(
                             callId,
@@ -2589,7 +2595,7 @@ class NativeFirebaseBridge(
                 val totalBytes = obj.optLong("apkSizeBytes", 0L)
                 emitUpdateProgress("downloading", 35, 0L, totalBytes, "")
                 AppUpdateManager.openTrustedUpdateUrl(activity, downloadUrl)
-                emitUpdateProgress("installing", 100, totalBytes, totalBytes, "")
+                emitUpdateProgress("idle", 100, totalBytes, totalBytes, "")
                 resolveCallSuccess(
                     callId,
                     JSONObject().apply { put("status", "opened_browser") }.toString()

@@ -192,6 +192,38 @@ interface RemoteVersionJson {
   isMandatory?: boolean;
 }
 
+const GITHUB_FETCH_TIMEOUT_MS = 8000;
+
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit = {},
+  timeoutMs = GITHUB_FETCH_TIMEOUT_MS
+): Promise<Response> {
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  let timerId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timerId = setTimeout(() => {
+        try {
+          controller?.abort();
+        } catch {
+          // Ignore abort failure
+        }
+        reject(new Error('GitHub update check timed out.'));
+      }, timeoutMs);
+    });
+    const fetchPromise = fetch(url, {
+      ...init,
+      ...(controller ? { signal: controller.signal } : {}),
+    });
+    return await Promise.race([fetchPromise, timeoutPromise]);
+  } finally {
+    if (timerId !== undefined) {
+      clearTimeout(timerId);
+    }
+  }
+}
+
 export async function fetchLatestRelease(
   ownerRepo: string,
   currentVersionName = APP_VERSION_NAME,
@@ -203,30 +235,43 @@ export async function fetchLatestRelease(
   }
 
   let versionMeta: RemoteVersionJson | null = null;
+  let response: Response | null = null;
+  let primaryError: unknown = null;
 
-  const response = await fetch(`https://api.github.com/repos/${cleanRepo}/releases/latest`, {
-    cache: 'no-store',
-    headers: {
-      Accept: 'application/vnd.github+json',
-    },
-  });
+  try {
+    response = await fetchWithTimeout(`https://api.github.com/repos/${cleanRepo}/releases/latest`, {
+      cache: 'no-store',
+      headers: {
+        Accept: 'application/vnd.github+json',
+      },
+    });
+  } catch (err) {
+    primaryError = err;
+  }
 
-  if (!response.ok) {
-    // Fallback to direct release version.json asset download URL if GitHub API rate-limits
-    if (response.status === 403 || response.status === 429) {
-      const directRes = await fetch(
+  if (!response || !response.ok) {
+    const status = response?.status ?? 0;
+    // Fallback to direct release version.json asset download URL if GitHub API rate-limits, errors, or stalls
+    if (status !== 404) {
+      const directRes = await fetchWithTimeout(
         `https://github.com/${cleanRepo}/releases/latest/download/version.json`,
-        { cache: 'no-store' }
+        { cache: 'no-store' },
+        6500
       ).catch(() => null);
       if (directRes && directRes.ok) {
-        versionMeta = (await directRes.json()) as RemoteVersionJson;
+        versionMeta = (await directRes.json().catch(() => null)) as RemoteVersionJson | null;
       }
     }
     if (!versionMeta) {
-      if (response.status === 404) {
+      if (status === 404) {
         throw new Error('GitHub પર હજી કોઈ રિલીઝ પબ્લિશ થયું નથી.');
       }
-      throw new Error(`GitHub અપડેટ ચેક નિષ્ફળ (HTTP ${response.status}).`);
+      if (status > 0) {
+        throw new Error(`GitHub અપડેટ ચેક નિષ્ફળ (HTTP ${status}).`);
+      }
+      throw primaryError instanceof Error
+        ? primaryError
+        : new Error('GitHub અપડેટ ચેક નિષ્ફળ.');
     }
   }
 
@@ -258,6 +303,10 @@ export async function fetchLatestRelease(
         currentVersionCode
       ),
     };
+  }
+
+  if (!response) {
+    throw new Error('GitHub અપડેટ ચેક નિષ્ફળ.');
   }
 
   const root = (await response.json()) as {

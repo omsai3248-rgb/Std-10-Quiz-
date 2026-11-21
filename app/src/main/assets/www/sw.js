@@ -57,31 +57,14 @@ self.addEventListener('message', (event) => {
   if (data.type === 'SW_SKIP_WAITING') {
     const port = event.ports && event.ports[0];
     (async () => {
-      try {
-        const cache = await caches.open(CACHE_NAME);
-        const urls = Array.isArray(data.extraUrls) && data.extraUrls.length > 0
-          ? Array.from(new Set([...CORE_PRECACHE_URLS, ...data.extraUrls]))
-          : CORE_PRECACHE_URLS;
-        const total = urls.length;
-        for (let i = 0; i < total; i += 1) {
-          const url = urls[i];
-          try {
-            const res = await fetch(new Request(url, { cache: 'reload' }));
-            if (res && res.ok) {
-              await cache.put(url, res);
-            }
-          } catch {
-            // Continue precaching remaining shell files
-          }
-          const pct = Math.min(92, Math.round(((i + 1) / total) * 85) + 5);
-          if (port) {
-            port.postMessage({ type: 'SW_PROGRESS', progressPercent: pct });
-          }
-        }
-      } catch {
-        // Ignore cache error and still activate
+      if (port) {
+        port.postMessage({ type: 'SW_PROGRESS', progressPercent: 60 });
       }
-      await self.skipWaiting();
+      try {
+        await self.skipWaiting();
+      } catch {
+        // Ignore skipWaiting failure
+      }
       if (port) {
         port.postMessage({ type: 'SW_ACTIVATING', progressPercent: 98 });
       }

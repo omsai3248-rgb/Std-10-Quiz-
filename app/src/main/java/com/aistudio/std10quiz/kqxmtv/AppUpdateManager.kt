@@ -82,10 +82,10 @@ object AppUpdateManager {
      */
     fun openTrustedUpdateUrl(context: Context, downloadUrl: String) {
         val cleanUrl = downloadUrl.trim()
-        if (!cleanUrl.startsWith("https://", ignoreCase = true)) {
+        val uri = Uri.parse(cleanUrl)
+        if (!uri.scheme.equals("https", ignoreCase = true) || uri.host.isNullOrBlank()) {
             throw IllegalArgumentException("Invalid update link (HTTPS required).")
         }
-        val uri = Uri.parse(cleanUrl)
         val intent = Intent(Intent.ACTION_VIEW, uri).apply {
             addCategory(Intent.CATEGORY_BROWSABLE)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

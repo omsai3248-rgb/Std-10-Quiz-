@@ -218,6 +218,40 @@ export const UpdateAvailableModal: React.FC<UpdateAvailableModalProps> = ({
     progressState.status === 'verifying' ||
     progressState.status === 'installing';
 
+  // Ensure returning from external browser or stalled transfer never locks the UI in transferring state
+  useEffect(() => {
+    if (!isTransferring) return undefined;
+    const watchdogMs = isNative ? 4500 : 10000;
+    const timer = window.setTimeout(() => {
+      setProgressState((prev) => ({
+        ...prev,
+        status: 'idle',
+        progressPercent: prev.progressPercent >= 100 ? 100 : 0,
+        message: '',
+      }));
+    }, watchdogMs);
+
+    const handleResumeReset = () => {
+      if (isNative && document.visibilityState === 'visible') {
+        setProgressState((prev) =>
+          prev.status === 'downloading' ||
+          prev.status === 'verifying' ||
+          prev.status === 'installing'
+            ? { ...prev, status: 'idle', message: '' }
+            : prev
+        );
+      }
+    };
+
+    window.addEventListener('focus', handleResumeReset);
+    document.addEventListener('visibilitychange', handleResumeReset);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener('focus', handleResumeReset);
+      document.removeEventListener('visibilitychange', handleResumeReset);
+    };
+  }, [isNative, isTransferring]);
+
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && !isMandatory && !isTransferring) {

@@ -327,8 +327,78 @@ test('Installed APK update popup and WebView prevent blank white screens after n
   assert.equal(appSource.includes('autoShownVersionKeyRef'), true);
   assert.equal(appSource.includes('authInitializedRef'), true);
   assert.equal(appSource.includes('<div aria-hidden={isShowingFullScreenUpdate ? true : undefined}>'), true);
+  assert.equal(appSource.includes('notifAvailableUpdate'), true);
+  assert.equal(appSource.includes('route.name !== \'quiz\''), true);
 });
 
+test('Release APK isolates debug AppCheck SDK, disables cleartext/backup exposure, and hardens intent redirects', () => {
+  const manifest = fs.readFileSync(path.resolve('app/src/main/AndroidManifest.xml'), 'utf8');
+  assert.equal(manifest.includes('android:allowBackup="false"'), true);
+  assert.equal(manifest.includes('android:networkSecurityConfig="@xml/network_security_config"'), true);
+  assert.equal(manifest.includes('android:dataExtractionRules="@xml/data_extraction_rules"'), true);
+  assert.equal(manifest.includes('android:fullBackupContent="@xml/backup_rules"'), true);
 
+  const netSec = fs.readFileSync(path.resolve('app/src/main/res/xml/network_security_config.xml'), 'utf8');
+  assert.equal(netSec.includes('cleartextTrafficPermitted="false"'), true);
 
+  const appGradle = fs.readFileSync(path.resolve('app/build.gradle.kts'), 'utf8');
+  assert.equal(appGradle.includes('debugImplementation(libs.firebase.appcheck.debug)'), true);
+  assert.equal(appGradle.includes('implementation(libs.firebase.appcheck.debug)'), false);
 
+  assert.equal(fs.existsSync(path.resolve('app/src/main/java/com/aistudio/std10quiz/kqxmtv/AppCheckInit.kt')), false);
+  const releaseInit = fs.readFileSync(
+    path.resolve('app/src/release/java/com/aistudio/std10quiz/kqxmtv/AppCheckInit.kt'),
+    'utf8'
+  );
+  assert.equal(releaseInit.includes('DebugAppCheckProviderFactory'), false);
+  assert.equal(releaseInit.includes('RecaptchaAppCheckProviderFactory'), true);
+
+  const mainActivity = fs.readFileSync(
+    path.resolve('app/src/main/java/com/aistudio/std10quiz/kqxmtv/MainActivity.kt'),
+    'utf8'
+  );
+  assert.equal(mainActivity.includes('fallbackUrl.startsWith("https://", ignoreCase = true)'), true);
+  assert.equal(mainActivity.includes('if (relPath.contains(".."))'), true);
+  assert.equal(mainActivity.includes('override fun onPause()'), true);
+});
+
+test('App update flow resets progress lock after browser handoff and falls back on network failure', async () => {
+  const bridgeKt = fs.readFileSync(
+    path.resolve('app/src/main/java/com/aistudio/std10quiz/kqxmtv/NativeFirebaseBridge.kt'),
+    'utf8'
+  );
+  assert.equal(bridgeKt.includes('emitUpdateProgress("installing"'), false);
+  assert.equal(bridgeKt.includes('emitUpdateProgress("idle", 100'), true);
+
+  const modalTsx = fs.readFileSync(path.resolve('src/components/AppUpdateComponents.tsx'), 'utf8');
+  assert.equal(modalTsx.includes('handleResumeReset'), true);
+  assert.equal(modalTsx.includes('watchdogMs'), true);
+
+  const swJs = fs.readFileSync(path.resolve('public/sw.js'), 'utf8');
+  assert.equal(swJs.includes('SW_SKIP_WAITING'), true);
+  assert.equal(swJs.includes('await self.skipWaiting()'), true);
+
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async (url) => {
+      if (String(url).includes('api.github.com')) {
+        throw new Error('Network stalled');
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          versionName: '1.0.20',
+          versionCode: 20,
+          releaseNotes: 'Fallback from CDN after API network failure',
+          apkDownloadUrl: 'https://github.com/demo/quiz/releases/latest/download/Quick-Quiz-Latest.apk',
+        }),
+      };
+    };
+    const res = await updater.fetchLatestRelease('demo/quiz', '1.0.19', 19);
+    assert.equal(res.isUpdateAvailable, true);
+    assert.equal(res.versionCode, 20);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

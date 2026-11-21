@@ -114,6 +114,7 @@ import {
 import {
   APP_VERSION_CODE,
   APP_VERSION_NAME,
+  buildPermanentLatestApkUrl,
   chooseNewestAvailableUpdate,
   fetchLatestRelease,
   isReleaseVersionNewer,
@@ -680,6 +681,8 @@ const AppContent: React.FC = () => {
         remoteName &&
         isReleaseVersionNewer(remoteName, remoteCode, currentVersionName, currentVersionCode)
       ) {
+        const key = `${remoteName}_${remoteCode ?? 0}`;
+        setDismissedOptionalVersionKey((prev) => (prev === key ? '' : prev));
         setDeepLinkUpdateFallback({
           tagName: `v${remoteName}`,
           versionName: remoteName,
@@ -695,10 +698,13 @@ const AppContent: React.FC = () => {
         });
         setIsUpdateModalOpen(true);
       } else if (!remoteName && payload.apkDownloadUrl?.trim()) {
+        const fallbackCode = currentVersionCode + 1;
+        const key = `${currentVersionName}_${fallbackCode}`;
+        setDismissedOptionalVersionKey((prev) => (prev === key ? '' : prev));
         setDeepLinkUpdateFallback({
           tagName: '',
           versionName: currentVersionName,
-          versionCode: currentVersionCode + 1,
+          versionCode: fallbackCode,
           releaseTitle: payload.updateTitle?.trim() || t.appUpdateAvailableTitle,
           releaseNotes: payload.releaseNotes?.trim() || '',
           apkDownloadUrl: payload.apkDownloadUrl.trim(),
@@ -1359,7 +1365,10 @@ const AppContent: React.FC = () => {
   );
 
   const firebaseAvailableUpdate = useMemo<GitHubReleaseInfo | null>(() => {
-    const apkUrl = releaseConfig?.apkDownloadUrl?.trim() ?? '';
+    const rawApkUrl = releaseConfig?.apkDownloadUrl?.trim() ?? '';
+    const apkUrl = rawApkUrl.startsWith('https://')
+      ? rawApkUrl
+      : buildPermanentLatestApkUrl(effectiveGithubRepo);
     const remoteVerName = releaseConfig?.latestVersionName?.trim() ?? '';
     const remoteVerCode = Number(releaseConfig?.latestVersionCode ?? 0);
     if (!apkUrl.startsWith('https://') || !remoteVerName) return null;
@@ -1384,27 +1393,76 @@ const AppContent: React.FC = () => {
       source: 'firebase',
       isUpdateAvailable: true,
     };
-  }, [currentVersionCode, currentVersionName, installedAppInfo?.packageName, releaseConfig]);
+  }, [
+    currentVersionCode,
+    currentVersionName,
+    effectiveGithubRepo,
+    installedAppInfo?.packageName,
+    releaseConfig,
+  ]);
+
+  const notifAvailableUpdate = useMemo<GitHubReleaseInfo | null>(() => {
+    const latestNotif = updateNotifications[0];
+    if (!latestNotif) return null;
+    const remoteVerName = latestNotif.versionName?.trim() ?? '';
+    const remoteVerCode = Number(latestNotif.versionCode ?? 0);
+    const rawApkUrl = latestNotif.apkDownloadUrl?.trim() ?? '';
+    const apkUrl = rawApkUrl.startsWith('https://')
+      ? rawApkUrl
+      : buildPermanentLatestApkUrl(effectiveGithubRepo);
+    if (!apkUrl.startsWith('https://') || !remoteVerName) return null;
+    if (!isReleaseVersionNewer(remoteVerName, remoteVerCode, currentVersionName, currentVersionCode)) {
+      return null;
+    }
+    return {
+      tagName: `v${remoteVerName}`,
+      versionName: remoteVerName,
+      versionCode: remoteVerCode || currentVersionCode + 1,
+      releaseTitle: latestNotif.title?.trim() || `Quick Quiz v${remoteVerName}`,
+      releaseNotes: latestNotif.body?.trim() || '',
+      apkDownloadUrl: apkUrl,
+      htmlUrl: '',
+      apkSizeBytes: 0,
+      isMandatory: Boolean(latestNotif.isMandatory),
+      source: 'firebase',
+      isUpdateAvailable: true,
+    };
+  }, [currentVersionCode, currentVersionName, effectiveGithubRepo, updateNotifications]);
 
   const bestCandidateUpdate = useMemo(
     () =>
       chooseNewestAvailableUpdate(
-        [firebaseAvailableUpdate, githubAvailableUpdate, webSwAvailableUpdate],
+        [firebaseAvailableUpdate, notifAvailableUpdate, githubAvailableUpdate, webSwAvailableUpdate],
         currentVersionName,
         currentVersionCode
       ),
-    [currentVersionCode, currentVersionName, firebaseAvailableUpdate, githubAvailableUpdate, webSwAvailableUpdate]
+    [
+      currentVersionCode,
+      currentVersionName,
+      firebaseAvailableUpdate,
+      githubAvailableUpdate,
+      notifAvailableUpdate,
+      webSwAvailableUpdate,
+    ]
   );
 
   const availableUpdate = bestCandidateUpdate ?? deepLinkUpdateFallback;
 
   const releaseConfigKey = useMemo(
-    () => `${effectiveGithubRepo}|${releaseConfig?.updatedAt?.seconds ?? 0}`,
-    [effectiveGithubRepo, releaseConfig?.updatedAt?.seconds]
+    () =>
+      `${effectiveGithubRepo}|${releaseConfig?.updatedAt?.seconds ?? 0}|${releaseConfig?.latestVersionCode ?? 0}|${updateNotifications[0]?.id ?? ''}`,
+    [
+      effectiveGithubRepo,
+      releaseConfig?.latestVersionCode,
+      releaseConfig?.updatedAt?.seconds,
+      updateNotifications,
+    ]
   );
 
   const firebaseAvailableUpdateRef = useRef<GitHubReleaseInfo | null>(firebaseAvailableUpdate);
+  const notifAvailableUpdateRef = useRef<GitHubReleaseInfo | null>(notifAvailableUpdate);
   const webSwAvailableUpdateRef = useRef<GitHubReleaseInfo | null>(webSwAvailableUpdate);
+  const deepLinkUpdateFallbackRef = useRef<GitHubReleaseInfo | null>(deepLinkUpdateFallback);
   const dismissedOptionalVersionKeyRef = useRef<string>(dismissedOptionalVersionKey);
   const releaseConfigKeyRef = useRef<string>(releaseConfigKey);
   const autoShownVersionKeyRef = useRef<string>('');
@@ -1415,8 +1473,16 @@ const AppContent: React.FC = () => {
   }, [firebaseAvailableUpdate]);
 
   useEffect(() => {
+    notifAvailableUpdateRef.current = notifAvailableUpdate;
+  }, [notifAvailableUpdate]);
+
+  useEffect(() => {
     webSwAvailableUpdateRef.current = webSwAvailableUpdate;
   }, [webSwAvailableUpdate]);
+
+  useEffect(() => {
+    deepLinkUpdateFallbackRef.current = deepLinkUpdateFallback;
+  }, [deepLinkUpdateFallback]);
 
   useEffect(() => {
     dismissedOptionalVersionKeyRef.current = dismissedOptionalVersionKey;
@@ -1449,14 +1515,21 @@ const AppContent: React.FC = () => {
       setIsCheckingUpdate(true);
 
       try {
-        const [ghResult, swResult] = await Promise.all([
-          repoToCheck
-            ? fetchLatestRelease(repoToCheck, currentVersionName, currentVersionCode).catch((err) => {
-                if (manual) throw err;
-                return null;
-              })
-            : Promise.resolve(null),
-          checkWebSwForUpdateNow(currentVersionName, currentVersionCode).catch(() => null),
+        const timeoutErrPromise = new Promise<never>((_, reject) => {
+          window.setTimeout(() => reject(new Error('Update check timed out.')), 11_000);
+        });
+
+        const [ghResult, swResult] = await Promise.race([
+          Promise.all([
+            repoToCheck
+              ? fetchLatestRelease(repoToCheck, currentVersionName, currentVersionCode).catch((err) => {
+                  if (manual) throw err;
+                  return null;
+                })
+              : Promise.resolve(null),
+            checkWebSwForUpdateNow(currentVersionName, currentVersionCode).catch(() => null),
+          ]),
+          timeoutErrPromise,
         ]);
 
         const nextGithub =
@@ -1467,7 +1540,12 @@ const AppContent: React.FC = () => {
         }
 
         const winner = chooseNewestAvailableUpdate(
-          [firebaseAvailableUpdateRef.current, nextGithub, swResult ?? webSwAvailableUpdateRef.current],
+          [
+            firebaseAvailableUpdateRef.current,
+            notifAvailableUpdateRef.current,
+            nextGithub,
+            swResult ?? webSwAvailableUpdateRef.current,
+          ],
           currentVersionName,
           currentVersionCode
         );
@@ -1489,10 +1567,23 @@ const AppContent: React.FC = () => {
             setIsUpdateModalOpen(true);
           }
         } else {
-          // Ensure no update dialog appears when already on the latest version
-          setDeepLinkUpdateFallback(null);
-          setIsUpdateModalOpen(false);
-          if (manual) {
+          // Preserve a valid push-notification update payload if user tapped one and API returned nothing newer
+          const activeDeepLink = deepLinkUpdateFallbackRef.current;
+          const keepDeepLink = Boolean(
+            activeDeepLink &&
+              activeDeepLink.apkDownloadUrl?.startsWith('https://') &&
+              isReleaseVersionNewer(
+                activeDeepLink.versionName,
+                activeDeepLink.versionCode,
+                currentVersionName,
+                currentVersionCode
+              )
+          );
+          if (!keepDeepLink) {
+            setDeepLinkUpdateFallback(null);
+            setIsUpdateModalOpen(false);
+          }
+          if (manual && !keepDeepLink) {
             setBanner({
               isError: false,
               message: `${t.appUpdateUpToDateMsg} (v${currentVersionName})`,
@@ -1533,14 +1624,14 @@ const AppContent: React.FC = () => {
     } else if (
       dismissedOptionalVersionKey !== key &&
       autoShownVersionKeyRef.current !== key &&
-      routeRef.current.name !== 'quiz'
+      route.name !== 'quiz'
     ) {
       autoShownVersionKeyRef.current = key;
       setIsUpdateModalOpen(true);
     }
-  }, [authInitialized, availableUpdate, dismissedOptionalVersionKey]);
+  }, [authInitialized, availableUpdate, dismissedOptionalVersionKey, route.name]);
 
-  // Re-check once when Firestore release config updates after startup
+  // Re-check once when Firestore release config or update notifications change after startup
   useEffect(() => {
     if (lastCheckedConfigKeyRef.current && lastCheckedConfigKeyRef.current !== releaseConfigKey) {
       void checkForUpdates(false, false);
@@ -2766,10 +2857,7 @@ const AppContent: React.FC = () => {
       </div>
 
       {isShowingFullScreenUpdate && availableUpdate && (
-        <UpdateModalErrorBoundary
-          key={`${availableUpdate.versionName}_${availableUpdate.versionCode ?? 0}`}
-          onErrorFallback={dismissUpdateModalSafely}
-        >
+        <UpdateModalErrorBoundary onErrorFallback={dismissUpdateModalSafely}>
           <UpdateAvailableModal
             release={availableUpdate}
             currentVersionName={currentVersionName}

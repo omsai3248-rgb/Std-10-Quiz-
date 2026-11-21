@@ -70,13 +70,26 @@ export async function fetchLocalWebVersionManifest(): Promise<WebVersionManifest
   if (hasNativeFirebaseBridge() || window.location.hostname === 'appassets.androidplatform.net') {
     return null;
   }
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timerId = window.setTimeout(() => {
+    try {
+      controller?.abort();
+    } catch {
+      // Ignore abort failure
+    }
+  }, 5000);
   try {
-    const res = await fetch(`/version.json?ts=${Date.now()}`, { cache: 'no-store' });
+    const res = await fetch(`/version.json?ts=${Date.now()}`, {
+      cache: 'no-store',
+      ...(controller ? { signal: controller.signal } : {}),
+    });
     if (!res.ok) return null;
     const data = (await res.json()) as WebVersionManifest;
     return data && typeof data === 'object' ? data : null;
   } catch {
     return null;
+  } finally {
+    window.clearTimeout(timerId);
   }
 }
 
@@ -129,7 +142,10 @@ export async function checkWebSwForUpdateNow(
   if (!isWebServiceWorkerSupported()) return null;
 
   if (activeRegistration) {
-    await activeRegistration.update().catch(() => {});
+    await Promise.race([
+      activeRegistration.update().catch(() => {}),
+      new Promise((resolve) => window.setTimeout(resolve, 2500)),
+    ]);
     if (activeRegistration.waiting) {
       waitingWorker = activeRegistration.waiting;
     }
@@ -183,7 +199,10 @@ export async function applyWebSwUpdateWithProgress(
     null;
 
   if (reg) {
-    await reg.update().catch(() => {});
+    await Promise.race([
+      reg.update().catch(() => {}),
+      new Promise((resolve) => window.setTimeout(resolve, 2500)),
+    ]);
   }
 
   const targetWorker = waitingWorker || reg?.waiting || null;

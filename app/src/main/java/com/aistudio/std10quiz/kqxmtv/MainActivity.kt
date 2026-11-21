@@ -168,6 +168,11 @@ class MainActivity : ComponentActivity() {
         AdaptiveDisplayManager.applyActivityDisplaySettings(this, settings, telemetry)
     }
 
+    override fun onPause() {
+        activeWebViewRef?.onPause()
+        super.onPause()
+    }
+
     override fun onStop() {
         super.onStop()
         AdminBackgroundNotificationWorker.scheduleQuickBackgroundCheck(this)
@@ -673,7 +678,7 @@ private fun PortalWebContainer(
                             settings.apply {
                                 javaScriptEnabled = true
                                 domStorageEnabled = true
-                                allowContentAccess = true
+                                allowContentAccess = false
                                 allowFileAccess = false
                                 cacheMode = WebSettings.LOAD_NO_CACHE
                                 mediaPlaybackRequiresUserGesture = false
@@ -765,6 +770,9 @@ private fun PortalWebContainer(
                                 if (url.host != APP_HOST) return null
 
                                 val relPath = url.path.orEmpty().trimStart('/')
+                                if (relPath.contains("..")) {
+                                    return notFoundAssetResponse()
+                                }
                                 val targetPath = if (relPath.isEmpty()) "www/index.html" else "www/$relPath"
                                 return openAssetResponse(activity, targetPath)
                                     ?: if (!relPath.contains('.')) {
@@ -804,12 +812,25 @@ private fun PortalWebContainer(
                                             addCategory(Intent.CATEGORY_BROWSABLE)
                                             component = null
                                             selector = null
+                                            removeFlags(
+                                                Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                                                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                                                    Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
+                                                    Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
+                                            )
+                                        }
+                                        val innerScheme = parsedIntent.data?.scheme.orEmpty().lowercase()
+                                        val allowedIntentSchemes = setOf("upi", "tez", "phonepe", "paytmmp", "https", "whatsapp")
+                                        if (innerScheme !in allowedIntentSchemes) {
+                                            return true
                                         }
                                         try {
                                             activity.startActivity(parsedIntent)
                                         } catch (_: ActivityNotFoundException) {
                                             val fallbackUrl = parsedIntent.getStringExtra("browser_fallback_url")
-                                            if (!fallbackUrl.isNullOrBlank()) {
+                                            if (!fallbackUrl.isNullOrBlank() &&
+                                                fallbackUrl.startsWith("https://", ignoreCase = true)
+                                            ) {
                                                 view?.loadUrl(fallbackUrl)
                                             } else {
                                                 Toast.makeText(
@@ -823,6 +844,10 @@ private fun PortalWebContainer(
                                     } catch (_: Exception) {
                                         true
                                     }
+                                }
+
+                                if (scheme !in setOf("https", "whatsapp")) {
+                                    return true
                                 }
 
                                 return try {
@@ -965,9 +990,12 @@ private fun PortalWebContainer(
                                     })();
                                 """.trimIndent()
                                 evaluateJavascript(js, null)
-                            } else {
+                            } else if (url.startsWith("https://", ignoreCase = true)) {
                                 try {
-                                    activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                                    val dlIntent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                                        addCategory(Intent.CATEGORY_BROWSABLE)
+                                    }
+                                    activity.startActivity(dlIntent)
                                 } catch (_: Exception) {
                                     Toast.makeText(
                                         activity,
@@ -993,7 +1021,11 @@ private fun PortalWebContainer(
                         )
                         wv.requestLayout()
                     }
-                    wv.setBackgroundColor(if (isWebAppMounted) surfaceBgArgb else android.graphics.Color.BLACK)
+                    val desiredBg = if (isWebAppMounted) surfaceBgArgb else android.graphics.Color.BLACK
+                    if (wv.tag != desiredBg) {
+                        wv.tag = desiredBg
+                        wv.setBackgroundColor(desiredBg)
+                    }
                 }
             )
 
@@ -1122,7 +1154,7 @@ private fun openAssetResponse(
         val stream = context.assets.open(assetPath)
         val mime = guessMimeType(assetPath)
         val headers = mapOf(
-            "Access-Control-Allow-Origin" to "*",
+            "Access-Control-Allow-Origin" to "https://$APP_HOST",
             "Cache-Control" to "no-store, no-cache, must-revalidate, max-age=0",
             "Pragma" to "no-cache",
             "Expires" to "0"
