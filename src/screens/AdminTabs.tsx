@@ -58,7 +58,7 @@ import {
   resolvePaymentImageSrc,
 } from '../utils/imageUtils';
 
-const SUBJECT_LIST = ['all', 'maths', 'science', 'social_science', 'gujarati'] as const;
+const SUBJECT_LIST = ['all', 'maths', 'science', 'social_science', 'gujarati', 'hindi'] as const;
 
 const DirectMobileCodeCard: React.FC<{
   students: StudentProfile[];

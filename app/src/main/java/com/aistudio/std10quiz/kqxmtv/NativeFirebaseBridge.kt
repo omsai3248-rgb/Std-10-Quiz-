@@ -1249,7 +1249,7 @@ class NativeFirebaseBridge(
         val obj = runCatching { JSONObject(payloadJson) }.getOrNull()
         val studentId = obj?.optString("studentId", "").orEmpty().trim()
         val subjectId = obj?.optString("subjectId", "").orEmpty().trim()
-        if (studentId.isBlank() || subjectId !in listOf("maths", "science", "social_science", "gujarati")) {
+        if (studentId.isBlank() || subjectId !in listOf("maths", "science", "social_science", "gujarati", "hindi")) {
             resolveCallSuccess(callId, "false")
             return
         }
@@ -1474,14 +1474,16 @@ class NativeFirebaseBridge(
                     val batchName = snap.getString("batchName").orEmpty().lowercase()
                     val upperCode = cleanCode.trim().uppercase()
                     val codeSub = when {
-                        rawSub in listOf("maths", "science", "social_science", "gujarati", "all") -> rawSub
+                        rawSub in listOf("maths", "science", "social_science", "gujarati", "hindi", "all") -> rawSub
                         upperCode.startsWith("MAT") || upperCode.startsWith("MTH") -> "maths"
                         upperCode.startsWith("SCI") -> "science"
                         upperCode.startsWith("SOC") || upperCode.startsWith("SS-") -> "social_science"
                         upperCode.startsWith("GUJ") -> "gujarati"
+                        upperCode.startsWith("HIN") -> "hindi"
                         upperCode.startsWith("ALL") -> "all"
                         batchName.contains("maths") -> "maths"
                         batchName.contains("gujarati") || batchName.contains("ગુજરાતી") -> "gujarati"
+                        batchName.contains("hindi") || batchName.contains("હિન્દી") || batchName.contains("हिन्दी") || batchName.contains("हिंदी") -> "hindi"
                         batchName.contains("science") && !batchName.contains("social") -> "science"
                         batchName.contains("social") -> "social_science"
                         else -> "all"
@@ -1523,12 +1525,12 @@ class NativeFirebaseBridge(
                         }
                         if (codeSub == "all") {
                             unlockedSet.add("all")
-                            unlockedSet.addAll(listOf("maths", "science", "social_science", "gujarati"))
+                            unlockedSet.addAll(listOf("maths", "science", "social_science", "gujarati", "hindi"))
                         } else {
                             unlockedSet.add(codeSub)
                         }
                         val hasFull = unlockedSet.contains("all") ||
-                            listOf("maths", "science", "social_science", "gujarati").all { unlockedSet.contains(it) }
+                            listOf("maths", "science", "social_science", "gujarati", "hindi").all { unlockedSet.contains(it) }
                         tx.update(
                             studentRef,
                             mapOf(
@@ -1576,12 +1578,12 @@ class NativeFirebaseBridge(
                         }
                         if (unlockedCodeSub == "all") {
                             unlockedSet.add("all")
-                            unlockedSet.addAll(listOf("maths", "science", "social_science", "gujarati"))
+                            unlockedSet.addAll(listOf("maths", "science", "social_science", "gujarati", "hindi"))
                         } else if (unlockedCodeSub.isNotBlank()) {
                             unlockedSet.add(unlockedCodeSub)
                         }
                         val hasFull = unlockedSet.contains("all") ||
-                            listOf("maths", "science", "social_science", "gujarati").all { unlockedSet.contains(it) }
+                            listOf("maths", "science", "social_science", "gujarati", "hindi").all { unlockedSet.contains(it) }
                         val nextArr = JSONArray().apply {
                             unlockedSet.take(10).forEach { put(it) }
                         }
@@ -2271,13 +2273,14 @@ class NativeFirebaseBridge(
                 }
                 val rawName = obj.optString("userName", "").trim().take(60)
                 val rawSub = obj.optString("subjectId", "all").trim()
-                val subjectId = if (rawSub in listOf("maths", "science", "social_science", "gujarati", "all")) rawSub else "all"
+                val subjectId = if (rawSub in listOf("maths", "science", "social_science", "gujarati", "hindi", "all")) rawSub else "all"
                 val amountRupees = if (subjectId == "all") 49 else 24
                 val subjectLabel = when (subjectId) {
                     "maths" -> "ગણિત (Maths)"
                     "science" -> "વિજ્ઞાન (Science)"
                     "social_science" -> "સામાજિક વિજ્ઞાન (SS)"
                     "gujarati" -> "ગુજરાતી (Gujarati)"
+                    "hindi" -> "હિન્દી (Hindi)"
                     else -> "બધા વિષયો (All)"
                 }
                 val batchLabel = "$subjectLabel • ₹$amountRupees".take(60)
@@ -2759,7 +2762,7 @@ class NativeFirebaseBridge(
                     ref.update(
                         mapOf(
                             "hasQuizAccess" to true,
-                            "unlockedSubjects" to listOf("all", "maths", "science", "social_science", "gujarati"),
+                            "unlockedSubjects" to listOf("all", "maths", "science", "social_science", "gujarati", "hindi"),
                             "redeemedCode" to existingCode.ifBlank { "ADMIN-GRANTED" },
                             "updatedAt" to FieldValue.serverTimestamp(),
                         )
@@ -2799,7 +2802,7 @@ class NativeFirebaseBridge(
             val ref = localDb.collection("students").document(studentId)
             try {
                 val snap = ref.get().awaitResult()
-                val allSubs = listOf("maths", "science", "social_science", "gujarati")
+                val allSubs = listOf("maths", "science", "social_science", "gujarati", "hindi")
                 val currentSet = linkedSetOf<String>()
                 if (snap.getBoolean("hasQuizAccess") == true) {
                     currentSet.addAll(allSubs)
@@ -4059,6 +4062,7 @@ class NativeFirebaseBridge(
             "science" -> "SCI"
             "social_science" -> "SOC"
             "gujarati" -> "GUJ"
+            "hindi" -> "HIN"
             else -> "ALL"
         }
 

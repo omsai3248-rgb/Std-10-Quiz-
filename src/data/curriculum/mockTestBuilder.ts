@@ -73,6 +73,47 @@ export function buildBoardExamMockTestChapter(
     };
   }
 
+  if (subject.id === 'hindi') {
+    const eligibleChapters = subject.chapters.filter((c) => !c.isMockTest && c.questions.length > 0);
+    const mockQuestions: QuizQuestion[] = [];
+
+    for (const chapter of eligibleChapters) {
+      const slotNumbers = (chapter.chapterNumber.match(/\d+/g) ?? [])
+        .map((n) => Number(n))
+        .filter((n) => Number.isInteger(n));
+      const slotsToPick = slotNumbers.length > 0 ? slotNumbers : [mockQuestions.length + 29];
+      const usedLocal = new Set<string>();
+
+      for (const slotNum of slotsToPick) {
+        const unused = chapter.questions.filter((q) => !usedLocal.has(q.id));
+        const pool = unused.length > 0 ? unused : chapter.questions;
+        const pickedIdx = Math.min(pool.length - 1, Math.floor(rng() * pool.length));
+        const picked = pool[pickedIdx];
+        usedLocal.add(picked.id);
+
+        mockQuestions.push({
+          ...picked,
+          id: `mock_hindi_q${slotNum}_${picked.id}`,
+          options: [...picked.options],
+          questionText: normalizeMockQuestionText(picked.questionText, slotNum),
+          sourceLabel: `प्रश्न क्र. ${slotNum} • ${chapter.title}`,
+        });
+      }
+    }
+
+    return {
+      id: `mock_test_${subject.id}`,
+      subjectId: subject.id,
+      chapterNumber: 'विभाग - C • प्रश्न क्र. 29 से 45',
+      title: 'બોર્ડ પરીક્ષા મોક ટેસ્ટ (विभाग - C व्याकरण)',
+      subtitle: `${subject.title} • દરેક વખતે પ્રશ્ન ક્ર. 29 થી 45 ક્રમમાં નવા રેન્ડમ વ્યાકરણ પ્રશ્નો (18 ગુણ)`,
+      questions: mockQuestions,
+      questionTypeLabel: `બોર્ડ મોક ટેસ્ટ (${mockQuestions.length} પ્રશ્નો • 18 ગુણ)`,
+      isFreeUnlocked: false,
+      isMockTest: true,
+    };
+  }
+
   const slotMap = new Map<number, Array<{ chapter: QuizChapter; question: QuizQuestion }>>();
   for (let slot = 1; slot <= BOARD_MOCK_QUESTION_COUNT; slot++) {
     slotMap.set(slot, []);

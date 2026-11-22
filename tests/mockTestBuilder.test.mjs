@@ -227,3 +227,60 @@ test('Gujarati curriculum has 2 sub-folders (Vibhag A+B combined & Vyakaran sepa
   });
 });
 
+test('Hindi curriculum has 11 Section C Vyakaran folders (Q29-Q45), 158 complete MCQs with explanations, and ordered 17-question board mock test', async () => {
+  const hindi = await curriculumMod.loadSubjectWithChapters('hindi');
+  assert.equal(hindi.id, 'hindi');
+  assert.equal(hindi.chapters.length, 11);
+
+  const expectedChapterCounts = [
+    ['प्रश्न क्र. 29', 4],
+    ['प्रश्न क्र. 30', 10],
+    ['प्रश्न क्र. 31', 21],
+    ['प्रश्न क्र. 32', 4],
+    ['प्रश्न क्र. 33', 13],
+    ['प्रश्न क्र. 34, 35', 22],
+    ['प्रश्न क्र. 36, 37', 19],
+    ['प्रश्न क्र. 38, 39', 19],
+    ['प्रश्न क्र. 40, 41', 13],
+    ['प्रश्न क्र. 42, 43', 19],
+    ['प्रश्न क्र. 44, 45', 14],
+  ];
+
+  const totalQuestions = hindi.chapters.reduce((sum, ch) => sum + ch.questions.length, 0);
+  assert.equal(totalQuestions, 158, 'Hindi subject should contain all 158 PDF questions');
+
+  const seenIds = new Set();
+  hindi.chapters.forEach((ch, idx) => {
+    const [expectedNum, expectedLen] = expectedChapterCounts[idx];
+    assert.equal(ch.chapterNumber, expectedNum);
+    assert.equal(ch.questions.length, expectedLen, `Mismatch in ${ch.id}`);
+    assert.ok(ch.title.startsWith(`${idx + 1}. `));
+
+    ch.questions.forEach((q, qIdx) => {
+      assert.equal(seenIds.has(q.id), false, `Duplicate question id: ${q.id}`);
+      seenIds.add(q.id);
+      assert.ok(
+        q.questionText.startsWith(`${qIdx + 1}) `),
+        `Question order mismatch in ${q.id}: ${q.questionText}`
+      );
+      assert.equal(q.options.length, 3, `${q.id} should preserve all 3 PDF options`);
+      assert.ok(
+        Number.isInteger(q.correctIndex) && q.correctIndex >= 0 && q.correctIndex < q.options.length,
+        `Invalid correctIndex in ${q.id}`
+      );
+      for (const opt of q.options) {
+        assert.ok(opt.trim().length > 0, `Empty option in ${q.id}`);
+      }
+      assert.ok(q.explanation.trim().length > 15, `Missing Hindi explanation in ${q.id}`);
+    });
+  });
+
+  const mock = mockBuilderMod.buildBoardExamMockTestChapter(hindi);
+  assert.equal(mock.isMockTest, true);
+  assert.equal(mock.questions.length, 17, 'Hindi Section C mock test should have 17 questions (Q29-Q45)');
+  mock.questions.forEach((q, idx) => {
+    assert.ok(q.questionText.startsWith(`${29 + idx}) `), `Expected Q${29 + idx}, got ${q.questionText}`);
+  });
+});
+
+

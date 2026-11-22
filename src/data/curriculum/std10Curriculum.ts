@@ -52,6 +52,16 @@ export const std10SubjectMetas: SubjectMeta[] = [
     chapterCount: 30,
     questionCount: 602,
   },
+  {
+    id: 'hindi',
+    title: 'હિન્દી',
+    englishSubtitle: 'Hindi (14 • द्वितीय भाषा) • ધોરણ ૧૦',
+    description: 'વિભાગ C : સંપૂર્ણ વ્યાકરણ પ્રશ્નબેંક (પ્રશ્ન ક્ર. 29 થી 45 • બોર્ડ + પાઠ્યપુસ્તક)',
+    imageUrl: '/images/img_subject_hindi.jpg',
+    accentHex: '#C2410C',
+    chapterCount: 11,
+    questionCount: 158,
+  },
 ];
 
 const subjectCache = new Map<SubjectId, QuizSubject>();
@@ -74,6 +84,10 @@ async function loadChaptersForSubject(subjectId: SubjectId): Promise<QuizChapter
     case 'gujarati': {
       const mod = await import('./gujaratiChapters');
       return mod.gujaratiChapters;
+    }
+    case 'hindi': {
+      const mod = await import('./hindiChapters');
+      return mod.hindiChapters;
     }
   }
 }

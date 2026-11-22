@@ -136,6 +136,7 @@ export const SubjectChaptersScreen: React.FC<SubjectChaptersScreenProps> = ({
   const containerMaxCls = isLargeScreen ? 'max-w-[1480px] px-4 sm:px-6' : 'max-w-[720px] px-3 sm:px-4';
   const isMockUnlocked = hasQuizAccess || !hasUsedFreeMock;
   const isGujarati = subject.id === 'gujarati';
+  const isHindi = subject.id === 'hindi';
 
   const handleHeaderBack = () => {
     if (hasSubFolders && selectedFolderGroupId !== null) {
@@ -284,7 +285,11 @@ export const SubjectChaptersScreen: React.FC<SubjectChaptersScreenProps> = ({
                   >
                     <Sparkles className="h-3 w-3" />
                     <span>
-                      {isGujarati ? 'વિભાગ A, B અને C (વ્યાકરણ)' : 'પ્રશ્ન 1 થી 24 (ક્રમમાં)'}
+                      {isGujarati
+                        ? 'વિભાગ A, B અને C (વ્યાકરણ)'
+                        : isHindi
+                          ? 'વિભાગ C • પ્રશ્ન ક્ર. 29 થી 45 (વ્યાકરણ)'
+                          : 'પ્રશ્ન 1 થી 24 (ક્રમમાં)'}
                     </span>
                   </span>
                   <span
@@ -311,11 +316,15 @@ export const SubjectChaptersScreen: React.FC<SubjectChaptersScreenProps> = ({
                   {hasQuizAccess
                     ? isGujarati
                       ? 'દરેક વખતે વિભાગ A, B અને વ્યાકરણના તમામ પ્રશ્ન વિભાગમાંથી નવા રેન્ડમ પ્રશ્નો • અનલિમિટેડ પ્રેક્ટિસ'
-                      : 'દરેક વખતે પ્રશ્ન 1 થી 24 ક્રમમાં નવા રેન્ડમ પ્રશ્નો • અનલિમિટેડ પ્રેક્ટિસ'
+                      : isHindi
+                        ? 'દરેક વખતે પ્રશ્ન ક્ર. 29 થી 45 (વિભાગ C વ્યાકરણ) ક્રમમાં નવા રેન્ડમ પ્રશ્નો • અનલિમિટેડ પ્રેક્ટિસ'
+                        : 'દરેક વખતે પ્રશ્ન 1 થી 24 ક્રમમાં નવા રેન્ડમ પ્રશ્નો • અનલિમિટેડ પ્રેક્ટિસ'
                     : !hasUsedFreeMock
                       ? isGujarati
                         ? 'વિભાગ A, B અને વ્યાકરણના ક્રમમાં નવા રેન્ડમ પ્રશ્નો • આ ફોલ્ડરમાં ૧ મોક ટેસ્ટ ફ્રી આપો'
-                        : 'પ્રશ્ન 1 થી 24 ક્રમમાં નવા રેન્ડમ પ્રશ્નો • આ ફોલ્ડરમાં ૧ મોક ટેસ્ટ ફ્રી આપો'
+                        : isHindi
+                          ? 'પ્રશ્ન ક્ર. 29 થી 45 વ્યાકરણ ક્રમમાં નવા રેન્ડમ પ્રશ્નો • આ ફોલ્ડરમાં ૧ મોક ટેસ્ટ ફ્રી આપો'
+                          : 'પ્રશ્ન 1 થી 24 ક્રમમાં નવા રેન્ડમ પ્રશ્નો • આ ફોલ્ડરમાં ૧ મોક ટેસ્ટ ફ્રી આપો'
                       : 'તમારો ૧ ફ્રી મોક ટેસ્ટ પૂર્ણ થઈ ગયો છે • અનલિમિટેડ માટે ફોલ્ડર અનલૉક કરો'}
                 </p>
               </div>
