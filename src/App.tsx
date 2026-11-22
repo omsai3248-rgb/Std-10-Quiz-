@@ -729,7 +729,8 @@ const AppContent: React.FC = () => {
       r === 'mock_test' ||
       r === 'subject_maths' ||
       r === 'subject_science' ||
-      r === 'subject_social_science';
+      r === 'subject_social_science' ||
+      r === 'subject_gujarati';
 
     const routeIncomingDeepLink = (payload: AdminDeepLinkPayload) => {
       if (isPublicPushRoute(payload.targetRoute)) {
@@ -1853,13 +1854,20 @@ const AppContent: React.FC = () => {
         return;
       }
 
-      if (target === 'subject_maths' || target === 'subject_science' || target === 'subject_social_science') {
+      if (
+        target === 'subject_maths' ||
+        target === 'subject_science' ||
+        target === 'subject_social_science' ||
+        target === 'subject_gujarati'
+      ) {
         const subjectId: SubjectId =
           target === 'subject_maths'
             ? 'maths'
             : target === 'subject_science'
               ? 'science'
-              : 'social_science';
+              : target === 'subject_gujarati'
+                ? 'gujarati'
+                : 'social_science';
         if (isStudentLoggedIn) {
           setRoute({ name: 'subject', subjectId });
         } else {

@@ -47,7 +47,9 @@ import com.google.firebase.firestore.Source
 import com.google.firebase.firestore.firestoreSettings
 import com.google.firebase.firestore.persistentCacheSettings
 import com.google.firebase.messaging.FirebaseMessaging
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -99,6 +101,12 @@ class NativeFirebaseBridge(
     @Volatile
     private var initialAdminChatsSnapshotDone = false
     private val lastSeenChatMsgIds: MutableMap<String, String> = Collections.synchronizedMap(hashMapOf())
+    @Volatile
+    private var pendingInstallApkFile: File? = null
+    @Volatile
+    private var awaitingInstallPermission: Boolean = false
+    @Volatile
+    private var activeUpdateDownloadJob: Job? = null
 
     private fun getOptionalStringResource(name: String): String {
         val resId = appContext.resources.getIdentifier(name, "string", appContext.packageName)
@@ -445,6 +453,33 @@ class NativeFirebaseBridge(
         stopAdminListeners()
         stopAdminNotificationsAndChatListeners()
         stopAdminChatThreadListener()
+        activeUpdateDownloadJob?.cancel()
+        activeUpdateDownloadJob = null
+    }
+
+    fun onHostActivityResumed() {
+        if (!awaitingInstallPermission) return
+        val apk = pendingInstallApkFile
+        awaitingInstallPermission = false
+        if (apk == null || !apk.exists()) return
+        val apkLen = apk.length()
+        if (AppUpdateManager.canRequestPackageInstalls(appContext)) {
+            emitUpdateProgress("installing", 100, apkLen, apkLen, "")
+            runCatching {
+                AppUpdateManager.launchPackageInstaller(activity, apk)
+            }.onFailure { err ->
+                val msg = err.localizedMessage ?: "Unable to launch package installer."
+                emitUpdateProgress("error", 0, 0L, 0L, msg)
+            }
+        } else {
+            emitUpdateProgress(
+                "permission_denied",
+                100,
+                apkLen,
+                apkLen,
+                "Please enable 'Allow from this source' to install the update."
+            )
+        }
     }
 
     private fun attemptAutoSignInWhenResumed() {
@@ -1214,7 +1249,7 @@ class NativeFirebaseBridge(
         val obj = runCatching { JSONObject(payloadJson) }.getOrNull()
         val studentId = obj?.optString("studentId", "").orEmpty().trim()
         val subjectId = obj?.optString("subjectId", "").orEmpty().trim()
-        if (studentId.isBlank() || subjectId !in listOf("maths", "science", "social_science")) {
+        if (studentId.isBlank() || subjectId !in listOf("maths", "science", "social_science", "gujarati")) {
             resolveCallSuccess(callId, "false")
             return
         }
@@ -1439,12 +1474,14 @@ class NativeFirebaseBridge(
                     val batchName = snap.getString("batchName").orEmpty().lowercase()
                     val upperCode = cleanCode.trim().uppercase()
                     val codeSub = when {
-                        rawSub in listOf("maths", "science", "social_science", "all") -> rawSub
+                        rawSub in listOf("maths", "science", "social_science", "gujarati", "all") -> rawSub
                         upperCode.startsWith("MAT") || upperCode.startsWith("MTH") -> "maths"
                         upperCode.startsWith("SCI") -> "science"
                         upperCode.startsWith("SOC") || upperCode.startsWith("SS-") -> "social_science"
+                        upperCode.startsWith("GUJ") -> "gujarati"
                         upperCode.startsWith("ALL") -> "all"
                         batchName.contains("maths") -> "maths"
+                        batchName.contains("gujarati") || batchName.contains("ગુજરાતી") -> "gujarati"
                         batchName.contains("science") && !batchName.contains("social") -> "science"
                         batchName.contains("social") -> "social_science"
                         else -> "all"
@@ -1486,12 +1523,12 @@ class NativeFirebaseBridge(
                         }
                         if (codeSub == "all") {
                             unlockedSet.add("all")
-                            unlockedSet.addAll(listOf("maths", "science", "social_science"))
+                            unlockedSet.addAll(listOf("maths", "science", "social_science", "gujarati"))
                         } else {
                             unlockedSet.add(codeSub)
                         }
                         val hasFull = unlockedSet.contains("all") ||
-                            listOf("maths", "science", "social_science").all { unlockedSet.contains(it) }
+                            listOf("maths", "science", "social_science", "gujarati").all { unlockedSet.contains(it) }
                         tx.update(
                             studentRef,
                             mapOf(
@@ -1539,12 +1576,12 @@ class NativeFirebaseBridge(
                         }
                         if (unlockedCodeSub == "all") {
                             unlockedSet.add("all")
-                            unlockedSet.addAll(listOf("maths", "science", "social_science"))
+                            unlockedSet.addAll(listOf("maths", "science", "social_science", "gujarati"))
                         } else if (unlockedCodeSub.isNotBlank()) {
                             unlockedSet.add(unlockedCodeSub)
                         }
                         val hasFull = unlockedSet.contains("all") ||
-                            listOf("maths", "science", "social_science").all { unlockedSet.contains(it) }
+                            listOf("maths", "science", "social_science", "gujarati").all { unlockedSet.contains(it) }
                         val nextArr = JSONArray().apply {
                             unlockedSet.take(10).forEach { put(it) }
                         }
@@ -2234,12 +2271,13 @@ class NativeFirebaseBridge(
                 }
                 val rawName = obj.optString("userName", "").trim().take(60)
                 val rawSub = obj.optString("subjectId", "all").trim()
-                val subjectId = if (rawSub in listOf("maths", "science", "social_science", "all")) rawSub else "all"
+                val subjectId = if (rawSub in listOf("maths", "science", "social_science", "gujarati", "all")) rawSub else "all"
                 val amountRupees = if (subjectId == "all") 49 else 24
                 val subjectLabel = when (subjectId) {
                     "maths" -> "ગણિત (Maths)"
                     "science" -> "વિજ્ઞાન (Science)"
                     "social_science" -> "સામાજિક વિજ્ઞાન (SS)"
+                    "gujarati" -> "ગુજરાતી (Gujarati)"
                     else -> "બધા વિષયો (All)"
                 }
                 val batchLabel = "$subjectLabel • ₹$amountRupees".take(60)
@@ -2588,20 +2626,59 @@ class NativeFirebaseBridge(
 
     @JavascriptInterface
     fun downloadAndInstallAppUpdate(callId: String, payloadJson: String) {
-        activity.lifecycleScope.launch(Dispatchers.Main) {
+        activeUpdateDownloadJob?.cancel()
+        activeUpdateDownloadJob = activity.lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val obj = JSONObject(payloadJson)
                 val downloadUrl = obj.getString("apkDownloadUrl").trim()
-                val totalBytes = obj.optLong("apkSizeBytes", 0L)
-                emitUpdateProgress("downloading", 35, 0L, totalBytes, "")
-                AppUpdateManager.openTrustedUpdateUrl(activity, downloadUrl)
-                emitUpdateProgress("idle", 100, totalBytes, totalBytes, "")
-                resolveCallSuccess(
-                    callId,
-                    JSONObject().apply { put("status", "opened_browser") }.toString()
+                val versionName = obj.optString("versionName", "latest").trim()
+                val expectedSizeBytes = obj.optLong("apkSizeBytes", 0L)
+                val expectedSha256 = obj.optString("apkSha256", "").trim()
+                val expectedCertSha256 = obj.optString("signingCertSha256", "").trim()
+
+                emitUpdateProgress("downloading", 1, 0L, expectedSizeBytes, "")
+
+                val verifiedApk = AppUpdateManager.downloadAndVerifyApkInApp(
+                    context = appContext,
+                    downloadUrl = downloadUrl,
+                    versionName = versionName,
+                    expectedSizeBytes = expectedSizeBytes,
+                    expectedSha256 = expectedSha256,
+                    expectedSigningCertSha256 = expectedCertSha256,
+                    onProgress = { pct, downloaded, total ->
+                        emitUpdateProgress("downloading", pct, downloaded, total, "")
+                    },
+                    onVerifying = { finalSize ->
+                        emitUpdateProgress("verifying", 99, finalSize, finalSize, "")
+                    }
                 )
+
+                pendingInstallApkFile = verifiedApk
+                val finalSize = verifiedApk.length()
+
+                withContext(Dispatchers.Main) {
+                    if (!AppUpdateManager.canRequestPackageInstalls(appContext)) {
+                        awaitingInstallPermission = true
+                        emitUpdateProgress("permission_required", 100, finalSize, finalSize, "")
+                        AppUpdateManager.openUnknownSourcesPermissionSettings(activity)
+                        resolveCallSuccess(
+                            callId,
+                            JSONObject().apply { put("status", "permission_required") }.toString()
+                        )
+                    } else {
+                        awaitingInstallPermission = false
+                        emitUpdateProgress("installing", 100, finalSize, finalSize, "")
+                        AppUpdateManager.launchPackageInstaller(activity, verifiedApk)
+                        resolveCallSuccess(
+                            callId,
+                            JSONObject().apply { put("status", "installing") }.toString()
+                        )
+                    }
+                }
+            } catch (ce: CancellationException) {
+                throw ce
             } catch (e: Exception) {
-                val msg = e.localizedMessage ?: "Unable to open update link"
+                val msg = e.localizedMessage ?: "Unable to download update APK."
                 emitUpdateProgress("error", 0, 0L, 0L, msg)
                 resolveCallError(callId, msg)
             }
@@ -2610,7 +2687,38 @@ class NativeFirebaseBridge(
 
     @JavascriptInterface
     fun retryInstallPendingApk(callId: String) {
-        resolveCallError(callId, "NO_PENDING_APK")
+        val apk = pendingInstallApkFile
+        if (apk == null || !apk.exists()) {
+            emitUpdateProgress("error", 0, 0L, 0L, "Downloaded update file not found. Please tap Update Now again.")
+            resolveCallError(callId, "NO_PENDING_APK")
+            return
+        }
+        val apkLen = apk.length()
+        activity.lifecycleScope.launch(Dispatchers.Main) {
+            try {
+                if (!AppUpdateManager.canRequestPackageInstalls(appContext)) {
+                    awaitingInstallPermission = true
+                    emitUpdateProgress("permission_required", 100, apkLen, apkLen, "")
+                    AppUpdateManager.openUnknownSourcesPermissionSettings(activity)
+                    resolveCallSuccess(
+                        callId,
+                        JSONObject().apply { put("status", "permission_required") }.toString()
+                    )
+                } else {
+                    awaitingInstallPermission = false
+                    emitUpdateProgress("installing", 100, apkLen, apkLen, "")
+                    AppUpdateManager.launchPackageInstaller(activity, apk)
+                    resolveCallSuccess(
+                        callId,
+                        JSONObject().apply { put("status", "installing") }.toString()
+                    )
+                }
+            } catch (e: Exception) {
+                val msg = e.localizedMessage ?: "Unable to open package installer."
+                emitUpdateProgress("error", 0, 0L, 0L, msg)
+                resolveCallError(callId, msg)
+            }
+        }
     }
 
     private fun emitUpdateProgress(
@@ -2651,7 +2759,7 @@ class NativeFirebaseBridge(
                     ref.update(
                         mapOf(
                             "hasQuizAccess" to true,
-                            "unlockedSubjects" to listOf("all", "maths", "science", "social_science"),
+                            "unlockedSubjects" to listOf("all", "maths", "science", "social_science", "gujarati"),
                             "redeemedCode" to existingCode.ifBlank { "ADMIN-GRANTED" },
                             "updatedAt" to FieldValue.serverTimestamp(),
                         )
@@ -2691,7 +2799,7 @@ class NativeFirebaseBridge(
             val ref = localDb.collection("students").document(studentId)
             try {
                 val snap = ref.get().awaitResult()
-                val allSubs = listOf("maths", "science", "social_science")
+                val allSubs = listOf("maths", "science", "social_science", "gujarati")
                 val currentSet = linkedSetOf<String>()
                 if (snap.getBoolean("hasQuizAccess") == true) {
                     currentSet.addAll(allSubs)
@@ -3950,6 +4058,7 @@ class NativeFirebaseBridge(
             "maths" -> "MAT"
             "science" -> "SCI"
             "social_science" -> "SOC"
+            "gujarati" -> "GUJ"
             else -> "ALL"
         }
 

@@ -403,7 +403,7 @@ const GU: Translations = {
   checkingAccountLabel: 'એકાઉન્ટ વિગત તપાસાઈ રહી છે...',
   returningWelcomeMsg: 'ફરી સ્વાગત છે! તમારી જૂની વિગતો અને અનલૉક વિષયો લોડ થઈ ગયા છે.',
   unlockSingleSubjectLabel: 'માત્ર આ વિષય',
-  unlockAllSubjectsLabel: 'બધા વિષયો (ગણિત + વિજ્ઞાન + સા.વિ.)',
+  unlockAllSubjectsLabel: 'બધા વિષયો (ગણિત + વિજ્ઞાન + સા.વિ. + ગુજરાતી)',
   fixedPriceBadge: 'ફિક્સ ફી',
   payTabLabel: 'UPI પેમેન્ટ અને સ્ક્રીનશોટ',
   codeTabLabel: 'મારી પાસે કોડ છે',
@@ -695,7 +695,7 @@ const GU: Translations = {
 
 const EN: Translations = {
   appName: 'Quick Quiz',
-  appSubtitle: 'Std 10 Board Quiz • Maths, Science & Social Science',
+  appSubtitle: 'Std 10 Board Quiz • Maths, Science, Social Science & Gujarati',
   langToggleLabel: 'ગુજરાતી',
   navSubmitPayment: 'Submit Payment',
   navUseCode: 'Use Code',
@@ -747,7 +747,7 @@ const EN: Translations = {
   checkingAccountLabel: 'Checking saved account...',
   returningWelcomeMsg: 'Welcome back! Your saved profile and unlocked subjects have been restored.',
   unlockSingleSubjectLabel: 'Single Subject Only',
-  unlockAllSubjectsLabel: 'All Subjects (Maths + Science + SS)',
+  unlockAllSubjectsLabel: 'All Subjects (Maths + Science + SS + Gujarati)',
   fixedPriceBadge: 'Fixed Price',
   payTabLabel: 'Pay via UPI & Screenshot',
   codeTabLabel: 'I Have a Code',

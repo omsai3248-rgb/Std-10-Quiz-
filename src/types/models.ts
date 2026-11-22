@@ -1,6 +1,6 @@
 import type { Timestamp } from 'firebase/firestore';
 
-export type SubjectId = 'maths' | 'science' | 'social_science';
+export type SubjectId = 'maths' | 'science' | 'social_science' | 'gujarati';
 export type AccessScopeId = SubjectId | 'all';
 
 export interface StudentProfile {
@@ -120,6 +120,9 @@ export interface QuizChapter {
   questionTypeLabel: string;
   isFreeUnlocked?: boolean;
   isMockTest?: boolean;
+  folderGroupId?: string;
+  folderGroupTitle?: string;
+  folderGroupSubtitle?: string;
 }
 
 export interface QuizSubject {
@@ -270,7 +273,7 @@ export interface ActionBanner {
   message: string;
 }
 
-export const ALL_SUBJECT_IDS: SubjectId[] = ['maths', 'science', 'social_science'];
+export const ALL_SUBJECT_IDS: SubjectId[] = ['maths', 'science', 'social_science', 'gujarati'];
 
 export const PRICE_SINGLE_SUBJECT = 24;
 export const PRICE_ALL_SUBJECTS = 49;
@@ -288,6 +291,8 @@ export function getSubjectDisplayName(subjectId: string, lang: 'gu' | 'en' = 'gu
         return 'Science';
       case 'social_science':
         return 'Social Science';
+      case 'gujarati':
+        return 'Gujarati';
       default:
         return 'All Subjects';
     }
@@ -299,6 +304,8 @@ export function getSubjectDisplayName(subjectId: string, lang: 'gu' | 'en' = 'gu
       return 'વિજ્ઞાન';
     case 'social_science':
       return 'સામાજિક વિજ્ઞાન';
+    case 'gujarati':
+      return 'ગુજરાતી';
     default:
       return 'બધા વિષયો';
   }
@@ -312,6 +319,8 @@ export function getDefaultPrefix(subjectId: string): string {
       return 'SCI';
     case 'social_science':
       return 'SOC';
+    case 'gujarati':
+      return 'GUJ';
     default:
       return 'ALL';
   }
@@ -329,7 +338,8 @@ export function resolveCodeSubjectId(
   if (
     normalizedExplicit === 'maths' ||
     normalizedExplicit === 'science' ||
-    normalizedExplicit === 'social_science'
+    normalizedExplicit === 'social_science' ||
+    normalizedExplicit === 'gujarati'
   ) {
     return normalizedExplicit;
   }
@@ -337,6 +347,7 @@ export function resolveCodeSubjectId(
   if (upperCode.startsWith('MAT') || upperCode.startsWith('MTH')) return 'maths';
   if (upperCode.startsWith('SCI')) return 'science';
   if (upperCode.startsWith('SOC') || upperCode.startsWith('SS-')) return 'social_science';
+  if (upperCode.startsWith('GUJ')) return 'gujarati';
   if (upperCode.startsWith('ALL')) return 'all';
 
   const cleanBatch = batchName.trim().toLowerCase();
@@ -346,13 +357,16 @@ export function resolveCodeSubjectId(
   if (cleanBatch.includes('સામાજિક') || cleanBatch.includes('social')) {
     return 'social_science';
   }
+  if (cleanBatch.includes('ગુજરાતી') || cleanBatch.includes('gujarati')) {
+    return 'gujarati';
+  }
   if (cleanBatch.includes('વિજ્ઞાન') || cleanBatch.includes('science')) {
     return 'science';
   }
   return 'all';
 }
 
-const PAYMENT_SUBJECT_TAG_REGEX = /^\[SUB:(maths|science|social_science|all)\]\s*\|?\s*/i;
+const PAYMENT_SUBJECT_TAG_REGEX = /^\[SUB:(maths|science|social_science|gujarati|all)\]\s*\|?\s*/i;
 
 export function encodePaymentRefWithSubject(rawUpiRef: string, subjectId: string): string {
   const cleanSub = ALL_SUBJECT_IDS.includes(subjectId as SubjectId) ? subjectId : 'all';
@@ -426,7 +440,8 @@ export type PushBroadcastTargetRoute =
   | 'app_update'
   | 'subject_maths'
   | 'subject_science'
-  | 'subject_social_science';
+  | 'subject_social_science'
+  | 'subject_gujarati';
 
 export interface PushBroadcastRecord {
   id: string;

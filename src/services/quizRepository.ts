@@ -3288,6 +3288,7 @@ export function observePushBroadcasts(
           'subject_maths',
           'subject_science',
           'subject_social_science',
+          'subject_gujarati',
         ];
         const targetRoute: PushBroadcastTargetRoute = allowedRoutes.includes(
           rawRoute as PushBroadcastTargetRoute

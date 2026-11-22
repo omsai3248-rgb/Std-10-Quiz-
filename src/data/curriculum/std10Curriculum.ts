@@ -42,6 +42,16 @@ export const std10SubjectMetas: SubjectMeta[] = [
     chapterCount: 23,
     questionCount: 420,
   },
+  {
+    id: 'gujarati',
+    title: 'ગુજરાતી',
+    englishSubtitle: 'Gujarati (01 G) • ધોરણ ૧૦',
+    description: 'વિભાગ A (ગદ્ય), વિભાગ B (પદ્ય) અને વિભાગ C (વ્યાકરણ) બોર્ડ + પાઠ્યપુસ્તક સંગ્રહ',
+    imageUrl: '/images/img_subject_gujarati.jpg',
+    accentHex: '#9D174D',
+    chapterCount: 30,
+    questionCount: 602,
+  },
 ];
 
 const subjectCache = new Map<SubjectId, QuizSubject>();
@@ -60,6 +70,10 @@ async function loadChaptersForSubject(subjectId: SubjectId): Promise<QuizChapter
     case 'social_science': {
       const mod = await import('./socialChapters');
       return mod.socialChapters;
+    }
+    case 'gujarati': {
+      const mod = await import('./gujaratiChapters');
+      return mod.gujaratiChapters;
     }
   }
 }

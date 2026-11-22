@@ -163,6 +163,7 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         activeWebViewRef?.onResume()
         activeWebViewRef?.resumeTimers()
+        activeBridgeRef?.onHostActivityResumed()
         val settings = AdaptiveDisplayManager.loadSettings(this)
         val telemetry = AdaptiveDisplayManager.collectTelemetry(this, latestLayoutInfoRef, settings)
         AdaptiveDisplayManager.applyActivityDisplaySettings(this, settings, telemetry)

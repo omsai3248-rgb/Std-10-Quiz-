@@ -218,37 +218,38 @@ export const UpdateAvailableModal: React.FC<UpdateAvailableModalProps> = ({
     progressState.status === 'verifying' ||
     progressState.status === 'installing';
 
-  // Ensure returning from external browser or stalled transfer never locks the UI in transferring state
+  // Reset cleanly only when returning from Android Package Installer (e.g. if user tapped Cancel)
+  // Never cut off an active in-app APK download or verification!
   useEffect(() => {
     if (!isTransferring) return undefined;
-    const watchdogMs = isNative ? 4500 : 10000;
-    const timer = window.setTimeout(() => {
-      setProgressState((prev) => ({
-        ...prev,
-        status: 'idle',
-        progressPercent: prev.progressPercent >= 100 ? 100 : 0,
-        message: '',
-      }));
-    }, watchdogMs);
 
-    const handleResumeReset = () => {
+    const handleResumeFromInstaller = () => {
       if (isNative && document.visibilityState === 'visible') {
         setProgressState((prev) =>
-          prev.status === 'downloading' ||
-          prev.status === 'verifying' ||
           prev.status === 'installing'
-            ? { ...prev, status: 'idle', message: '' }
+            ? { ...prev, status: 'idle', progressPercent: 100, message: '' }
             : prev
         );
       }
     };
 
-    window.addEventListener('focus', handleResumeReset);
-    document.addEventListener('visibilitychange', handleResumeReset);
+    const webWatchdogTimer = !isNative
+      ? window.setTimeout(() => {
+          setProgressState((prev) => ({
+            ...prev,
+            status: 'idle',
+            progressPercent: prev.progressPercent >= 100 ? 100 : 0,
+            message: '',
+          }));
+        }, 12000)
+      : undefined;
+
+    window.addEventListener('focus', handleResumeFromInstaller);
+    document.addEventListener('visibilitychange', handleResumeFromInstaller);
     return () => {
-      window.clearTimeout(timer);
-      window.removeEventListener('focus', handleResumeReset);
-      document.removeEventListener('visibilitychange', handleResumeReset);
+      if (webWatchdogTimer !== undefined) window.clearTimeout(webWatchdogTimer);
+      window.removeEventListener('focus', handleResumeFromInstaller);
+      document.removeEventListener('visibilitychange', handleResumeFromInstaller);
     };
   }, [isNative, isTransferring]);
 
@@ -303,7 +304,7 @@ export const UpdateAvailableModal: React.FC<UpdateAvailableModalProps> = ({
 
     setProgressState({
       status: 'downloading',
-      progressPercent: 0,
+      progressPercent: 1,
       bytesDownloaded: 0,
       totalBytes: safeApkSizeBytes,
       message: '',
@@ -318,19 +319,18 @@ export const UpdateAvailableModal: React.FC<UpdateAvailableModalProps> = ({
         apkSha256: release?.apkSha256,
         signingCertSha256: release?.signingCertSha256,
       });
-      if (result?.status === 'opened_browser') {
+      if (result?.status === 'installing') {
         onNotify?.(
           lang === 'en'
-            ? 'Update download opened in your browser.'
-            : 'અપડેટ ડાઉનલોડ તમારા બ્રાઉઝરમાં ખુલી ગયું છે.'
+            ? 'APK downloaded — Android Package Installer opened.'
+            : 'અપડેટ ડાઉનલોડ થઈ ગયું — ઇન્સ્ટોલ કરવા Android Package Installer ખુલ્યું છે.'
         );
-        setProgressState({
-          status: 'idle',
-          progressPercent: 100,
-          bytesDownloaded: safeApkSizeBytes,
-          totalBytes: safeApkSizeBytes,
-          message: '',
-        });
+      } else if (result?.status === 'permission_required') {
+        onNotify?.(
+          lang === 'en'
+            ? 'Enable "Allow from this source" — installer will open automatically when you return.'
+            : '"Allow from this source" ચાલુ કરો — પાછા આવતાં જ Package Installer આપમેળે ખુલી જશે.'
+        );
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Update download failed';

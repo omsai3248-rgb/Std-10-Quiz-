@@ -168,3 +168,62 @@ test('mergeStudentProfilesConflictSafe preserves union of freeMockUsedSubjects a
   );
   assert.deepEqual(combined.freeMockUsedSubjects.sort(), ['maths', 'science']);
 });
+
+test('Gujarati curriculum has 2 sub-folders (Vibhag A+B combined & Vyakaran separate), 30 chapters, 602 complete MCQs, and valid Jodka tables', async () => {
+  const gujarati = await curriculumMod.loadSubjectWithChapters('gujarati');
+  assert.equal(gujarati.id, 'gujarati');
+  assert.equal(gujarati.chapters.length, 30);
+
+  const vibhagAB = gujarati.chapters.filter((c) => c.folderGroupId === 'guj_vibhag_ab');
+  const vyakaran = gujarati.chapters.filter((c) => c.folderGroupId === 'guj_vyakaran');
+  assert.equal(vibhagAB.length, 10, 'Vibhag A + B combined folder should contain 10 question folders');
+  assert.equal(vyakaran.length, 20, 'Vyakaran folder should contain 20 question folders (Q33-Q52)');
+
+  const totalQuestions = gujarati.chapters.reduce((sum, ch) => sum + ch.questions.length, 0);
+  assert.equal(totalQuestions, 602, 'Gujarati subject should contain all 602 PDF questions');
+
+  const seenIds = new Set();
+  let matchingParsedCount = 0;
+
+  for (const ch of gujarati.chapters) {
+    assert.ok(ch.chapterNumber.trim().length > 0);
+    assert.ok(ch.title.trim().length > 0);
+    assert.ok(ch.questions.length > 0);
+
+    for (const q of ch.questions) {
+      assert.equal(seenIds.has(q.id), false, `Duplicate question id: ${q.id}`);
+      seenIds.add(q.id);
+      assert.ok(q.questionText.trim().length > 0, `Empty questionText in ${q.id}`);
+      assert.ok(
+        q.options.length >= 3 && q.options.length <= 4,
+        `${q.id} must have 3 or 4 MCQ options, got ${q.options.length}`
+      );
+      assert.ok(
+        Number.isInteger(q.correctIndex) && q.correctIndex >= 0 && q.correctIndex < q.options.length,
+        `Invalid correctIndex in ${q.id}`
+      );
+      for (const opt of q.options) {
+        assert.ok(opt.trim().length > 0, `Empty option in ${q.id}`);
+      }
+      assert.ok(q.explanation.trim().length > 10, `Missing explanation in ${q.id}`);
+
+      if (q.questionText.includes('વિભાગ A')) {
+        const parsed = matchingParserMod.parseMatchingPairQuestion(q.questionText);
+        assert.ok(parsed, `Expected Gujarati Jodka ${q.id} to parse cleanly into table columns`);
+        assert.ok(parsed.colA.length >= 2, `${q.id} colA should have >= 2 items`);
+        assert.ok(parsed.colB.length >= 3, `${q.id} colB should have >= 3 items`);
+        matchingParsedCount += 1;
+      }
+    }
+  }
+
+  assert.equal(matchingParsedCount, 16, 'Expected 7 Vibhag A + 7 Vibhag B + 2 Q45 Jodka tables');
+
+  const mock = mockBuilderMod.buildBoardExamMockTestChapter(gujarati);
+  assert.equal(mock.isMockTest, true);
+  assert.equal(mock.questions.length, 30);
+  mock.questions.forEach((q, idx) => {
+    assert.ok(q.questionText.startsWith(`${idx + 1}) `));
+  });
+});
+

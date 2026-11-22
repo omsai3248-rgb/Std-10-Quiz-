@@ -7,16 +7,22 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.OpenableColumns
+import android.provider.Settings
+import androidx.core.content.FileProvider
 import androidx.core.content.pm.PackageInfoCompat
 import com.google.firebase.Firebase
 import com.google.firebase.FirebaseApp
 import com.google.firebase.storage.storage
 import com.google.firebase.storage.storageMetadata
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.suspendCancellableCoroutine
 import org.json.JSONObject
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.net.HttpURLConnection
+import java.net.URL
 import java.security.MessageDigest
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -54,9 +60,33 @@ data class ApkInspectionResult(
 object AppUpdateManager {
     private const val STAGED_DIR_NAME = "release_stage"
     private const val STAGED_UPLOAD_FILE = "staged_release.bin"
+    private const val UPDATES_DIR_NAME = "updates"
+    private const val MAX_REDIRECTS = 6
+    private const val MAX_APK_BYTES = 262_144_000L
+
+    private val ALLOWED_DOWNLOAD_HOSTS = setOf(
+        "github.com",
+        "objects.githubusercontent.com",
+        "release-assets.githubusercontent.com",
+        "raw.githubusercontent.com",
+        "codeload.github.com",
+        "firebasestorage.googleapis.com",
+        "storage.googleapis.com"
+    )
 
     private fun getStageDir(context: Context): File =
         File(context.cacheDir, STAGED_DIR_NAME).apply { mkdirs() }
+
+    private fun getUpdatesDir(context: Context): File =
+        File(context.cacheDir, UPDATES_DIR_NAME).apply { mkdirs() }
+
+    fun canRequestPackageInstalls(context: Context): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            runCatching { context.packageManager.canRequestPackageInstalls() }.getOrDefault(false)
+        } else {
+            true
+        }
+    }
 
     fun getInstalledAppInfo(context: Context): JSONObject {
         val pm = context.packageManager
@@ -71,26 +101,215 @@ object AppUpdateManager {
             put("versionCode", versionCode)
             put("signingCertSha256", sha256)
             put("signingCertSha1", sha1)
-            put("canRequestPackageInstalls", false)
+            put("canRequestPackageInstalls", canRequestPackageInstalls(context))
+        }
+    }
+
+    private fun isTrustedHttpsUpdateHost(uri: Uri): Boolean {
+        if (!uri.scheme.equals("https", ignoreCase = true)) return false
+        val host = uri.host?.trim()?.lowercase().orEmpty()
+        if (host.isBlank()) return false
+        return ALLOWED_DOWNLOAD_HOSTS.any { allowed ->
+            host == allowed || host.endsWith(".$allowed")
+        }
+    }
+
+    private fun openFollowingRedirects(startUrl: String): HttpURLConnection {
+        var currentUrl = startUrl.trim()
+        for (hop in 0..MAX_REDIRECTS) {
+            val parsedUri = Uri.parse(currentUrl)
+            if (!isTrustedHttpsUpdateHost(parsedUri)) {
+                throw IllegalArgumentException("Untrusted update download host: ${parsedUri.host.orEmpty()}")
+            }
+            val conn = (URL(currentUrl).openConnection() as HttpURLConnection).apply {
+                instanceFollowRedirects = false
+                connectTimeout = 20_000
+                readTimeout = 30_000
+                requestMethod = "GET"
+                setRequestProperty("User-Agent", "QuickQuiz-Android-Updater")
+                setRequestProperty(
+                    "Accept",
+                    "application/vnd.android.package-archive, application/octet-stream, */*"
+                )
+            }
+            conn.connect()
+            val code = conn.responseCode
+            if (code in listOf(301, 302, 303, 307, 308)) {
+                val location = conn.getHeaderField("Location").orEmpty().trim()
+                conn.disconnect()
+                if (location.isBlank()) {
+                    throw IllegalStateException("Redirect location missing (HTTP $code).")
+                }
+                currentUrl = URL(URL(currentUrl), location).toString()
+                continue
+            }
+            if (code !in 200..299) {
+                conn.disconnect()
+                throw IllegalStateException("Update server returned HTTP $code.")
+            }
+            return conn
+        }
+        throw IllegalStateException("Too many redirects while downloading update.")
+    }
+
+    /**
+     * Downloads the APK directly inside the app (never opening Chrome), streams live progress,
+     * verifies archive integrity + package name + signing cert, and returns the verified File.
+     */
+    suspend fun downloadAndVerifyApkInApp(
+        context: Context,
+        downloadUrl: String,
+        versionName: String,
+        expectedSizeBytes: Long,
+        expectedSha256: String,
+        expectedSigningCertSha256: String,
+        onProgress: (percent: Int, bytesDownloaded: Long, totalBytes: Long) -> Unit,
+        onVerifying: (totalBytes: Long) -> Unit
+    ): File {
+        val updatesDir = getUpdatesDir(context)
+        // Remove previous downloaded APKs to keep app cache clean
+        updatesDir.listFiles()?.forEach { old ->
+            runCatching { old.delete() }
+        }
+
+        val safeVer = versionName.replace(Regex("[^a-zA-Z0-9._-]"), "_").ifBlank { "latest" }.take(32)
+        val finalFile = File(updatesDir, "quickquiz_update_$safeVer.apk")
+        val partFile = File(updatesDir, "quickquiz_update_$safeVer.apk.part")
+
+        var conn: HttpURLConnection? = null
+        try {
+            conn = openFollowingRedirects(downloadUrl)
+            val contentLengthHeader = conn.contentLengthLong
+            val totalBytes = when {
+                contentLengthHeader > 0L -> contentLengthHeader
+                expectedSizeBytes > 0L -> expectedSizeBytes
+                else -> 0L
+            }
+            if (totalBytes > MAX_APK_BYTES) {
+                throw IllegalStateException("Update file exceeds maximum allowed size.")
+            }
+
+            onProgress(1, 0L, totalBytes)
+
+            var downloaded = 0L
+            var lastEmitTimeMs = 0L
+            var lastEmitPct = 1
+
+            conn.inputStream.use { input ->
+                FileOutputStream(partFile).use { output ->
+                    val buffer = ByteArray(32 * 1024)
+                    while (true) {
+                        currentCoroutineContext().ensureActive()
+                        val read = input.read(buffer)
+                        if (read <= 0) break
+                        output.write(buffer, 0, read)
+                        downloaded += read
+                        if (downloaded > MAX_APK_BYTES) {
+                            throw IllegalStateException("Downloaded APK exceeds maximum allowed size.")
+                        }
+                        val effectiveTotal = if (totalBytes > 0L) totalBytes else downloaded
+                        val pct = if (totalBytes > 0L) {
+                            ((downloaded * 98L) / totalBytes).toInt().coerceIn(1, 98)
+                        } else {
+                            // Indeterminate fallback smoothly progresses up to 90%
+                            (10 + ((downloaded / (256 * 1024)).toInt() * 2)).coerceIn(10, 90)
+                        }
+                        val now = System.currentTimeMillis()
+                        if (pct != lastEmitPct && (now - lastEmitTimeMs >= 120L || pct >= 98)) {
+                            lastEmitPct = pct
+                            lastEmitTimeMs = now
+                            onProgress(pct, downloaded, effectiveTotal)
+                        }
+                    }
+                    output.flush()
+                }
+            }
+
+            if (!partFile.exists() || partFile.length() < 1024L) {
+                throw IllegalStateException("Downloaded update file is incomplete. Please try again.")
+            }
+            if (finalFile.exists()) finalFile.delete()
+            if (!partFile.renameTo(finalFile)) {
+                partFile.copyTo(finalFile, overwrite = true)
+                partFile.delete()
+            }
+
+            val finalSize = finalFile.length()
+            onVerifying(finalSize)
+
+            // Verify APK archive validity, package name, optional SHA-256, and signing certificate
+            val inspection = inspectLocalApkFile(context, finalFile, finalFile.name)
+            if (!inspection.packageMatches) {
+                finalFile.delete()
+                throw IllegalStateException(
+                    "Downloaded APK package (${inspection.packageName}) does not match this app."
+                )
+            }
+            val cleanExpectedSha = expectedSha256.trim()
+            if (cleanExpectedSha.isNotBlank() &&
+                !inspection.apkSha256.equals(cleanExpectedSha, ignoreCase = true)
+            ) {
+                finalFile.delete()
+                throw IllegalStateException("APK integrity check failed (checksum mismatch). Please retry.")
+            }
+            val cleanExpectedCert = expectedSigningCertSha256.trim()
+            if (cleanExpectedCert.isNotBlank() &&
+                inspection.signingCertSha256.isNotBlank() &&
+                !inspection.signingCertSha256.equals(cleanExpectedCert, ignoreCase = true)
+            ) {
+                finalFile.delete()
+                throw IllegalStateException("APK signing certificate does not match expected release.")
+            }
+            if (!inspection.signatureMatches) {
+                finalFile.delete()
+                throw IllegalStateException(
+                    "APK signing certificate does not match the installed app. Please ensure release APK is signed with the same keystore."
+                )
+            }
+
+            return finalFile
+        } catch (e: Exception) {
+            runCatching { partFile.delete() }
+            throw e
+        } finally {
+            runCatching { conn?.disconnect() }
         }
     }
 
     /**
-     * Google Play Protect & Play Policy compliant update flow:
-     * Opens the verified HTTPS release / store URL in the user's browser via Intent.ACTION_VIEW
-     * without declaring REQUEST_INSTALL_PACKAGES or downloading/executing APK binaries in-app.
+     * Opens the Android system "Allow from this source" toggle for this app on Android 8.0+.
      */
-    fun openTrustedUpdateUrl(context: Context, downloadUrl: String) {
-        val cleanUrl = downloadUrl.trim()
-        val uri = Uri.parse(cleanUrl)
-        if (!uri.scheme.equals("https", ignoreCase = true) || uri.host.isNullOrBlank()) {
-            throw IllegalArgumentException("Invalid update link (HTTPS required).")
+    fun openUnknownSourcesPermissionSettings(context: Context) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val intent = Intent(
+                Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                Uri.parse("package:${context.packageName}")
+            ).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
         }
-        val intent = Intent(Intent.ACTION_VIEW, uri).apply {
-            addCategory(Intent.CATEGORY_BROWSABLE)
+    }
+
+    /**
+     * Launches the Android system Package Installer directly on the downloaded APK via FileProvider.
+     */
+    fun launchPackageInstaller(context: Context, apkFile: File) {
+        if (!apkFile.exists() || apkFile.length() <= 0L) {
+            throw IllegalStateException("Downloaded APK file not found. Please download again.")
+        }
+        val apkUri = FileProvider.getUriForFile(
+            context,
+            "${context.packageName}.fileprovider",
+            apkFile
+        )
+        val installIntent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(apkUri, "application/vnd.android.package-archive")
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            putExtra(Intent.EXTRA_NOT_UNKNOWN_SOURCE, true)
         }
-        context.startActivity(intent)
+        context.startActivity(installIntent)
     }
 
     fun inspectPickedApkUri(context: Context, uri: Uri): ApkInspectionResult {

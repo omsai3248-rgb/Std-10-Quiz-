@@ -976,7 +976,7 @@ export async function downloadAndInstallNativeAppUpdate(payload: {
 }): Promise<{ status: string }> {
   return invokeNativeBridgeCall((callId) => {
     window.AndroidFirebaseBridge?.downloadAndInstallAppUpdate?.(callId, JSON.stringify(payload));
-  }, 15000);
+  }, 300000);
 }
 
 export async function retryNativePendingApkInstall(): Promise<{ status: string }> {

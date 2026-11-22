@@ -14,10 +14,10 @@ export interface ParsedMatchingQuestion {
   colB: MatchingColumnItem[];
 }
 
-const SECTION_A_REGEX = /^વિભાગ\s*A\s*:\s*(.+)$/i;
-const SECTION_B_REGEX = /^વિભાગ\s*B\s*:\s*(.+)$/i;
-const LEFT_ITEM_PREFIX_REGEX = /^(\d+\.)\s*(.+)$/;
-const RIGHT_ITEM_PREFIX_REGEX = /^(\([a-zA-Z0-9]+\))\s*(.+)$/;
+const SECTION_A_REGEX = /^વિભાગ\s*A(?:\s*\(([^)]+)\))?\s*:\s*(.+)$/i;
+const SECTION_B_REGEX = /^વિભાગ\s*B(?:\s*\(([^)]+)\))?\s*:\s*(.+)$/i;
+const LEFT_ITEM_PREFIX_REGEX = /^(\d+[.)])\s*(.+)$/;
+const RIGHT_ITEM_PREFIX_REGEX = /^(\([^)]+\))\s*(.+)$/;
 
 function parseSectionItems(raw: string, side: 'left' | 'right'): MatchingColumnItem[] {
   return raw
@@ -42,7 +42,7 @@ function parseSectionItems(raw: string, side: 'left' | 'right'): MatchingColumnI
 }
 
 /**
- * Parses Science matching-pair ("જોડકા") questions into structured Table columns
+ * Parses matching-pair ("જોડકા") questions into structured Table columns
  * when the question text contains explicit "વિભાગ A:" and "વિભાગ B:" rows.
  */
 export function parseMatchingPairQuestion(questionText: string): ParsedMatchingQuestion | null {
@@ -61,8 +61,8 @@ export function parseMatchingPairQuestion(questionText: string): ParsedMatchingQ
   const matchB = lines[secBIdx].match(SECTION_B_REGEX);
   if (!matchA || !matchB) return null;
 
-  const colA = parseSectionItems(matchA[1], 'left');
-  const colB = parseSectionItems(matchB[1], 'right');
+  const colA = parseSectionItems(matchA[2], 'left');
+  const colB = parseSectionItems(matchB[2], 'right');
   if (colA.length === 0 || colB.length === 0) return null;
 
   const headerLines = lines.slice(0, secAIdx);
@@ -70,8 +70,8 @@ export function parseMatchingPairQuestion(questionText: string): ParsedMatchingQ
 
   return {
     header,
-    colATitle: 'વિભાગ A',
-    colBTitle: 'વિભાગ B',
+    colATitle: matchA[1]?.trim() ? `‘અ’ (${matchA[1].trim()})` : 'વિભાગ A',
+    colBTitle: matchB[1]?.trim() ? `‘બ’ (${matchB[1].trim()})` : 'વિભાગ B',
     colA,
     colB,
   };

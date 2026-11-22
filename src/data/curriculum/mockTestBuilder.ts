@@ -42,6 +42,37 @@ export function buildBoardExamMockTestChapter(
   subject: QuizSubject,
   rng: () => number = Math.random
 ): QuizChapter {
+  if (subject.id === 'gujarati') {
+    const eligibleChapters = subject.chapters.filter((c) => !c.isMockTest && c.questions.length > 0);
+    const totalCount = eligibleChapters.length;
+    const mockQuestions: QuizQuestion[] = eligibleChapters.map((chapter, idx) => {
+      const pickedIdx = Math.min(
+        chapter.questions.length - 1,
+        Math.floor(rng() * chapter.questions.length)
+      );
+      const picked = chapter.questions[pickedIdx];
+      return {
+        ...picked,
+        id: `mock_gujarati_ch_${idx + 1}_${picked.id}`,
+        options: [...picked.options],
+        questionText: normalizeMockQuestionText(picked.questionText, idx + 1),
+        sourceLabel: `${chapter.chapterNumber} (${idx + 1}/${totalCount}) • ${chapter.title}`,
+      };
+    });
+
+    return {
+      id: `mock_test_${subject.id}`,
+      subjectId: subject.id,
+      chapterNumber: 'વિભાગ A, B અને C (વ્યાકરણ)',
+      title: 'બોર્ડ પરીક્ષા મોક ટેસ્ટ',
+      subtitle: `${subject.title} • દરેક વખતે વિભાગ A, B અને વ્યાકરણના ${totalCount} પ્રશ્ન વિભાગમાંથી નવા રેન્ડમ પ્રશ્નો`,
+      questions: mockQuestions,
+      questionTypeLabel: `બોર્ડ મોક ટેસ્ટ (${totalCount} પ્રશ્નો)`,
+      isFreeUnlocked: false,
+      isMockTest: true,
+    };
+  }
+
   const slotMap = new Map<number, Array<{ chapter: QuizChapter; question: QuizQuestion }>>();
   for (let slot = 1; slot <= BOARD_MOCK_QUESTION_COUNT; slot++) {
     slotMap.set(slot, []);
