@@ -732,6 +732,7 @@ const AppContent: React.FC = () => {
       r === 'subject_maths' ||
       r === 'subject_science' ||
       r === 'subject_social_science' ||
+      r === 'subject_english' ||
       r === 'subject_gujarati' ||
       r === 'subject_hindi';
 
@@ -1911,6 +1912,7 @@ const AppContent: React.FC = () => {
         target === 'subject_maths' ||
         target === 'subject_science' ||
         target === 'subject_social_science' ||
+        target === 'subject_english' ||
         target === 'subject_gujarati' ||
         target === 'subject_hindi'
       ) {
@@ -1919,11 +1921,13 @@ const AppContent: React.FC = () => {
             ? 'maths'
             : target === 'subject_science'
               ? 'science'
-              : target === 'subject_gujarati'
-                ? 'gujarati'
-                : target === 'subject_hindi'
-                  ? 'hindi'
-                  : 'social_science';
+              : target === 'subject_english'
+                ? 'english'
+                : target === 'subject_gujarati'
+                  ? 'gujarati'
+                  : target === 'subject_hindi'
+                    ? 'hindi'
+                    : 'social_science';
         if (isStudentLoggedIn) {
           setRoute({ name: 'subject', subjectId });
         } else {

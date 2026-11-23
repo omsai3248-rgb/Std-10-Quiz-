@@ -114,6 +114,60 @@ export function buildBoardExamMockTestChapter(
     };
   }
 
+  if (subject.id === 'english') {
+    const englishBlueprint: Array<{ chapterId: string; count: number; slotLabels: string[] }> = [
+      { chapterId: 'eng_q12_15', count: 4, slotLabels: ['Q.12', 'Q.13', 'Q.14', 'Q.15'] },
+      { chapterId: 'eng_q33_35', count: 1, slotLabels: ['Q.33–35'] },
+      { chapterId: 'eng_q36_38', count: 3, slotLabels: ['Q.36', 'Q.37', 'Q.38'] },
+      { chapterId: 'eng_q39_41', count: 3, slotLabels: ['Q.39', 'Q.40', 'Q.41'] },
+      { chapterId: 'eng_q42', count: 1, slotLabels: ['Q.42'] },
+      { chapterId: 'eng_q43_45', count: 3, slotLabels: ['Q.43', 'Q.44', 'Q.45'] },
+      { chapterId: 'eng_q46', count: 1, slotLabels: ['Q.46'] },
+      { chapterId: 'eng_q47_49', count: 3, slotLabels: ['Q.47', 'Q.48', 'Q.49'] },
+      { chapterId: 'eng_q50', count: 1, slotLabels: ['Q.50'] },
+      { chapterId: 'eng_q53_55', count: 3, slotLabels: ['Q.53', 'Q.54', 'Q.55'] },
+    ];
+
+    const chapterById = new Map(subject.chapters.map((c) => [c.id, c]));
+    const mockQuestions: QuizQuestion[] = [];
+
+    for (const slot of englishBlueprint) {
+      const ch = chapterById.get(slot.chapterId);
+      if (!ch || ch.questions.length === 0) continue;
+      const usedLocal = new Set<string>();
+      for (let i = 0; i < slot.count; i++) {
+        const unused = ch.questions.filter((q) => !usedLocal.has(q.id));
+        const pool = unused.length > 0 ? unused : ch.questions;
+        const pickedIdx = Math.min(pool.length - 1, Math.floor(rng() * pool.length));
+        const picked = pool[pickedIdx];
+        usedLocal.add(picked.id);
+
+        const label = slot.slotLabels[i] ?? ch.chapterNumber;
+        mockQuestions.push({
+          ...picked,
+          id: `mock_english_${slot.chapterId}_${i}_${picked.id}`,
+          options: [...picked.options],
+          wordBank: picked.wordBank ? [...picked.wordBank] : undefined,
+          blanks: picked.blanks ? picked.blanks.map((b) => ({ ...b, options: [...b.options] })) : undefined,
+          dialogueLines: picked.dialogueLines ? picked.dialogueLines.map((d) => ({ ...d })) : undefined,
+          sourceLabel: `${label} • ${ch.title}`,
+        });
+      }
+    }
+
+    return {
+      id: `mock_test_${subject.id}`,
+      subjectId: subject.id,
+      chapterNumber: 'Section A, C & D • Q.12 to Q.55',
+      title: 'બોર્ડ પરીક્ષા મોક ટેસ્ટ (English SL)',
+      subtitle: `${subject.title} • દરેક વખતે Q.12 થી Q.55 ક્રમમાં નવા રેન્ડમ પ્રશ્નો (True/False, Table, MCQ & Tap-to-Fill)`,
+      questions: mockQuestions,
+      questionTypeLabel: `બોર્ડ મોક ટેસ્ટ (${mockQuestions.length} પ્રશ્નો)`,
+      isFreeUnlocked: false,
+      isMockTest: true,
+    };
+  }
+
   const slotMap = new Map<number, Array<{ chapter: QuizChapter; question: QuizQuestion }>>();
   for (let slot = 1; slot <= BOARD_MOCK_QUESTION_COUNT; slot++) {
     slotMap.set(slot, []);

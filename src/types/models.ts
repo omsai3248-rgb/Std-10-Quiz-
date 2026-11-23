@@ -1,6 +1,6 @@
 import type { Timestamp } from 'firebase/firestore';
 
-export type SubjectId = 'maths' | 'science' | 'social_science' | 'gujarati' | 'hindi';
+export type SubjectId = 'maths' | 'science' | 'social_science' | 'english' | 'gujarati' | 'hindi';
 export type AccessScopeId = SubjectId | 'all';
 
 export interface StudentProfile {
@@ -100,6 +100,11 @@ export type PolynomialGraphPattern =
   | 'Q11_Y_EQ_PX_TWO_X_PARABOLA'
   | 'Q12_Y_EQ_PX_ONE_X_RIGHT_TOUCH';
 
+export interface TapFillBlankSpec {
+  options: string[];
+  correctAnswer: string;
+}
+
 export interface QuizQuestion {
   id: string;
   questionText: string;
@@ -108,6 +113,10 @@ export interface QuizQuestion {
   explanation: string;
   graphPattern?: PolynomialGraphPattern;
   sourceLabel?: string;
+  questionMode?: 'mcq' | 'true_false' | 'tap_fill_bank' | 'tap_fill_per_blank';
+  dialogueLines?: Array<{ speaker: string; text: string }>;
+  blanks?: TapFillBlankSpec[];
+  wordBank?: string[];
 }
 
 export interface QuizChapter {
@@ -277,6 +286,7 @@ export const ALL_SUBJECT_IDS: SubjectId[] = [
   'maths',
   'science',
   'social_science',
+  'english',
   'gujarati',
   'hindi',
 ];
@@ -297,6 +307,8 @@ export function getSubjectDisplayName(subjectId: string, lang: 'gu' | 'en' = 'gu
         return 'Science';
       case 'social_science':
         return 'Social Science';
+      case 'english':
+        return 'English';
       case 'gujarati':
         return 'Gujarati';
       case 'hindi':
@@ -312,6 +324,8 @@ export function getSubjectDisplayName(subjectId: string, lang: 'gu' | 'en' = 'gu
       return 'વિજ્ઞાન';
     case 'social_science':
       return 'સામાજિક વિજ્ઞાન';
+    case 'english':
+      return 'English (અંગ્રેજી)';
     case 'gujarati':
       return 'ગુજરાતી';
     case 'hindi':
@@ -329,6 +343,8 @@ export function getDefaultPrefix(subjectId: string): string {
       return 'SCI';
     case 'social_science':
       return 'SOC';
+    case 'english':
+      return 'ENG';
     case 'gujarati':
       return 'GUJ';
     case 'hindi':
@@ -351,6 +367,7 @@ export function resolveCodeSubjectId(
     normalizedExplicit === 'maths' ||
     normalizedExplicit === 'science' ||
     normalizedExplicit === 'social_science' ||
+    normalizedExplicit === 'english' ||
     normalizedExplicit === 'gujarati' ||
     normalizedExplicit === 'hindi'
   ) {
@@ -360,6 +377,7 @@ export function resolveCodeSubjectId(
   if (upperCode.startsWith('MAT') || upperCode.startsWith('MTH')) return 'maths';
   if (upperCode.startsWith('SCI')) return 'science';
   if (upperCode.startsWith('SOC') || upperCode.startsWith('SS-')) return 'social_science';
+  if (upperCode.startsWith('ENG')) return 'english';
   if (upperCode.startsWith('GUJ')) return 'gujarati';
   if (upperCode.startsWith('HIN')) return 'hindi';
   if (upperCode.startsWith('ALL')) return 'all';
@@ -370,6 +388,13 @@ export function resolveCodeSubjectId(
   }
   if (cleanBatch.includes('સામાજિક') || cleanBatch.includes('social')) {
     return 'social_science';
+  }
+  if (
+    cleanBatch.includes('અંગ્રેજી') ||
+    cleanBatch.includes('अंग्रेजी') ||
+    cleanBatch.includes('english')
+  ) {
+    return 'english';
   }
   if (cleanBatch.includes('ગુજરાતી') || cleanBatch.includes('gujarati')) {
     return 'gujarati';
@@ -389,7 +414,7 @@ export function resolveCodeSubjectId(
 }
 
 const PAYMENT_SUBJECT_TAG_REGEX =
-  /^\[SUB:(maths|science|social_science|gujarati|hindi|all)\]\s*\|?\s*/i;
+  /^\[SUB:(maths|science|social_science|english|gujarati|hindi|all)\]\s*\|?\s*/i;
 
 export function encodePaymentRefWithSubject(rawUpiRef: string, subjectId: string): string {
   const cleanSub = ALL_SUBJECT_IDS.includes(subjectId as SubjectId) ? subjectId : 'all';
@@ -464,6 +489,7 @@ export type PushBroadcastTargetRoute =
   | 'subject_maths'
   | 'subject_science'
   | 'subject_social_science'
+  | 'subject_english'
   | 'subject_gujarati'
   | 'subject_hindi';
 

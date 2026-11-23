@@ -14,10 +14,10 @@ export interface ParsedMatchingQuestion {
   colB: MatchingColumnItem[];
 }
 
-const SECTION_A_REGEX = /^વિભાગ\s*A(?:\s*\(([^)]+)\))?\s*:\s*(.+)$/i;
-const SECTION_B_REGEX = /^વિભાગ\s*B(?:\s*\(([^)]+)\))?\s*:\s*(.+)$/i;
+const SECTION_A_REGEX = /^(વિભાગ|Column)\s*A(?:\s*\(([^)]+)\))?\s*:\s*(.+)$/i;
+const SECTION_B_REGEX = /^(વિભાગ|Column)\s*B(?:\s*\(([^)]+)\))?\s*:\s*(.+)$/i;
 const LEFT_ITEM_PREFIX_REGEX = /^(\d+[.)])\s*(.+)$/;
-const RIGHT_ITEM_PREFIX_REGEX = /^(\([^)]+\))\s*(.+)$/;
+const RIGHT_ITEM_PREFIX_REGEX = /^(\([^)]+\)|[a-zA-Z][.)])\s*(.+)$/;
 
 function parseSectionItems(raw: string, side: 'left' | 'right'): MatchingColumnItem[] {
   return raw
@@ -36,14 +36,14 @@ function parseSectionItems(raw: string, side: 'left' | 'right'): MatchingColumnI
       if (match) {
         return { label: match[1], text: match[2].trim() };
       }
-      const fallbackLetter = String.fromCharCode(112 + idx);
+      const fallbackLetter = String.fromCharCode(97 + idx);
       return { label: `(${fallbackLetter})`, text: part };
     });
 }
 
 /**
  * Parses matching-pair ("જોડકા") questions into structured Table columns
- * when the question text contains explicit "વિભાગ A:" and "વિભાગ B:" rows.
+ * when the question text contains explicit "વિભાગ A:" / "Column A:" and "વિભાગ B:" / "Column B:" rows.
  */
 export function parseMatchingPairQuestion(questionText: string): ParsedMatchingQuestion | null {
   const lines = questionText
@@ -61,17 +61,38 @@ export function parseMatchingPairQuestion(questionText: string): ParsedMatchingQ
   const matchB = lines[secBIdx].match(SECTION_B_REGEX);
   if (!matchA || !matchB) return null;
 
-  const colA = parseSectionItems(matchA[2], 'left');
-  const colB = parseSectionItems(matchB[2], 'right');
+  const isEnglishColumn = matchA[1].toLowerCase() === 'column';
+  const colA = parseSectionItems(matchA[3], 'left');
+  const colB = parseSectionItems(matchB[3], 'right');
   if (colA.length === 0 || colB.length === 0) return null;
 
   const headerLines = lines.slice(0, secAIdx);
-  const header = headerLines.join(' ').trim() || 'નીચેના જોડકા જોડો:';
+  const header =
+    headerLines.join(' ').trim() ||
+    (isEnglishColumn
+      ? 'Match the language functions with proper sentences:'
+      : 'નીચેના જોડકા જોડો:');
+
+  const colATitle = isEnglishColumn
+    ? matchA[2]?.trim()
+      ? `Column A (${matchA[2].trim()})`
+      : 'Column A'
+    : matchA[2]?.trim()
+      ? `‘અ’ (${matchA[2].trim()})`
+      : 'વિભાગ A';
+
+  const colBTitle = isEnglishColumn
+    ? matchB[2]?.trim()
+      ? `Column B (${matchB[2].trim()})`
+      : 'Column B'
+    : matchB[2]?.trim()
+      ? `‘બ’ (${matchB[2].trim()})`
+      : 'વિભાગ B';
 
   return {
     header,
-    colATitle: matchA[1]?.trim() ? `‘અ’ (${matchA[1].trim()})` : 'વિભાગ A',
-    colBTitle: matchB[1]?.trim() ? `‘બ’ (${matchB[1].trim()})` : 'વિભાગ B',
+    colATitle,
+    colBTitle,
     colA,
     colB,
   };
@@ -80,11 +101,13 @@ export function parseMatchingPairQuestion(questionText: string): ParsedMatchingQ
 interface MatchingTableCardProps {
   parsed: ParsedMatchingQuestion;
   isLargeScreen?: boolean;
+  plainText?: boolean;
 }
 
 export const MatchingTableCard: React.FC<MatchingTableCardProps> = ({
   parsed,
   isLargeScreen = false,
+  plainText = false,
 }) => {
   const rowCount = Math.max(parsed.colA.length, parsed.colB.length);
 
@@ -95,7 +118,7 @@ export const MatchingTableCard: React.FC<MatchingTableCardProps> = ({
           isLargeScreen ? 'text-lg sm:text-xl' : 'text-base sm:text-lg'
         } font-semibold leading-relaxed text-[#0F172A] dark:text-[#F8FAFC]`}
       >
-        <MathRichText text={parsed.header} />
+        <MathRichText text={parsed.header} plainText={plainText} />
       </div>
 
       <div className="overflow-x-auto rounded-xl border border-[#CBD5E1] dark:border-[#334155] bg-[#F8FAFC] dark:bg-[#0F172A]/75 shadow-xs">
@@ -104,13 +127,13 @@ export const MatchingTableCard: React.FC<MatchingTableCardProps> = ({
             <tr className="bg-[#DBEAFE]/80 dark:bg-[#1E3A5F]/90 border-b border-[#CBD5E1] dark:border-[#334155]">
               <th
                 scope="col"
-                className="w-[44%] px-3 sm:px-4 py-2.5 text-xs sm:text-sm font-extrabold text-[#1E3A8A] dark:text-[#DBEAFE]"
+                className="w-[52%] px-3 sm:px-4 py-2.5 text-xs sm:text-sm font-extrabold text-[#1E3A8A] dark:text-[#DBEAFE]"
               >
                 {parsed.colATitle}
               </th>
               <th
                 scope="col"
-                className="w-[56%] px-3 sm:px-4 py-2.5 text-xs sm:text-sm font-extrabold text-[#1E3A8A] dark:text-[#DBEAFE] border-l border-[#CBD5E1] dark:border-[#334155]"
+                className="w-[48%] px-3 sm:px-4 py-2.5 text-xs sm:text-sm font-extrabold text-[#1E3A8A] dark:text-[#DBEAFE] border-l border-[#CBD5E1] dark:border-[#334155]"
               >
                 {parsed.colBTitle}
               </th>
@@ -136,7 +159,7 @@ export const MatchingTableCard: React.FC<MatchingTableCardProps> = ({
                           {left.label}
                         </span>
                         <span className="leading-relaxed">
-                          <MathRichText text={left.text} />
+                          <MathRichText text={left.text} plainText={plainText} />
                         </span>
                       </div>
                     ) : null}
@@ -148,7 +171,7 @@ export const MatchingTableCard: React.FC<MatchingTableCardProps> = ({
                           {right.label}
                         </span>
                         <span className="leading-relaxed">
-                          <MathRichText text={right.text} />
+                          <MathRichText text={right.text} plainText={plainText} />
                         </span>
                       </div>
                     ) : null}

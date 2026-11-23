@@ -553,16 +553,52 @@ function renderTopLevelNodes(nodes: MathNode[], keyPrefix = 'm'): React.ReactNod
   return out;
 }
 
+const UNDERLINE_TAG_REGEX = /(\[\[u\]\][\s\S]*?\[\[\/u\]\])/g;
+
+function renderPlainWithUnderlines(text: string): React.ReactNode[] {
+  const parts = text.split(UNDERLINE_TAG_REGEX);
+  return parts.map((part, idx) => {
+    if (part.startsWith('[[u]]') && part.endsWith('[[/u]]')) {
+      const inner = part.slice(5, -6);
+      return (
+        <span
+          key={`u_${idx}`}
+          className="underline decoration-2 decoration-[#0F766E] dark:decoration-[#5EEAD4] underline-offset-4 font-extrabold text-[#0F172A] dark:text-[#F8FAFC] bg-[#CCFBF1]/45 dark:bg-[#134E4A]/45 px-1 rounded"
+        >
+          {inner}
+        </span>
+      );
+    }
+    return <React.Fragment key={`t_${idx}`}>{part}</React.Fragment>;
+  });
+}
+
 interface MathRichTextProps {
   text: string;
   className?: string;
+  plainText?: boolean;
 }
 
-export const MathRichText: React.FC<MathRichTextProps> = ({ text, className = '' }) => {
+export const MathRichText: React.FC<MathRichTextProps> = ({
+  text,
+  className = '',
+  plainText = false,
+}) => {
+  const hasUnderlineTag = text.includes('[[u]]');
   const [nodes] = React.useMemo(() => {
+    if (plainText || hasUnderlineTag) return [[] as MathNode[], 0] as const;
     const normalized = normalizeMathMacros(text);
     return parseUntil(normalized, 0, null);
-  }, [text]);
+  }, [text, plainText, hasUnderlineTag]);
+
+  if (plainText || hasUnderlineTag) {
+    return (
+      <span className={`inline leading-[inherit] ${className}`}>
+        {renderPlainWithUnderlines(text)}
+      </span>
+    );
+  }
+
   return (
     <span className={`inline leading-[inherit] ${className}`}>
       {renderTopLevelNodes(nodes)}

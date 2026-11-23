@@ -2168,7 +2168,7 @@ export async function markFreeMockTestUsed(
 
   const backup = loadWebStudentBackup(uid);
   if (backup) {
-    const merged = Array.from(new Set([...(backup.freeMockUsedSubjects ?? []), subjectId])).slice(0, 3);
+    const merged = Array.from(new Set([...(backup.freeMockUsedSubjects ?? []), subjectId])).slice(0, 6);
     saveWebStudentBackup({ ...backup, freeMockUsedSubjects: merged }, Boolean(backup.pendingServerSync));
   }
 
@@ -3316,6 +3316,7 @@ export function observePushBroadcasts(
           'subject_maths',
           'subject_science',
           'subject_social_science',
+          'subject_english',
           'subject_gujarati',
           'subject_hindi',
         ];

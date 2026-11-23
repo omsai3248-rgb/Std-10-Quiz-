@@ -43,6 +43,16 @@ export const std10SubjectMetas: SubjectMeta[] = [
     questionCount: 420,
   },
   {
+    id: 'english',
+    title: 'English',
+    englishSubtitle: 'અંગ્રેજી (Second Language • 16) • ધોરણ ૧૦',
+    description: 'Section A, C & D — True/False, Functions, Vocabulary, Indirect Narration, Conjunctions & Frame Questions',
+    imageUrl: '/images/img_subject_english.jpg',
+    accentHex: '#0F766E',
+    chapterCount: 10,
+    questionCount: 434,
+  },
+  {
     id: 'gujarati',
     title: 'ગુજરાતી',
     englishSubtitle: 'Gujarati (01 G) • ધોરણ ૧૦',
@@ -80,6 +90,10 @@ async function loadChaptersForSubject(subjectId: SubjectId): Promise<QuizChapter
     case 'social_science': {
       const mod = await import('./socialChapters');
       return mod.socialChapters;
+    }
+    case 'english': {
+      const mod = await import('./englishChapters');
+      return mod.englishChapters;
     }
     case 'gujarati': {
       const mod = await import('./gujaratiChapters');

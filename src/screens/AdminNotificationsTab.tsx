@@ -387,6 +387,7 @@ export const AdminNotificationsTab: React.FC<AdminNotificationsTabProps> = ({
                   <option value="subject_maths">ગણિત વિષય (Mathematics)</option>
                   <option value="subject_science">વિજ્ઞાન વિષય (Science)</option>
                   <option value="subject_social_science">સામાજિક વિજ્ઞાન (Social Science)</option>
+                  <option value="subject_english">English વિષય (અંગ્રેજી)</option>
                   <option value="subject_gujarati">ગુજરાતી વિષય (Gujarati)</option>
                   <option value="subject_hindi">હિન્દી વિષય (Hindi)</option>
                   <option value="app_update">App Update સ્ક્રીન (Update Screen)</option>

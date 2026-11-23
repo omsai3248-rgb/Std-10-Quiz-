@@ -108,7 +108,7 @@ service cloud.firestore {
              data.totalQuizzesTaken is int && data.totalQuizzesTaken >= 0 && data.totalQuizzesTaken <= 100000 &&
              data.bestScorePercent is int && data.bestScorePercent >= 0 && data.bestScorePercent <= 100 &&
              (!('unlockedSubjects' in data) || (data.unlockedSubjects is list && data.unlockedSubjects.size() <= 10)) &&
-             (!('freeMockUsedSubjects' in data) || (data.freeMockUsedSubjects is list && data.freeMockUsedSubjects.size() <= 5 && data.freeMockUsedSubjects.hasOnly(['maths', 'science', 'social_science', 'gujarati', 'hindi']))) &&
+             (!('freeMockUsedSubjects' in data) || (data.freeMockUsedSubjects is list && data.freeMockUsedSubjects.size() <= 6 && data.freeMockUsedSubjects.hasOnly(['maths', 'science', 'social_science', 'english', 'gujarati', 'hindi']))) &&
              (!('paymentRequestIds' in data) || (data.paymentRequestIds is list && data.paymentRequestIds.size() <= 25)) &&
              (!('activeDeviceId' in data) || (data.activeDeviceId is string && data.activeDeviceId.size() <= 128)) &&
              (!('activeDeviceName' in data) || (data.activeDeviceName is string && data.activeDeviceName.size() <= 120)) &&
@@ -153,7 +153,7 @@ service cloud.firestore {
              data.usedByMobile is string && data.usedByMobile.size() <= 15 &&
              data.usedByName is string && data.usedByName.size() <= 60 &&
              data.source in ['book', 'upi_payment'] &&
-             (!('subjectId' in data) || data.subjectId in ['maths', 'science', 'social_science', 'gujarati', 'hindi', 'all']) &&
+             (!('subjectId' in data) || data.subjectId in ['maths', 'science', 'social_science', 'english', 'gujarati', 'hindi', 'all']) &&
              data.createdAt is timestamp && data.createdAt <= request.time &&
              data.updatedAt is timestamp && data.updatedAt <= request.time;
     }
@@ -185,7 +185,7 @@ service cloud.firestore {
              data.status in ['pending', 'approved', 'rejected'] &&
              data.assignedCode is string && data.assignedCode.size() <= 32 &&
              data.adminNote is string && data.adminNote.size() <= 200 &&
-             (!('subjectId' in data) || data.subjectId in ['maths', 'science', 'social_science', 'gujarati', 'hindi', 'all']) &&
+             (!('subjectId' in data) || data.subjectId in ['maths', 'science', 'social_science', 'english', 'gujarati', 'hindi', 'all']) &&
              data.createdAt is timestamp && data.createdAt <= request.time &&
              data.updatedAt is timestamp && data.updatedAt <= request.time;
     }
@@ -200,7 +200,7 @@ service cloud.firestore {
                'score', 'totalQuestions', 'percentage', 'timeTakenSeconds', 'createdAt'
              ]) &&
              data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
-             data.subjectId in ['maths', 'science', 'social_science', 'gujarati', 'hindi'] &&
+             data.subjectId in ['maths', 'science', 'social_science', 'english', 'gujarati', 'hindi'] &&
              data.subjectTitle is string && data.subjectTitle.size() >= 1 && data.subjectTitle.size() <= 50 &&
              data.chapterTitle is string && data.chapterTitle.size() >= 1 && data.chapterTitle.size() <= 100 &&
              data.totalQuestions is int && data.totalQuestions >= 1 && data.totalQuestions <= 200 &&
@@ -566,8 +566,8 @@ service cloud.firestore {
                              (
                                'freeMockUsedSubjects' in incoming() &&
                                incoming().freeMockUsedSubjects is list &&
-                               incoming().freeMockUsedSubjects.size() <= 5 &&
-                               incoming().freeMockUsedSubjects.hasOnly(['maths', 'science', 'social_science', 'gujarati', 'hindi']) &&
+                               incoming().freeMockUsedSubjects.size() <= 6 &&
+                               incoming().freeMockUsedSubjects.hasOnly(['maths', 'science', 'social_science', 'english', 'gujarati', 'hindi']) &&
                                (!('freeMockUsedSubjects' in existing()) || incoming().freeMockUsedSubjects.hasAll(existing().freeMockUsedSubjects)) &&
                                incoming().diff(existing()).affectedKeys().hasOnly(['freeMockUsedSubjects', 'updatedAt'])
                              ) ||
@@ -804,7 +804,7 @@ service cloud.firestore {
              data.category in ['admin_message', 'exam_notice', 'app_update'] &&
              data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
              data.body is string && data.body.size() >= 1 && data.body.size() <= 600 &&
-             data.targetRoute in ['home', 'mock_test', 'app_update', 'subject_maths', 'subject_science', 'subject_social_science', 'subject_gujarati', 'subject_hindi'] &&
+             data.targetRoute in ['home', 'mock_test', 'app_update', 'subject_maths', 'subject_science', 'subject_social_science', 'subject_english', 'subject_gujarati', 'subject_hindi'] &&
              data.referenceId is string && data.referenceId.size() <= 128 &&
              data.senderUid is string && data.senderUid.size() >= 1 && data.senderUid.size() <= 128 &&
              data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 80 &&

@@ -507,17 +507,21 @@ export function mergeStudentProfilesConflictSafe(
     remote.hasQuizAccess ||
     local.hasQuizAccess ||
     unlocked.has('all') ||
-    ['maths', 'science', 'social_science', 'gujarati', 'hindi'].every((s) => unlocked.has(s));
+    ['maths', 'science', 'social_science', 'english', 'gujarati', 'hindi'].every((s) =>
+      unlocked.has(s)
+    );
   if (hasFull) {
     unlocked.add('all');
-    ['maths', 'science', 'social_science', 'gujarati', 'hindi'].forEach((s) => unlocked.add(s));
+    ['maths', 'science', 'social_science', 'english', 'gujarati', 'hindi'].forEach((s) =>
+      unlocked.add(s)
+    );
   }
   const mergedPaymentIds = Array.from(
     new Set([...(remote.paymentRequestIds ?? []), ...(local.paymentRequestIds ?? [])])
   ).slice(0, 25);
   const mergedFreeMocks = Array.from(
     new Set([...(remote.freeMockUsedSubjects ?? []), ...(local.freeMockUsedSubjects ?? [])])
-  ).slice(0, 5);
+  ).slice(0, 6);
 
   return {
     ...remote,

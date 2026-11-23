@@ -283,4 +283,119 @@ test('Hindi curriculum has 11 Section C Vyakaran folders (Q29-Q45), 158 complete
   });
 });
 
+test('English subject is placed 4th and satisfies all 6 PDF quiz rules across 10 sections (434 items) and board mock test', async () => {
+  const subjectIds = curriculumMod.std10SubjectMetas.map((m) => m.id);
+  assert.equal(subjectIds[3], 'english', `English must be 4th subject (index 3), got: ${subjectIds.join(', ')}`);
+
+  const english = await curriculumMod.loadSubjectWithChapters('english');
+  assert.equal(english.id, 'english');
+  assert.equal(english.chapters.length, 10);
+
+  const expectedSections = [
+    ['eng_q12_15', 48],
+    ['eng_q33_35', 15],
+    ['eng_q36_38', 46],
+    ['eng_q39_41', 46],
+    ['eng_q42', 45],
+    ['eng_q43_45', 48],
+    ['eng_q46', 45],
+    ['eng_q47_49', 48],
+    ['eng_q50', 45],
+    ['eng_q53_55', 48],
+  ];
+
+  const totalQuestions = english.chapters.reduce((sum, ch) => sum + ch.questions.length, 0);
+  assert.equal(totalQuestions, 434, 'English subject should contain all 434 PDF questions');
+
+  const seenIds = new Set();
+  english.chapters.forEach((ch, idx) => {
+    const [expectedId, expectedLen] = expectedSections[idx];
+    assert.equal(ch.id, expectedId, `Expected chapter ${expectedId} at index ${idx}, got ${ch.id}`);
+    assert.equal(ch.questions.length, expectedLen, `Question count mismatch in ${ch.id}`);
+    assert.ok(ch.chapterNumber.trim().length > 0);
+    assert.ok(ch.title.trim().length > 0);
+
+    for (const q of ch.questions) {
+      assert.equal(seenIds.has(q.id), false, `Duplicate English question id: ${q.id}`);
+      seenIds.add(q.id);
+      assert.ok(q.questionText.trim().length > 0, `Empty questionText in ${q.id}`);
+      assert.ok(q.explanation.trim().length > 10, `Missing explanation in ${q.id}`);
+
+      if (ch.id === 'eng_q12_15') {
+        // Rule 1: Exactly 2 options (True, False)
+        assert.deepEqual(q.options, ['True', 'False'], `${q.id} must have exactly ['True', 'False']`);
+        assert.ok(q.correctIndex === 0 || q.correctIndex === 1, `Invalid correctIndex in ${q.id}`);
+      } else if (ch.id === 'eng_q33_35') {
+        // Rule 2: Column A & Column B table + 4 MCQ options
+        const parsed = matchingParserMod.parseMatchingPairQuestion(q.questionText);
+        assert.ok(parsed, `Expected ${q.id} to parse into Column A / Column B table`);
+        assert.equal(parsed.colA.length, 3, `${q.id} Column A must have 3 rows`);
+        assert.equal(parsed.colB.length, 4, `${q.id} Column B must have 4 rows`);
+        assert.equal(q.options.length, 4, `${q.id} must have 4 MCQ options`);
+        assert.ok(q.correctIndex >= 0 && q.correctIndex < 4, `Invalid correctIndex in ${q.id}`);
+      } else if (
+        ch.id === 'eng_q36_38' ||
+        ch.id === 'eng_q39_41' ||
+        ch.id === 'eng_q43_45' ||
+        ch.id === 'eng_q53_55'
+      ) {
+        // Rule 3: Exact 4 MCQ options from PDF
+        assert.equal(q.options.length, 4, `${q.id} must have 4 MCQ options`);
+        assert.ok(q.correctIndex >= 0 && q.correctIndex < 4, `Invalid correctIndex in ${q.id}`);
+        for (const opt of q.options) {
+          assert.ok(opt.trim().length > 0, `Empty option in ${q.id}`);
+        }
+        if (ch.id === 'eng_q53_55') {
+          assert.ok(
+            q.questionText.includes('[[u]]') && q.questionText.includes('[[/u]]'),
+            `${q.id} should include [[u]]...[[/u]] underline markup`
+          );
+        }
+      } else if (ch.id === 'eng_q42') {
+        // Rule 4: Tap-to-Fill with 3 bracketed word buttons
+        assert.equal(q.questionMode, 'tap_fill_bank', `${q.id} must use tap_fill_bank mode`);
+        assert.ok(Array.isArray(q.wordBank) && q.wordBank.length === 3, `${q.id} must have 3 word bank buttons`);
+        assert.ok(Array.isArray(q.blanks) && q.blanks.length === 3, `${q.id} must have 3 blanks`);
+        q.blanks.forEach((blank, bIdx) => {
+          const token = `{{${bIdx}}}`;
+          assert.ok(q.questionText.includes(token), `${q.id} questionText missing ${token}`);
+          assert.ok(
+            q.wordBank.includes(blank.correctAnswer),
+            `${q.id} blank ${bIdx + 1} answer "${blank.correctAnswer}" not in word bank [${q.wordBank.join(', ')}]`
+          );
+        });
+      } else if (ch.id === 'eng_q46' || ch.id === 'eng_q50') {
+        // Rule 5: Per-blank Tap-to-Fill with 3 options per blank
+        assert.equal(q.questionMode, 'tap_fill_per_blank', `${q.id} must use tap_fill_per_blank mode`);
+        assert.ok(Array.isArray(q.blanks) && q.blanks.length >= 2, `${q.id} must have blanks`);
+        if (ch.id === 'eng_q46') {
+          assert.ok(Array.isArray(q.dialogueLines) && q.dialogueLines.length >= 2, `${q.id} must include dialogueLines`);
+        }
+        q.blanks.forEach((blank, bIdx) => {
+          const token = `{{${bIdx}}}`;
+          assert.ok(q.questionText.includes(token), `${q.id} questionText missing ${token}`);
+          assert.equal(blank.options.length, 3, `${q.id} blank ${bIdx + 1} must have exactly 3 options`);
+          assert.ok(
+            blank.options.includes(blank.correctAnswer),
+            `${q.id} blank ${bIdx + 1} answer "${blank.correctAnswer}" not found in options [${blank.options.join(', ')}]`
+          );
+        });
+      } else if (ch.id === 'eng_q47_49') {
+        // Rule 6: 3 joined-sentence options from the 3 bracketed conjunctions
+        assert.equal(q.options.length, 3, `${q.id} must have 3 joined-sentence options`);
+        assert.ok(q.correctIndex >= 0 && q.correctIndex < 3, `Invalid correctIndex in ${q.id}`);
+        for (const opt of q.options) {
+          assert.ok(opt.trim().length > 10, `Joined sentence option too short in ${q.id}: ${opt}`);
+        }
+      }
+    }
+  });
+
+  const mock = mockBuilderMod.buildBoardExamMockTestChapter(english);
+  assert.equal(mock.isMockTest, true);
+  assert.equal(mock.id, 'mock_test_english');
+  assert.equal(mock.questions.length, 23, `English mock test should have 23 items across Sections A, C & D, got ${mock.questions.length}`);
+});
+
+
 

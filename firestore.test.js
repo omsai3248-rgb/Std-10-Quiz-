@@ -1149,7 +1149,7 @@ test("Board Mock Test: student freeMockUsedSubjects must start empty, grows mono
   );
   await assertSucceeds(
     unauthDb.collection("students").doc(studentId).update({
-      freeMockUsedSubjects: ["science", "maths"],
+      freeMockUsedSubjects: ["science", "maths", "english"],
       updatedAt: now,
     })
   );

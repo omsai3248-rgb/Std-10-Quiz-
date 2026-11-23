@@ -15,6 +15,13 @@ import { useAdaptiveDisplay } from '../context/AdaptiveDisplayContext';
 import { MathRichText } from '../components/MathRichText';
 import { MatchingTableCard, parseMatchingPairQuestion } from '../components/MatchingTableCard';
 import { PolynomialGraphCard } from '../components/PolynomialGraphCard';
+import {
+  TapToFillControlsPanel,
+  TapToFillParagraphCard,
+  getExpectedBlankAnswers,
+  isBlankAnswerCorrect,
+  isTapFillQuestion,
+} from '../components/TapToFillQuizCard';
 import { quizAudioPlayer } from '../services/audioPlayer';
 import type { QuizChapter, QuizQuestion, QuizSubject } from '../types/models';
 
@@ -23,8 +30,17 @@ const POSITIONAL_TAIL_OPTION_REGEX =
   /(આપેલ\s*(તમામ|બંને|બધા|પૈકી\s*કોઈ\s*નહીં)|ઉપરના\s*(તમામ|બધા|બંને)|(?:^|\s)(?:A|a)\s*અને\s*(?:B|b)|માત્ર\s*(?:A|B)|એક\s*પણ\s*નહીં|ત્રણેયમાંથી\s*એક\s*પણ\s*નહીં)/i;
 
 function shuffleQuestionOptions(question: QuizQuestion): QuizQuestion {
+  if (isTapFillQuestion(question)) return question;
   const rawOptions = question.options;
   if (rawOptions.length <= 1) return question;
+  if (
+    question.questionMode === 'true_false' ||
+    (rawOptions.length === 2 &&
+      rawOptions[0].toLowerCase() === 'true' &&
+      rawOptions[1].toLowerCase() === 'false')
+  ) {
+    return question;
+  }
 
   const shouldStripPrefix =
     rawOptions.every((opt) => LETTER_PREFIX_REGEX.test(opt)) &&
@@ -89,6 +105,8 @@ export const QuizPlayScreen: React.FC<QuizPlayScreenProps> = ({
   const [shuffleSeed, setShuffleSeed] = useState(0);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [selectedAnswers, setSelectedAnswers] = useState<Record<number, number>>({});
+  const [tapFillSelections, setTapFillSelections] = useState<Record<number, Array<string | null>>>({});
+  const [activeBlankByQuestion, setActiveBlankByQuestion] = useState<Record<number, number>>({});
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [isFinished, setIsFinished] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
@@ -101,6 +119,8 @@ export const QuizPlayScreen: React.FC<QuizPlayScreenProps> = ({
     setShuffleSeed((prev) => prev + 1);
     setCurrentIndex(0);
     setSelectedAnswers({});
+    setTapFillSelections({});
+    setActiveBlankByQuestion({});
     setElapsedSeconds(0);
     setIsFinished(false);
     setShowNavigatorDialog(false);
@@ -167,6 +187,114 @@ export const QuizPlayScreen: React.FC<QuizPlayScreenProps> = ({
     }
   };
 
+  const getTapFillRow = (qIdx: number, blankCount: number): Array<string | null> => {
+    const existing = tapFillSelections[qIdx];
+    if (existing && existing.length === blankCount) return existing;
+    return Array.from({ length: blankCount }, () => null);
+  };
+
+  const findNextEmptyBlank = (row: Array<string | null>, afterIdx: number): number => {
+    for (let i = afterIdx + 1; i < row.length; i++) {
+      if (!row[i]) return i;
+    }
+    for (let i = 0; i < afterIdx; i++) {
+      if (!row[i]) return i;
+    }
+    return afterIdx;
+  };
+
+  const handleSelectBlankSlot = (blankIdx: number) => {
+    const q = questions[currentIndex];
+    if (!q || !isTapFillQuestion(q) || selectedAnswers[currentIndex] !== undefined) return;
+    const total = q.blanks?.length ?? 0;
+    const row = getTapFillRow(currentIndex, total);
+    if (q.questionMode === 'tap_fill_bank' && row[blankIdx] !== null) {
+      const nextRow = [...row];
+      nextRow[blankIdx] = null;
+      setTapFillSelections((prev) => ({ ...prev, [currentIndex]: nextRow }));
+    }
+    setActiveBlankByQuestion((prev) => ({ ...prev, [currentIndex]: blankIdx }));
+  };
+
+  const handlePickWordFromBank = (word: string) => {
+    const q = questions[currentIndex];
+    if (!q || q.questionMode !== 'tap_fill_bank' || selectedAnswers[currentIndex] !== undefined) {
+      return;
+    }
+    const total = q.blanks?.length ?? 0;
+    const row = [...getTapFillRow(currentIndex, total)];
+    const existingIdx = row.findIndex((item) => item === word);
+    if (existingIdx !== -1) {
+      row[existingIdx] = null;
+      setTapFillSelections((prev) => ({ ...prev, [currentIndex]: row }));
+      setActiveBlankByQuestion((prev) => ({ ...prev, [currentIndex]: existingIdx }));
+      return;
+    }
+    const targetIdx = activeBlankByQuestion[currentIndex] ?? 0;
+    row[targetIdx] = word;
+    setTapFillSelections((prev) => ({ ...prev, [currentIndex]: row }));
+    setActiveBlankByQuestion((prev) => ({
+      ...prev,
+      [currentIndex]: findNextEmptyBlank(row, targetIdx),
+    }));
+  };
+
+  const handlePickPerBlankOption = (blankIdx: number, option: string) => {
+    const q = questions[currentIndex];
+    if (
+      !q ||
+      q.questionMode !== 'tap_fill_per_blank' ||
+      selectedAnswers[currentIndex] !== undefined
+    ) {
+      return;
+    }
+    const total = q.blanks?.length ?? 0;
+    const row = [...getTapFillRow(currentIndex, total)];
+    row[blankIdx] = option;
+    setTapFillSelections((prev) => ({ ...prev, [currentIndex]: row }));
+    setActiveBlankByQuestion((prev) => ({
+      ...prev,
+      [currentIndex]: findNextEmptyBlank(row, blankIdx),
+    }));
+  };
+
+  const handleResetBlanks = () => {
+    const q = questions[currentIndex];
+    if (!q || !isTapFillQuestion(q) || selectedAnswers[currentIndex] !== undefined) return;
+    const total = q.blanks?.length ?? 0;
+    setTapFillSelections((prev) => ({
+      ...prev,
+      [currentIndex]: Array.from({ length: total }, () => null),
+    }));
+    setActiveBlankByQuestion((prev) => ({ ...prev, [currentIndex]: 0 }));
+  };
+
+  const handleSubmitBlanks = () => {
+    const q = questions[currentIndex];
+    if (!q || !isTapFillQuestion(q) || selectedAnswers[currentIndex] !== undefined) return;
+    const expected = getExpectedBlankAnswers(q);
+    const row = getTapFillRow(currentIndex, expected.length);
+    if (row.some((v) => !v)) return;
+
+    if (chapter.isMockTest && !hasFolderAccess && !hasConsumedFreeMockRef.current) {
+      hasConsumedFreeMockRef.current = true;
+      onConsumeFreeMockTest?.();
+    }
+
+    const isAllCorrect = expected.every((exp, idx) => isBlankAnswerCorrect(row[idx], exp));
+    setSelectedAnswers((prev) => ({
+      ...prev,
+      [currentIndex]: isAllCorrect ? q.correctIndex : -1,
+    }));
+    if (!isMuted) {
+      if (isAllCorrect) {
+        quizAudioPlayer.playCorrectChime();
+      } else {
+        quizAudioPlayer.playWrongSiren();
+      }
+    }
+  };
+
   const handleNextOrFinish = () => {
     quizAudioPlayer.stopCurrent();
     if (currentIndex < questions.length - 1) {
@@ -187,6 +315,8 @@ export const QuizPlayScreen: React.FC<QuizPlayScreenProps> = ({
     }
     setShuffleSeed((prev) => prev + 1);
     setSelectedAnswers({});
+    setTapFillSelections({});
+    setActiveBlankByQuestion({});
     setCurrentIndex(0);
     setElapsedSeconds(0);
     setIsFinished(false);
@@ -237,14 +367,21 @@ export const QuizPlayScreen: React.FC<QuizPlayScreenProps> = ({
   }
 
   const question = questions[currentIndex];
+  const isEnglishPlain = subject.id === 'english';
+  const isTapFill = isTapFillQuestion(question);
+  const currentTapSelections = isTapFill
+    ? getTapFillRow(currentIndex, question.blanks?.length ?? 0)
+    : [];
+  const currentActiveBlank = activeBlankByQuestion[currentIndex] ?? 0;
   const chosenOption = selectedAnswers[currentIndex];
   const isAnswered = chosenOption !== undefined;
   const isUserCorrect = chosenOption === question.correctIndex;
   const progressPercent = Math.round(((currentIndex + 1) * 100) / questions.length);
   const canUseTwoColOptions =
+    !isTapFill &&
     isLargeScreen &&
     !question.graphPattern &&
-    question.options.length === 4 &&
+    (question.options.length === 4 || question.options.length === 2) &&
     question.options.every((opt) => opt.length <= 42);
 
   return (
@@ -344,15 +481,28 @@ export const QuizPlayScreen: React.FC<QuizPlayScreenProps> = ({
                       {question.sourceLabel}
                     </div>
                   )}
-                  {parsedMatching ? (
-                    <MatchingTableCard parsed={parsedMatching} isLargeScreen={isLargeScreen} />
+                  {isTapFill ? (
+                    <TapToFillParagraphCard
+                      question={question}
+                      selections={currentTapSelections}
+                      activeBlankIndex={currentActiveBlank}
+                      isSubmitted={isAnswered}
+                      isLargeScreen={isLargeScreen}
+                      onSelectBlankSlot={handleSelectBlankSlot}
+                    />
+                  ) : parsedMatching ? (
+                    <MatchingTableCard
+                      parsed={parsedMatching}
+                      isLargeScreen={isLargeScreen}
+                      plainText={isEnglishPlain}
+                    />
                   ) : (
                     <div
                       className={`${
                         isLargeScreen ? 'text-lg sm:text-xl' : 'text-base sm:text-lg'
                       } font-semibold leading-[2.15] whitespace-pre-line text-[#0F172A] dark:text-[#F8FAFC] py-1`}
                     >
-                      <MathRichText text={question.questionText} />
+                      <MathRichText text={question.questionText} plainText={isEnglishPlain} />
                     </div>
                   )}
                   {question.graphPattern && (
@@ -363,68 +513,85 @@ export const QuizPlayScreen: React.FC<QuizPlayScreenProps> = ({
 
               const optionsAndFeedbackNode = (
                 <div className="space-y-3">
-                  {/* Options */}
-                  <div className={canUseTwoColOptions ? 'grid grid-cols-2 gap-3' : 'space-y-2.5'}>
-                    {question.options.map((optionText, idx) => {
-                      const isSelected = chosenOption === idx;
-                      const isCorrect = idx === question.correctIndex;
+                  {/* Options or Tap-to-Fill Interactive Panel */}
+                  {isTapFill ? (
+                    <TapToFillControlsPanel
+                      question={question}
+                      selections={currentTapSelections}
+                      activeBlankIndex={currentActiveBlank}
+                      isSubmitted={isAnswered}
+                      isTvOrSmartBoard={isTvOrSmartBoard}
+                      onSelectBlankSlot={handleSelectBlankSlot}
+                      onPickWordFromBank={handlePickWordFromBank}
+                      onPickPerBlankOption={handlePickPerBlankOption}
+                      onResetBlanks={handleResetBlanks}
+                      onSubmitBlanks={handleSubmitBlanks}
+                    />
+                  ) : (
+                    <div className={canUseTwoColOptions ? 'grid grid-cols-2 gap-3' : 'space-y-2.5'}>
+                      {question.options.map((optionText, idx) => {
+                        const isSelected = chosenOption === idx;
+                        const isCorrect = idx === question.correctIndex;
 
-                      let borderCls = 'border-[#CBD5E1] dark:border-[#334155]';
-                      let bgCls = 'bg-white dark:bg-[#1E293B] hover:border-[#1E3A8A]/60';
-                      let textCls = 'text-[#0F172A] dark:text-[#F8FAFC]';
-                      let badgeCls =
-                        'bg-[#DBEAFE] dark:bg-[#1E3A5F] text-[#1E3A8A] dark:text-[#DBEAFE]';
+                        let borderCls = 'border-[#CBD5E1] dark:border-[#334155]';
+                        let bgCls = 'bg-white dark:bg-[#1E293B] hover:border-[#1E3A8A]/60';
+                        let textCls = 'text-[#0F172A] dark:text-[#F8FAFC]';
+                        let badgeCls =
+                          'bg-[#DBEAFE] dark:bg-[#1E3A5F] text-[#1E3A8A] dark:text-[#DBEAFE]';
 
-                      if (isAnswered) {
-                        if (isCorrect) {
-                          borderCls = 'border-2 border-[#16A34A]';
-                          bgCls = 'bg-[#DCFCE7] dark:bg-[#14532D]';
-                          textCls = 'text-[#14532D] dark:text-[#DCFCE7] font-semibold';
-                          badgeCls = 'bg-[#16A34A] text-white';
-                        } else if (isSelected) {
-                          borderCls = 'border-2 border-[#DC2626]';
-                          bgCls = 'bg-[#FEE2E2] dark:bg-[#7F1D1D]';
-                          textCls = 'text-[#7F1D1D] dark:text-[#FEE2E2] font-semibold';
-                          badgeCls = 'bg-[#DC2626] text-white';
-                        } else {
-                          borderCls = 'border-[#E2E8F0] dark:border-[#334155] opacity-75';
+                        if (isAnswered) {
+                          if (isCorrect) {
+                            borderCls = 'border-2 border-[#16A34A]';
+                            bgCls = 'bg-[#DCFCE7] dark:bg-[#14532D]';
+                            textCls = 'text-[#14532D] dark:text-[#DCFCE7] font-semibold';
+                            badgeCls = 'bg-[#16A34A] text-white';
+                          } else if (isSelected) {
+                            borderCls = 'border-2 border-[#DC2626]';
+                            bgCls = 'bg-[#FEE2E2] dark:bg-[#7F1D1D]';
+                            textCls = 'text-[#7F1D1D] dark:text-[#FEE2E2] font-semibold';
+                            badgeCls = 'bg-[#DC2626] text-white';
+                          } else {
+                            borderCls = 'border-[#E2E8F0] dark:border-[#334155] opacity-75';
+                          }
                         }
-                      }
 
-                      return (
-                        <button
-                          key={idx}
-                          type="button"
-                          disabled={isAnswered}
-                          onClick={() => handleSelectOption(idx)}
-                          className={`w-full ${
-                            isTvOrSmartBoard ? 'min-h-[62px] px-4 py-3.5' : 'min-h-[54px] px-3.5 py-3'
-                          } text-left rounded-xl border ${borderCls} ${bgCls} flex items-center gap-3 transition-all ${
-                            !isAnswered ? 'cursor-pointer' : 'cursor-default'
-                          }`}
-                        >
-                          <span
-                            className={`${
-                              isTvOrSmartBoard ? 'h-9 w-9 text-sm' : 'h-8 w-8 text-xs'
-                            } rounded-full flex items-center justify-center font-bold shrink-0 ${badgeCls}`}
+                        return (
+                          <button
+                            key={idx}
+                            type="button"
+                            disabled={isAnswered}
+                            onClick={() => handleSelectOption(idx)}
+                            className={`w-full ${
+                              isTvOrSmartBoard
+                                ? 'min-h-[62px] px-4 py-3.5'
+                                : 'min-h-[54px] px-3.5 py-3'
+                            } text-left rounded-xl border ${borderCls} ${bgCls} flex items-center gap-3 transition-all ${
+                              !isAnswered ? 'cursor-pointer' : 'cursor-default'
+                            }`}
                           >
-                            {OPTION_LABELS[idx] ?? idx + 1}
-                          </span>
-                          <div
-                            className={`flex-1 min-w-0 leading-[2.0] text-sm sm:text-base py-1 ${textCls}`}
-                          >
-                            <MathRichText text={optionText} />
-                          </div>
-                          {isAnswered && isCorrect && (
-                            <CheckCircle2 className="h-5 w-5 text-[#16A34A] shrink-0" />
-                          )}
-                          {isAnswered && isSelected && !isCorrect && (
-                            <XCircle className="h-5 w-5 text-[#DC2626] shrink-0" />
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
+                            <span
+                              className={`${
+                                isTvOrSmartBoard ? 'h-9 w-9 text-sm' : 'h-8 w-8 text-xs'
+                              } rounded-full flex items-center justify-center font-bold shrink-0 ${badgeCls}`}
+                            >
+                              {OPTION_LABELS[idx] ?? idx + 1}
+                            </span>
+                            <div
+                              className={`flex-1 min-w-0 leading-[2.0] text-sm sm:text-base py-1 ${textCls}`}
+                            >
+                              <MathRichText text={optionText} plainText={isEnglishPlain} />
+                            </div>
+                            {isAnswered && isCorrect && (
+                              <CheckCircle2 className="h-5 w-5 text-[#16A34A] shrink-0" />
+                            )}
+                            {isAnswered && isSelected && !isCorrect && (
+                              <XCircle className="h-5 w-5 text-[#DC2626] shrink-0" />
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
 
                   {/* Step-by-step Explanation */}
                   {isAnswered && (
@@ -450,7 +617,9 @@ export const QuizPlayScreen: React.FC<QuizPlayScreenProps> = ({
                         >
                           {isUserCorrect
                             ? 'સાચો જવાબ! (+1)'
-                            : `ખોટો જવાબ! સાચો વિકલ્પ ${OPTION_LABELS[question.correctIndex] ?? ''} છે`}
+                            : isTapFill
+                              ? 'કેટલીક ખાલી જગ્યા ખોટી છે! ઉપર સાચા જવાબ લીલા રંગમાં દર્શાવેલ છે.'
+                              : `ખોટો જવાબ! સાચો વિકલ્પ ${OPTION_LABELS[question.correctIndex] ?? ''} છે`}
                         </h4>
                       </div>
 
@@ -465,7 +634,7 @@ export const QuizPlayScreen: React.FC<QuizPlayScreenProps> = ({
                           .filter(Boolean)
                           .map((stepLine, sIdx) => (
                             <div key={sIdx}>
-                              <MathRichText text={stepLine} />
+                              <MathRichText text={stepLine} plainText={isEnglishPlain} />
                             </div>
                           ))}
                       </div>
@@ -596,7 +765,9 @@ export const QuizPlayScreen: React.FC<QuizPlayScreenProps> = ({
                         onClick={handleReplay}
                         className="min-h-[52px] rounded-xl border border-[#CBD5E1] dark:border-[#334155] text-sm font-semibold hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer px-4"
                       >
-                        {chapter.isMockTest ? 'નવો મોક ટેસ્ટ રમો (નવા 24 પ્રશ્નો)' : 'ફરી ક્વિઝ રમો'}
+                        {chapter.isMockTest
+                          ? `નવો મોક ટેસ્ટ રમો (નવા ${questions.length} પ્રશ્નો)`
+                          : 'ફરી ક્વિઝ રમો'}
                       </button>
                     )}
                     <button
