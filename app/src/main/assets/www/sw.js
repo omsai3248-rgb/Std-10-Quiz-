@@ -162,8 +162,8 @@ self.addEventListener('push', (event) => {
   event.waitUntil(
     self.registration.showNotification(title, {
       body,
-      icon: notif.icon || '/images/ic_app_logo_192.png',
-      badge: notif.badge || '/images/ic_app_logo_192.png',
+      icon: notif.icon || '/images/ic_app_logo_192.png?v=2',
+      badge: notif.badge || '/images/ic_app_logo_192.png?v=2',
       tag,
       renotify: false,
       vibrate: [220, 110, 220],

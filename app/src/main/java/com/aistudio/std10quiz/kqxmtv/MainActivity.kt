@@ -177,6 +177,7 @@ class MainActivity : ComponentActivity() {
     override fun onStop() {
         super.onStop()
         AdminBackgroundNotificationWorker.scheduleQuickBackgroundCheck(this)
+        AdminBackgroundNotificationWorker.scheduleAdminFollowUpChain(this)
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {

@@ -55,6 +55,7 @@ import {
   loadMoreAdminPayments,
   loadMoreAdminStudents,
   loadMyPaymentRequestIds,
+  logAdminActivityNotification,
   loginStudentByMobile,
   markAdminChatMessagesRead,
   markAdminNotificationAsRead,
@@ -157,6 +158,7 @@ import {
 } from './types/models';
 import {
   buildPaymentApprovalWhatsAppHref,
+  buildQuizUnlockWhatsAppHref,
   launchExternalUrl,
   normalizeIndianMobileInput,
 } from './utils/imageUtils';
@@ -962,6 +964,44 @@ const AppContent: React.FC = () => {
     }
     return '';
   }, [authUser, hasValidMobile, isFirebaseAdmin, savedUserMeta.mobile]);
+
+  // Notify Admin when an already-logged-in student opens the app (throttled to max once per 30 min)
+  useEffect(() => {
+    if (!authInitialized || isAdmin || !isStudentLoggedIn || !studentDocId) return;
+    const cleanMobile = savedUserMeta.mobile.replace(/\D/g, '').slice(-10);
+    if (!/^[0-9]{10}$/.test(cleanMobile)) return;
+    const storageKey = `std10_last_login_ping_${cleanMobile}`;
+    const nowMs = Date.now();
+    try {
+      const prevMs = Number(localStorage.getItem(storageKey) ?? '0');
+      if (Number.isFinite(prevMs) && nowMs - prevMs < 30 * 60 * 1000) {
+        return;
+      }
+      localStorage.setItem(storageKey, String(nowMs));
+    } catch {
+      // Ignore storage failures
+    }
+    const stName = (effectiveStudentName || student?.fullName || 'Student').trim().slice(0, 60);
+    void logAdminActivityNotification({
+      notifId: `open_${studentDocId}_${Math.floor(nowMs / (30 * 60 * 1000))}`,
+      category: 'login',
+      title: `વિદ્યાર્થી એપમાં એક્ટિવ: ${stName}`,
+      body: `+91 ${cleanMobile} એપમાં લૉગિન થયા છે.`,
+      actorName: stName,
+      actorMobile: cleanMobile,
+      actorId: studentDocId,
+      targetRoute: 'admin_students',
+      referenceId: studentDocId,
+    });
+  }, [
+    authInitialized,
+    effectiveStudentName,
+    isAdmin,
+    isStudentLoggedIn,
+    savedUserMeta.mobile,
+    student?.fullName,
+    studentDocId,
+  ]);
 
   const clearLocalStudentSession = useCallback(() => {
     setSavedUserMeta({ name: '', mobile: '' });
@@ -1831,9 +1871,21 @@ const AppContent: React.FC = () => {
       );
       if (studentDocId) {
         void markFreeMockTestUsed(studentDocId, subjectId).catch(() => {});
+        const stName = (effectiveStudentName || student?.fullName || 'Student').trim().slice(0, 60);
+        void logAdminActivityNotification({
+          notifId: `freemock_${studentDocId}_${subjectId}`,
+          category: 'quiz_activity',
+          title: `ફ્રી મોક ટેસ્ટ શરૂ: ${getSubjectDisplayName(subjectId, 'gu')}`,
+          body: `${stName}${cleanMob ? ` (+91 ${cleanMob})` : ''} એ ફ્રી બોર્ડ મોક ટેસ્ટ શરૂ કર્યો છે.`,
+          actorName: stName,
+          actorMobile: cleanMob,
+          actorId: studentDocId,
+          targetRoute: 'admin_students',
+          referenceId: studentDocId,
+        });
       }
     },
-    [savedUserMeta.mobile, studentDocId]
+    [effectiveStudentName, savedUserMeta.mobile, student?.fullName, studentDocId]
   );
 
   const startSubjectMockTest = useCallback((subject: QuizSubject) => {
@@ -2234,10 +2286,26 @@ const AppContent: React.FC = () => {
     setIsBusy(true);
     try {
       await toggleStudentQuizAccess(st, grantAccess);
+      const cleanMob = st.mobileNumber.replace(/\D/g, '').slice(-10);
+      if (grantAccess && /^[0-9]{10}$/.test(cleanMob)) {
+        launchExternalUrl(
+          buildQuizUnlockWhatsAppHref(
+            {
+              studentName: st.fullName,
+              mobileNumber: cleanMob,
+              unlockedScope: 'all',
+            },
+            lang
+          )
+        );
+      }
       setBanner({
         isError: false,
-        message:
-          lang === 'en'
+        message: grantAccess
+          ? lang === 'en'
+            ? `Full Quiz Access unlocked for ${st.fullName} • Opening WhatsApp message`
+            : `${st.fullName} માટે બધા વિષયો અનલૉક થયા • WhatsApp મેસેજ ખૂલી રહ્યો છે`
+          : lang === 'en'
             ? `Updated access for ${st.fullName}`
             : `${st.fullName} માટે એક્સેસ અપડેટ થયું`,
       });
@@ -2259,10 +2327,26 @@ const AppContent: React.FC = () => {
     setIsBusy(true);
     try {
       await updateStudentSubjectAccess(st, subjectId, grantAccess);
+      const cleanMob = st.mobileNumber.replace(/\D/g, '').slice(-10);
+      if (grantAccess && /^[0-9]{10}$/.test(cleanMob)) {
+        launchExternalUrl(
+          buildQuizUnlockWhatsAppHref(
+            {
+              studentName: st.fullName,
+              mobileNumber: cleanMob,
+              unlockedScope: subjectId,
+            },
+            lang
+          )
+        );
+      }
       setBanner({
         isError: false,
-        message:
-          lang === 'en'
+        message: grantAccess
+          ? lang === 'en'
+            ? `${st.fullName} • ${getSubjectDisplayName(subjectId, lang)} unlocked • Opening WhatsApp`
+            : `${st.fullName} • ${getSubjectDisplayName(subjectId, lang)} અનલૉક થયું • WhatsApp ખૂલી રહ્યું છે`
+          : lang === 'en'
             ? `${st.fullName} • ${getSubjectDisplayName(subjectId, lang)} updated`
             : `${st.fullName} • ${getSubjectDisplayName(subjectId, lang)} અપડેટ થયું`,
       });
@@ -2687,6 +2771,8 @@ const AppContent: React.FC = () => {
             onQuizCompleted={(score, total, elapsedSeconds) => {
               void recordQuizAttempt({
                 studentId: studentDocId,
+                studentName: effectiveStudentName || student?.fullName || '',
+                studentMobile: savedUserMeta.mobile || student?.mobileNumber || '',
                 subjectId: subject.id,
                 subjectTitle: subject.title,
                 chapterTitle: chapter.title,

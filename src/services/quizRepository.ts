@@ -39,12 +39,14 @@ import {
   getNativeNotificationPermissionStatus,
   hasNativeFirebaseBridge,
   invokeNativeBridgeCall,
+  isNativeIgnoringBatteryOptimizations,
   loadMoreNativeAdminCollection,
   logNativeAdminNotificationEvent,
   markAllNativeAdminNotificationsRead,
   markNativeAdminNotificationRead,
   markNativeChatMessagesRead,
   notifyNativeAuthUser,
+  openNativeBatteryOptimizationSettings,
   openNativeNotificationSettings,
   pauseNativeAdminListeners,
   publishNativeAppUpdate,
@@ -1953,6 +1955,8 @@ export function observeMyQuizAttempts(
 
 export async function recordQuizAttempt(params: {
   studentId?: string;
+  studentName?: string;
+  studentMobile?: string;
   subjectId: SubjectId;
   subjectTitle: string;
   chapterTitle: string;
@@ -1964,6 +1968,8 @@ export async function recordQuizAttempt(params: {
 }): Promise<QuizAttempt | null> {
   const {
     studentId,
+    studentName,
+    studentMobile,
     subjectId,
     subjectTitle,
     chapterTitle,
@@ -1975,6 +1981,17 @@ export async function recordQuizAttempt(params: {
   } = params;
   const uid = studentId?.trim() || auth.currentUser?.uid || '';
   if (!uid) return null;
+  const resolvedActorMobile =
+    (studentMobile ?? '').replace(/\D/g, '').slice(-10) ||
+    (uid.startsWith('mob_') ? uid.slice(4) : '');
+  const resolvedActorName = (studentName ?? '').trim().slice(0, 80);
+  const actorPrefix = resolvedActorName
+    ? resolvedActorMobile
+      ? `${resolvedActorName} (+91 ${resolvedActorMobile}) • `
+      : `${resolvedActorName} • `
+    : resolvedActorMobile
+      ? `+91 ${resolvedActorMobile} • `
+      : '';
 
   const percentage = totalQuestions > 0 ? Math.floor((score * 100) / totalQuestions) : 0;
   const safeElapsed = Math.max(0, Math.min(7200, Math.round(timeTakenSeconds)));
@@ -2023,9 +2040,9 @@ export async function recordQuizAttempt(params: {
       notifId: `quiz_${attemptId}`,
       category: 'quiz_activity',
       title: `ક્વિઝ પૂર્ણ: ${subjectTitle}`,
-      body: `${chapterTitle} • સ્કોર ${score}/${totalQuestions} (${percentage}%)`,
-      actorName: '',
-      actorMobile: uid.startsWith('mob_') ? uid.slice(4) : '',
+      body: `${actorPrefix}${chapterTitle} • સ્કોર ${score}/${totalQuestions} (${percentage}%)`,
+      actorName: resolvedActorName,
+      actorMobile: resolvedActorMobile,
       actorId: uid,
       targetRoute: 'admin_students',
       referenceId: attemptId,
@@ -2076,9 +2093,9 @@ export async function recordQuizAttempt(params: {
       notifId: `quiz_${attemptId}`,
       category: 'quiz_activity',
       title: `ક્વિઝ પૂર્ણ: ${subjectTitle}`,
-      body: `${chapterTitle} • સ્કોર ${score}/${totalQuestions} (${percentage}%)`,
-      actorName: '',
-      actorMobile: uid.startsWith('mob_') ? uid.slice(4) : '',
+      body: `${actorPrefix}${chapterTitle} • સ્કોર ${score}/${totalQuestions} (${percentage}%)`,
+      actorName: resolvedActorName,
+      actorMobile: resolvedActorMobile,
       actorId: uid,
       targetRoute: 'admin_students',
       referenceId: attemptId,
@@ -3257,6 +3274,17 @@ export function openAppNotificationSettings(): void {
   if (hasNativeFirebaseBridge()) {
     openNativeNotificationSettings();
   }
+}
+
+export function openAppBatterySettings(): void {
+  if (hasNativeFirebaseBridge()) {
+    openNativeBatteryOptimizationSettings();
+  }
+}
+
+export function isAppIgnoringBatteryOptimizations(): boolean {
+  if (!hasNativeFirebaseBridge()) return true;
+  return isNativeIgnoringBatteryOptimizations();
 }
 
 export function observePushBroadcasts(

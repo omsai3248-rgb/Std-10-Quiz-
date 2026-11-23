@@ -3088,6 +3088,25 @@ class NativeFirebaseBridge(
         }
     }
 
+    @JavascriptInterface
+    fun openNotificationSettings() {
+        activity.runOnUiThread {
+            AdminNotificationHelper.openNotificationSettings(activity)
+        }
+    }
+
+    @JavascriptInterface
+    fun openBatteryOptimizationSettings() {
+        activity.runOnUiThread {
+            AdminNotificationHelper.openBatteryOptimizationSettings(activity)
+        }
+    }
+
+    @JavascriptInterface
+    fun isIgnoringBatteryOptimizations(): Boolean {
+        return AdminNotificationHelper.isIgnoringBatteryOptimizations(appContext)
+    }
+
     fun onNotificationPermissionResult(granted: Boolean) {
         val status = if (granted) "granted" else "denied"
         pendingNotificationPermissionCallId?.let { callId ->
@@ -3098,6 +3117,7 @@ class NativeFirebaseBridge(
             syncPublicDeviceFcmRegistration()
             syncCurrentAdminFcmTokenIfSignedIn()
             AdminBackgroundNotificationWorker.ensurePeriodicScheduled(appContext)
+            AdminBackgroundNotificationWorker.scheduleAdminFollowUpChain(appContext)
         }
         emitToJs("window.__onNativeNotificationPermissionChanged", JSONObject.quote(status))
     }
@@ -3249,6 +3269,7 @@ class NativeFirebaseBridge(
                     prefsJson = prefsJsonObj.toString()
                 )
                 AdminBackgroundNotificationWorker.ensurePeriodicScheduled(appContext)
+                AdminBackgroundNotificationWorker.scheduleAdminFollowUpChain(appContext)
 
                 var fcmTokenRegistered = false
                 val token = runCatching {
@@ -3548,6 +3569,9 @@ class NativeFirebaseBridge(
                         val lastSender = doc.getString("lastMessageSenderUid").orEmpty()
                         val lastStatus = doc.getString("lastMessageStatus").orEmpty()
                         val lastAtMs = doc.getTimestamp("lastMessageAt")?.toDate()?.time ?: 0L
+                        if (lastAtMs > 0L) {
+                            AdminBackgroundNotificationWorker.advanceAdminChatWatermark(appContext, lastAtMs)
+                        }
                         val sig = "${lastSender}_$lastAtMs"
                         val prevSig = lastSeenChatMsgIds[chatId]
                         if (initialAdminChatsSnapshotDone && prevSig != sig && lastSender.isNotBlank() && lastSender != user.uid) {

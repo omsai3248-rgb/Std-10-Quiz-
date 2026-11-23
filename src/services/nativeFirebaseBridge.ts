@@ -77,6 +77,8 @@ interface AndroidFirebaseBridgeApi {
   getNotificationPermissionStatus?: () => string;
   requestNotificationPermission?: (callId: string) => void;
   openNotificationSettings?: () => void;
+  openBatteryOptimizationSettings?: () => void;
+  isIgnoringBatteryOptimizations?: () => boolean;
   sendPushBroadcast?: (callId: string, payloadJson: string) => void;
   deletePushBroadcast?: (callId: string, broadcastId: string) => void;
   consumePendingDeepLink?: () => string;
@@ -725,6 +727,20 @@ export async function requestNativeNotificationPermission(): Promise<'granted' |
 export function openNativeNotificationSettings(): void {
   if (!hasNativeFirebaseBridge()) return;
   window.AndroidFirebaseBridge?.openNotificationSettings?.();
+}
+
+export function openNativeBatteryOptimizationSettings(): void {
+  if (!hasNativeFirebaseBridge()) return;
+  window.AndroidFirebaseBridge?.openBatteryOptimizationSettings?.();
+}
+
+export function isNativeIgnoringBatteryOptimizations(): boolean {
+  if (!hasNativeFirebaseBridge()) return true;
+  try {
+    return window.AndroidFirebaseBridge?.isIgnoringBatteryOptimizations?.() === true;
+  } catch {
+    return false;
+  }
 }
 
 export async function sendNativePushBroadcast(payload: SendPushBroadcastInput): Promise<string> {

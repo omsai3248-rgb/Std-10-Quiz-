@@ -32,7 +32,7 @@ import kotlin.coroutines.resumeWithException
  *
  * Uses Android Jetpack WorkManager (zero Blaze plan, zero Cloud Functions required,
  * zero extra dangerous permissions, Play Protect compliant) to check Firestore for:
- *  1) Unread Admin Activity Alerts (new user logins, registrations, payments, codes)
+ *  1) Unread Admin Activity Alerts (student logins, registrations, payments, codes, quiz activity)
  *  2) Unread Admin Personal Chat messages
  *  3) Public Push Broadcasts & App Update Releases
  * even when the app is completely CLOSED (swiped away) or after device reboot.
@@ -47,12 +47,14 @@ class AdminBackgroundNotificationWorker(
             return Result.success()
         }
 
+        ensureFirebaseReady(applicationContext)
         val db = getNamedFirestore(applicationContext) ?: return Result.success()
         initializeWatermarksIfNeeded(applicationContext)
 
         // 1. Admin Activity & Chat Alerts (only when Admin Google session is active)
+        val isAdminActive = AdminNotificationHelper.isAdminSessionActive(applicationContext)
         val user = runCatching { Firebase.auth.currentUser }.getOrNull()
-        if (user != null && AdminNotificationHelper.isAdminSessionActive(applicationContext)) {
+        if (user != null && isAdminActive) {
             pollAdminNotifications(db, user.uid)
             pollAdminChats(db, user.uid)
         }
@@ -61,6 +63,12 @@ class AdminBackgroundNotificationWorker(
         pollPublicBroadcasts(db)
         pollAppUpdateNotifications(db)
 
+        // 3. Self-chain a fast follow-up background sync while Admin session stays active
+        //    so Admin receives student logins & all app activity promptly even when app is closed.
+        if (isAdminActive) {
+            scheduleAdminFollowUpChain(applicationContext)
+        }
+
         return Result.success()
     }
 
@@ -68,11 +76,14 @@ class AdminBackgroundNotificationWorker(
         runCatching {
             val prefs = applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             val lastMs = prefs.getLong(KEY_LAST_ADMIN_NOTIF_MS, System.currentTimeMillis())
-            val snap = withTimeoutOrNull(10_000L) {
+            // 90-second overlap prevents missing events due to server/device clock skew;
+            // AdminNotificationHelper.markDedupeShown persists shown IDs to prevent any duplicates.
+            val querySinceMs = (lastMs - CLOCK_SKEW_OVERLAP_MS).coerceAtLeast(0L)
+            val snap = withTimeoutOrNull(12_000L) {
                 db.collection("admin_notifications")
-                    .whereGreaterThan("createdAt", Timestamp(Date(lastMs)))
+                    .whereGreaterThan("createdAt", Timestamp(Date(querySinceMs)))
                     .orderBy("createdAt", Query.Direction.DESCENDING)
-                    .limit(10)
+                    .limit(25)
                     .get(Source.SERVER)
                     .awaitTask()
             } ?: return
@@ -118,10 +129,11 @@ class AdminBackgroundNotificationWorker(
         runCatching {
             val prefs = applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             val lastMs = prefs.getLong(KEY_LAST_ADMIN_CHAT_MS, System.currentTimeMillis())
-            val snap = withTimeoutOrNull(10_000L) {
+            val querySinceMs = (lastMs - CLOCK_SKEW_OVERLAP_MS).coerceAtLeast(0L)
+            val snap = withTimeoutOrNull(12_000L) {
                 db.collection("admin_chats")
                     .whereArrayContains("participants", currentUid)
-                    .limit(15)
+                    .limit(20)
                     .get(Source.SERVER)
                     .awaitTask()
             } ?: return
@@ -129,7 +141,7 @@ class AdminBackgroundNotificationWorker(
             var newestMs = lastMs
             for (doc in snap.documents) {
                 val lastMsgMs = doc.getTimestamp("lastMessageAt")?.toDate()?.time ?: 0L
-                if (lastMsgMs <= lastMs) continue
+                if (lastMsgMs <= querySinceMs) continue
                 if (lastMsgMs > newestMs) newestMs = lastMsgMs
 
                 val senderUid = doc.getString("lastMessageSenderUid").orEmpty()
@@ -170,11 +182,12 @@ class AdminBackgroundNotificationWorker(
         runCatching {
             val prefs = applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             val lastMs = prefs.getLong(KEY_LAST_BROADCAST_MS, System.currentTimeMillis())
+            val querySinceMs = (lastMs - CLOCK_SKEW_OVERLAP_MS).coerceAtLeast(0L)
             val snap = withTimeoutOrNull(10_000L) {
                 db.collection("push_broadcasts")
-                    .whereGreaterThan("createdAt", Timestamp(Date(lastMs)))
+                    .whereGreaterThan("createdAt", Timestamp(Date(querySinceMs)))
                     .orderBy("createdAt", Query.Direction.DESCENDING)
-                    .limit(5)
+                    .limit(10)
                     .get(Source.SERVER)
                     .awaitTask()
             } ?: return
@@ -209,6 +222,7 @@ class AdminBackgroundNotificationWorker(
         runCatching {
             val prefs = applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             val lastMs = prefs.getLong(KEY_LAST_UPDATE_MS, System.currentTimeMillis())
+            val querySinceMs = (lastMs - CLOCK_SKEW_OVERLAP_MS).coerceAtLeast(0L)
             val installedVersionCode = runCatching {
                 val pkgInfo = applicationContext.packageManager.getPackageInfo(applicationContext.packageName, 0)
                 PackageInfoCompat.getLongVersionCode(pkgInfo)
@@ -216,9 +230,9 @@ class AdminBackgroundNotificationWorker(
 
             val snap = withTimeoutOrNull(10_000L) {
                 db.collection("update_notifications")
-                    .whereGreaterThan("createdAt", Timestamp(Date(lastMs)))
+                    .whereGreaterThan("createdAt", Timestamp(Date(querySinceMs)))
                     .orderBy("createdAt", Query.Direction.DESCENDING)
-                    .limit(2)
+                    .limit(3)
                     .get(Source.SERVER)
                     .awaitTask()
             } ?: return
@@ -257,10 +271,13 @@ class AdminBackgroundNotificationWorker(
         private const val KEY_LAST_ADMIN_CHAT_MS = "last_admin_chat_ms"
         private const val KEY_LAST_BROADCAST_MS = "last_broadcast_ms"
         private const val KEY_LAST_UPDATE_MS = "last_update_ms"
+        private const val CLOCK_SKEW_OVERLAP_MS = 90_000L
 
         private const val WORK_NAME_PERIODIC = "quick_quiz_bg_notif_periodic"
+        private const val WORK_NAME_IMMEDIATE = "quick_quiz_bg_notif_immediate"
         private const val WORK_NAME_QUICK_1 = "quick_quiz_bg_notif_quick_1"
         private const val WORK_NAME_QUICK_2 = "quick_quiz_bg_notif_quick_2"
+        private const val WORK_NAME_ADMIN_CHAIN = "quick_quiz_bg_notif_admin_chain"
 
         fun initializeWatermarksIfNeeded(context: Context) {
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -295,6 +312,15 @@ class AdminBackgroundNotificationWorker(
             }
         }
 
+        fun advanceAdminChatWatermark(context: Context, timestampMs: Long) {
+            if (timestampMs <= 0L) return
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val current = prefs.getLong(KEY_LAST_ADMIN_CHAT_MS, 0L)
+            if (timestampMs > current) {
+                prefs.edit().putLong(KEY_LAST_ADMIN_CHAT_MS, timestampMs).apply()
+            }
+        }
+
         fun ensurePeriodicScheduled(context: Context) {
             runCatching {
                 initializeWatermarksIfNeeded(context)
@@ -309,7 +335,7 @@ class AdminBackgroundNotificationWorker(
                     .build()
                 WorkManager.getInstance(context.applicationContext).enqueueUniquePeriodicWork(
                     WORK_NAME_PERIODIC,
-                    ExistingPeriodicWorkPolicy.KEEP,
+                    ExistingPeriodicWorkPolicy.UPDATE,
                     periodicRequest
                 )
             }.onFailure { err ->
@@ -317,23 +343,66 @@ class AdminBackgroundNotificationWorker(
             }
         }
 
-        fun scheduleQuickBackgroundCheck(context: Context) {
+        fun enqueueImmediateCheck(context: Context) {
             runCatching {
                 if (!AdminNotificationHelper.hasNotificationPermission(context)) return
                 initializeWatermarksIfNeeded(context)
                 val constraints = Constraints.Builder()
                     .setRequiredNetworkType(NetworkType.CONNECTED)
                     .build()
+                val immediate = OneTimeWorkRequestBuilder<AdminBackgroundNotificationWorker>()
+                    .setInitialDelay(15L, TimeUnit.SECONDS)
+                    .setConstraints(constraints)
+                    .build()
+                WorkManager.getInstance(context.applicationContext).enqueueUniqueWork(
+                    WORK_NAME_IMMEDIATE,
+                    ExistingWorkPolicy.REPLACE,
+                    immediate
+                )
+            }.onFailure { err ->
+                Log.w(TAG, "Unable to enqueue immediate background notification check", err)
+            }
+        }
+
+        fun scheduleAdminFollowUpChain(context: Context) {
+            runCatching {
+                if (!AdminNotificationHelper.hasNotificationPermission(context)) return
+                if (!AdminNotificationHelper.isAdminSessionActive(context)) return
+                val constraints = Constraints.Builder()
+                    .setRequiredNetworkType(NetworkType.CONNECTED)
+                    .build()
+                val followUp = OneTimeWorkRequestBuilder<AdminBackgroundNotificationWorker>()
+                    .setInitialDelay(3L, TimeUnit.MINUTES)
+                    .setConstraints(constraints)
+                    .build()
+                WorkManager.getInstance(context.applicationContext).enqueueUniqueWork(
+                    WORK_NAME_ADMIN_CHAIN,
+                    ExistingWorkPolicy.REPLACE,
+                    followUp
+                )
+            }.onFailure { err ->
+                Log.w(TAG, "Unable to schedule follow-up background notification chain", err)
+            }
+        }
+
+        fun scheduleQuickBackgroundCheck(context: Context) {
+            runCatching {
+                if (!AdminNotificationHelper.hasNotificationPermission(context)) return
+                initializeWatermarksIfNeeded(context)
+                ensurePeriodicScheduled(context)
+                val constraints = Constraints.Builder()
+                    .setRequiredNetworkType(NetworkType.CONNECTED)
+                    .build()
                 val wm = WorkManager.getInstance(context.applicationContext)
 
                 val quick1 = OneTimeWorkRequestBuilder<AdminBackgroundNotificationWorker>()
-                    .setInitialDelay(2L, TimeUnit.MINUTES)
+                    .setInitialDelay(1L, TimeUnit.MINUTES)
                     .setConstraints(constraints)
                     .build()
                 wm.enqueueUniqueWork(WORK_NAME_QUICK_1, ExistingWorkPolicy.REPLACE, quick1)
 
                 val quick2 = OneTimeWorkRequestBuilder<AdminBackgroundNotificationWorker>()
-                    .setInitialDelay(7L, TimeUnit.MINUTES)
+                    .setInitialDelay(4L, TimeUnit.MINUTES)
                     .setConstraints(constraints)
                     .build()
                 wm.enqueueUniqueWork(WORK_NAME_QUICK_2, ExistingWorkPolicy.REPLACE, quick2)
@@ -342,8 +411,17 @@ class AdminBackgroundNotificationWorker(
             }
         }
 
+        private fun ensureFirebaseReady(context: Context) {
+            runCatching {
+                if (FirebaseApp.getApps(context.applicationContext).isEmpty()) {
+                    FirebaseApp.initializeApp(context.applicationContext)
+                }
+            }
+        }
+
         private fun getNamedFirestore(context: Context): FirebaseFirestore? {
             return runCatching {
+                ensureFirebaseReady(context)
                 configureAppCheck(context, null)
                 val dbId = context.getString(R.string.firestore_database_id)
                 if (dbId.isBlank()) return@runCatching null

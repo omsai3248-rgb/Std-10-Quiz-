@@ -23,6 +23,11 @@ import {
 } from 'lucide-react';
 import { useTranslation } from '../i18n/translations';
 import {
+  hasNativeFirebaseBridge,
+  isAppIgnoringBatteryOptimizations,
+  openAppBatterySettings,
+} from '../services/quizRepository';
+import {
   DEFAULT_ADMIN_NOTIFICATION_PREFS,
   type AdminNotificationCategory,
   type AdminNotificationItem,
@@ -257,6 +262,46 @@ export const AdminNotificationsTab: React.FC<AdminNotificationsTabProps> = ({
           </div>
         )}
       </div>
+
+      {/* Closed-App Background Delivery Helper for Android OEMs (Vivo / Oppo / Xiaomi) */}
+      {hasNativeFirebaseBridge() && (
+        <div className="rounded-2xl bg-[#EFF6FF] dark:bg-[#0F172A] border border-[#BFDBFE] dark:border-[#1E3A8A] p-3.5 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="space-y-0.5">
+            <p className="text-xs sm:text-sm font-extrabold text-[#1E3A8A] dark:text-[#93C5FD]">
+              {isAppIgnoringBatteryOptimizations()
+                ? 'એપ બંધ હોય ત્યારે પણ નોટિફિકેશન ચાલુ છે ✅'
+                : 'એપ બંધ હોય ત્યારે પણ તરત નોટિફિકેશન મેળવો'}
+            </p>
+            <p className="text-[11px] sm:text-xs text-[#475569] dark:text-[#94A3B8]">
+              {isAppIgnoringBatteryOptimizations()
+                ? 'બેકગ્રાઉન્ડ બેટરી સેટિંગ Unrestricted છે — વિદ્યાર્થી લૉગિન અને દરેક એક્ટિવિટીના અલર્ટ એપ બંધ હોય તો પણ આવશે.'
+                : 'જો ફોન એપ બંધ થતા બેકગ્રાઉન્ડ અલર્ટ રોકે તો Battery Setting માં Quick Quiz ને Unrestricted / Allow Background કરો.'}
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <button
+              type="button"
+              data-testid="open_battery_settings_btn"
+              onClick={openAppBatterySettings}
+              className="min-h-[44px] px-3.5 rounded-xl bg-[#1E3A8A] hover:bg-[#172554] text-white text-xs font-extrabold inline-flex items-center gap-1.5 cursor-pointer"
+            >
+              <Settings className="h-4 w-4" />
+              <span>બેકગ્રાઉન્ડ સેટિંગ્સ</span>
+            </button>
+            {onOpenNotificationSettings && (
+              <button
+                type="button"
+                data-testid="open_notif_channel_settings_btn"
+                onClick={onOpenNotificationSettings}
+                className="min-h-[44px] px-3 rounded-xl border border-[#CBD5E1] dark:border-[#334155] bg-white dark:bg-[#1E293B] text-xs font-extrabold inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                <Bell className="h-4 w-4" />
+                <span>નોટિફિકેશન</span>
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Real-Time FCM Push Broadcast Composer (WhatsApp-style Alerts to ALL Users) */}
       {onSendPushBroadcast && (

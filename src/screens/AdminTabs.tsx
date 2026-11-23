@@ -51,6 +51,7 @@ import {
 import {
   buildDirectCodeWhatsAppHref,
   buildPaymentApprovalWhatsAppHref,
+  buildQuizUnlockWhatsAppHref,
   exportAccessCodesToCsv,
   formatTimestampLabel,
   launchExternalUrl,
@@ -2193,6 +2194,39 @@ export const AdminStudentsTab: React.FC<{
                   >
                     {hasFull ? t.revokeAccessBtn : t.grantAllAccessBtn}
                   </button>
+                  {(hasFull || unlockedSet.size > 0) &&
+                    /^[0-9]{10}$/.test(st.mobileNumber.replace(/\D/g, '').slice(-10)) && (
+                      <button
+                        type="button"
+                        disabled={isBusy}
+                        data-testid={`whatsapp_unlock_student_${st.mobileNumber.replace(/\D/g, '').slice(-10)}`}
+                        onClick={() => {
+                          const unlockedScope = hasFull
+                            ? 'all'
+                            : Array.from(unlockedSet)[0] || 'all';
+                          launchExternalUrl(
+                            buildQuizUnlockWhatsAppHref(
+                              {
+                                studentName: st.fullName,
+                                mobileNumber: st.mobileNumber,
+                                unlockedScope,
+                              },
+                              lang
+                            )
+                          );
+                        }}
+                        title={
+                          lang === 'en'
+                            ? 'Send WhatsApp Unlock Message'
+                            : 'WhatsApp માં અનલૉક મેસેજ મોકલો'
+                        }
+                        aria-label={`Send WhatsApp unlock message to ${st.fullName}`}
+                        className="h-11 px-3 rounded-xl bg-[#16A34A] hover:bg-[#15803D] text-white text-xs font-extrabold inline-flex items-center justify-center gap-1.5 disabled:opacity-60 cursor-pointer shrink-0"
+                      >
+                        <Send className="h-4 w-4" />
+                        <span>WhatsApp</span>
+                      </button>
+                    )}
                   <button
                     type="button"
                     disabled={isBusy}

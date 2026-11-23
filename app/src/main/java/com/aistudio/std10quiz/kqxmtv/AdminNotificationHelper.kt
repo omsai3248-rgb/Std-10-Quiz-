@@ -18,7 +18,10 @@ import android.graphics.Rect
 import android.graphics.RectF
 import android.media.AudioAttributes
 import android.media.RingtoneManager
+import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -154,6 +157,50 @@ object AdminNotificationHelper {
             ) == PackageManager.PERMISSION_GRANTED
         } else {
             NotificationManagerCompat.from(context).areNotificationsEnabled()
+        }
+    }
+
+    fun isIgnoringBatteryOptimizations(context: Context): Boolean {
+        return runCatching {
+            val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+            pm?.isIgnoringBatteryOptimizations(context.packageName) == true
+        }.getOrDefault(false)
+    }
+
+    fun openNotificationSettings(context: Context) {
+        runCatching {
+            val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+                    putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+                }
+            } else {
+                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                    data = Uri.fromParts("package", context.packageName, null)
+                }
+            }
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+        }.onFailure { err ->
+            Log.w("AdminNotification", "Unable to open notification settings", err)
+        }
+    }
+
+    fun openBatteryOptimizationSettings(context: Context) {
+        val opened = runCatching {
+            val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+            true
+        }.getOrDefault(false)
+        if (!opened) {
+            runCatching {
+                val fallback = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                    data = Uri.fromParts("package", context.packageName, null)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(fallback)
+            }
         }
     }
 
@@ -450,18 +497,21 @@ object AdminNotificationHelper {
     private fun getAppLogoBitmap(context: Context): Bitmap? {
         cachedAppLogoBitmap?.let { if (!it.isRecycled) return it }
         return runCatching {
-            val raw = BitmapFactory.decodeResource(context.resources, R.drawable.ic_app_logo) ?: return@runCatching null
-            val size = 128
+            val opts = BitmapFactory.Options().apply { inScaled = false }
+            val raw = BitmapFactory.decodeResource(context.resources, R.drawable.ic_app_logo, opts)
+                ?: return@runCatching null
+            val size = 192
             val scaled = Bitmap.createScaledBitmap(raw, size, size, true)
             val output = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
             val canvas = Canvas(output)
-            val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+            val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
             val rect = Rect(0, 0, size, size)
             val rectF = RectF(rect)
             canvas.drawARGB(0, 0, 0, 0)
-            canvas.drawRoundRect(rectF, 28f, 28f, paint)
+            canvas.drawRoundRect(rectF, 42f, 42f, paint)
             paint.xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_IN)
             canvas.drawBitmap(scaled, rect, rect, paint)
+            if (scaled != raw && !scaled.isRecycled) scaled.recycle()
             cachedAppLogoBitmap = output
             output
         }.getOrNull()
@@ -598,7 +648,7 @@ object AdminNotificationHelper {
         val appName = context.getString(R.string.app_name)
         val builder = NotificationCompat.Builder(context, CHANNEL_ADMIN_ALERTS)
             .setSmallIcon(R.drawable.ic_stat_notification)
-            .setColor(0xFF075E54.toInt())
+            .setColor(0xFF0F172A.toInt())
             .setSubText("$appName • Admin")
             .setContentTitle(title.ifBlank { "Admin સૂચના" })
             .setContentText(body)

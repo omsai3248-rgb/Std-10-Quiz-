@@ -196,6 +196,43 @@ export function buildPaymentApprovalWhatsAppHref(
   return `https://wa.me/${phone}?text=${encodeURIComponent(lines.join('\n'))}`;
 }
 
+export function buildQuizUnlockWhatsAppHref(
+  params: {
+    studentName: string;
+    mobileNumber: string;
+    unlockedScope: string;
+  },
+  lang: 'gu' | 'en' = 'gu'
+): string {
+  const subjectName = getSubjectDisplayName(params.unlockedScope || 'all', lang);
+  const cleanName = params.studentName.trim() || (lang === 'en' ? 'Student' : 'વિદ્યાર્થી');
+  const cleanMob = params.mobileNumber.replace(/\D/g, '').slice(-10);
+  const isAll = !params.unlockedScope || params.unlockedScope === 'all';
+  const lines =
+    lang === 'en'
+      ? [
+          `Hello ${cleanName},`,
+          `Good news! Your Std 10 Quick Quiz access has been UNLOCKED by Admin ✅`,
+          '',
+          `🔓 Unlocked: *${isAll ? 'All Subjects (Full Access)' : subjectName}*`,
+          ...(cleanMob ? [`• Mobile: +91 ${cleanMob}`] : []),
+          '',
+          'Open the Quick Quiz app now and start practicing all quizzes and Board Mock Tests right away. Best of luck! 🎓',
+        ]
+      : [
+          `નમસ્તે ${cleanName},`,
+          `અભિનંદન! તમારી ધોરણ 10 Quick Quiz એપમાં ક્વિઝ એડમિન દ્વારા અનલૉક (Unlock) કરી દેવામાં આવી છે ✅`,
+          '',
+          `🔓 અનલૉક વિષય: *${isAll ? 'બધા વિષયો (Full Access)' : subjectName}*`,
+          ...(cleanMob ? [`• મોબાઇલ: +91 ${cleanMob}`] : []),
+          '',
+          'હવે Quick Quiz એપ ખોલીને તરત જ બધા પ્રકરણોની ક્વિઝ અને બોર્ડ મોક ટેસ્ટની પ્રેક્ટિસ શરૂ કરી શકો છો. શુભેચ્છાઓ! 🎓',
+        ];
+
+  const phone = formatIndianWhatsAppPhone(params.mobileNumber);
+  return `https://wa.me/${phone}?text=${encodeURIComponent(lines.join('\n'))}`;
+}
+
 export function buildStudentProofWhatsAppHref(params: {
   studentName: string;
   userId: string;
