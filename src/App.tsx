@@ -13,6 +13,7 @@ import {
   UpdateModalErrorBoundary,
 } from './components/AppUpdateComponents';
 import { DisplaySettingsModal } from './components/DisplaySettingsModal';
+import { UserProfileModal } from './components/UserProfileModal';
 import { AdaptiveDisplayProvider, useAdaptiveDisplay } from './context/AdaptiveDisplayContext';
 import { useTranslation } from './i18n/translations';
 import { StudentMobileLoginScreen } from './screens/StudentMobileLoginScreen';
@@ -30,6 +31,7 @@ import {
 import {
   ADMIN_CODES_PAGE_SIZE,
   ADMIN_PAGE_SIZE,
+  ADMIN_PHONE_TEN_DIGITS,
   approvePaymentAndAssignCode,
   deleteAccessCodeAdmin,
   deleteAdminNotificationItem,
@@ -39,6 +41,7 @@ import {
   deleteStudentAdmin,
   deleteUnusedAccessCodesAdmin,
   fetchAccessCodesByBatchAdmin,
+  fetchCurrentUserProfile,
   flushPendingSyncOperations,
   forceRefreshNativeAdminListeners,
   generateBulkAccessCodes,
@@ -51,6 +54,7 @@ import {
   inviteAdminByEmail,
   isAdminAccount,
   isSuperAdminEmail,
+  linkMobileNumberToUserProfile,
   loadMoreAdminCodes,
   loadMoreAdminPayments,
   loadMoreAdminStudents,
@@ -91,7 +95,9 @@ import {
   sendAdminChatMessage,
   sendPushBroadcastNotification,
   setNativeActiveStudentMobile,
+  signInUserWithGoogle,
   signOutAdminSession,
+  signOutUserSession,
   submitPaymentRequest,
   syncAdminDeltaSince,
   syncAdminProfileAndPushToken,
@@ -130,6 +136,8 @@ import {
 import {
   ALL_SUBJECT_IDS,
   getSubjectDisplayName,
+  isValidIndianMobile10,
+  normalizeIndianMobile10,
   resolvePaymentSubjectId,
   type AccessCode,
   type ActionBanner,
@@ -155,6 +163,7 @@ import {
   type StudentProfile,
   type SubjectId,
   type UpdateNotificationRecord,
+  type UserProfile,
 } from './types/models';
 import {
   buildPaymentApprovalWhatsAppHref,
@@ -331,6 +340,9 @@ const AppContent: React.FC = () => {
   const [initialSession] = useState(loadInitialStudentSession);
   const [authUser, setAuthUser] = useState<AppAuthUser | null>(null);
   const [authInitialized, setAuthInitialized] = useState(false);
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const [isUserProfileLoading, setIsUserProfileLoading] = useState(false);
+  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
 
   const [syncStatus, setSyncStatus] = useState<SyncStatusSnapshot>(getSyncStatus);
   const [isDocumentVisible, setIsDocumentVisible] = useState<boolean>(() =>
@@ -448,17 +460,25 @@ const AppContent: React.FC = () => {
     isDocumentVisibleRef.current = isDocumentVisible;
   }, [isDocumentVisible]);
 
+  const linkedMobile10 = useMemo(
+    () => normalizeIndianMobile10(userProfile?.mobileNumber || ''),
+    [userProfile?.mobileNumber]
+  );
+
   const hasValidMobile = useMemo(
-    () => /^[0-9]{10}$/.test(savedUserMeta.mobile),
-    [savedUserMeta.mobile]
+    () => Boolean(authUser) && isValidIndianMobile10(linkedMobile10),
+    [authUser, linkedMobile10]
   );
 
   const isStudentLoggedIn = useMemo(
-    () => savedUserMeta.name.trim().length > 0 && hasValidMobile,
-    [hasValidMobile, savedUserMeta.name]
+    () => Boolean(authUser) && isValidIndianMobile10(linkedMobile10),
+    [authUser, linkedMobile10]
   );
 
-  const effectiveStudentName = useMemo(() => savedUserMeta.name.trim(), [savedUserMeta.name]);
+  const effectiveStudentName = useMemo(
+    () => (userProfile?.name || savedUserMeta.name || authUser?.displayName || '').trim(),
+    [authUser?.displayName, savedUserMeta.name, userProfile?.name]
+  );
 
   const formatAppError = useCallback(
     (err: unknown, fallback?: string): string => {
@@ -525,6 +545,9 @@ const AppContent: React.FC = () => {
     const unsub = observeAppAuthState((user) => {
       if (!user) {
         setAuthUser(null);
+        setUserProfile(null);
+        setIsUserProfileLoading(false);
+        setIsProfileModalOpen(false);
         setAllPayments([]);
         setAllCodes([]);
         setAllStudents([]);
@@ -957,14 +980,14 @@ const AppContent: React.FC = () => {
   }, [activeAdminChatId, authUser?.uid, isFirebaseAdmin]);
 
   const studentDocId = useMemo(() => {
-    if (hasValidMobile) {
-      return getStudentDocId(savedUserMeta.mobile);
-    }
-    if (authUser && !isFirebaseAdmin) {
-      return authUser.uid;
+    if (!authUser) return '';
+    if (isValidIndianMobile10(linkedMobile10)) {
+      return linkedMobile10 === ADMIN_PHONE_TEN_DIGITS
+        ? authUser.uid
+        : getStudentDocId(linkedMobile10);
     }
     return '';
-  }, [authUser, hasValidMobile, isFirebaseAdmin, savedUserMeta.mobile]);
+  }, [authUser, linkedMobile10]);
 
   // Notify Admin when an already-logged-in student opens the app (throttled to max once per 30 min)
   useEffect(() => {
@@ -1754,75 +1777,168 @@ const AppContent: React.FC = () => {
     }
   }, []);
 
-  const handleStudentLogin = async (name: string, mobile: string) => {
-    const cleanName = name.trim().slice(0, 60);
-    const cleanMobile = mobile.replace(/\D/g, '').slice(-10);
-    if (!/^[0-9]{10}$/.test(cleanMobile)) throw new Error('INVALID_MOBILE');
+  const hydrateLinkedStudentAccount = useCallback(
+    async (profile: UserProfile, showReturningToast = false) => {
+      const cleanMobile = normalizeIndianMobile10(profile.mobileNumber);
+      if (!isValidIndianMobile10(cleanMobile)) return;
+      const effectiveName = (profile.name || authUser?.displayName || 'Student')
+        .trim()
+        .slice(0, 60);
 
-    const profile = await loginStudentByMobile({
-      mobileNumber: cleanMobile,
-      fullName: cleanName,
-    });
+      persistUserMeta(effectiveName, cleanMobile);
 
-    const effectiveName = (profile.fullName || cleanName).trim().slice(0, 60);
-    if (!effectiveName) throw new Error('INVALID_NAME');
-
-    setStudent(profile);
-    persistUserMeta(effectiveName, cleanMobile);
-
-    const restoredSubjects = new Set<string>(profile.unlockedSubjects ?? []);
-    if (profile.hasQuizAccess) {
-      restoredSubjects.add('all');
-      ALL_SUBJECT_IDS.forEach((s) => restoredSubjects.add(s));
-    }
-    if (restoredSubjects.size > 0) {
-      const arr = Array.from(restoredSubjects);
-      setLocalUnlockedSubjects(arr);
-      try {
-        localStorage.setItem(`${LOCAL_UNLOCKS_KEY}_${cleanMobile}`, JSON.stringify(arr));
-      } catch {
-        // Ignore
+      // Admin's reserved mobile skips mob_9099592283 lookup; regular students hydrate students/mob_<10digits>
+      if (cleanMobile === ADMIN_PHONE_TEN_DIGITS) {
+        setRoute({ name: 'public', tab: 'quiz' });
+        return;
       }
-    }
 
-    const restoredFreeMock = Array.from(
-      new Set([
-        ...loadSavedFreeMockUsedSubjects(cleanMobile),
-        ...(profile.freeMockUsedSubjects ?? []).filter((s) =>
-          ALL_SUBJECT_IDS.includes(s as SubjectId)
-        ),
-      ])
-    );
-    setLocalFreeMockUsedSubjects(restoredFreeMock);
-    if (restoredFreeMock.length > 0) {
-      try {
-        localStorage.setItem(`${LOCAL_FREE_MOCK_KEY}_${cleanMobile}`, JSON.stringify(restoredFreeMock));
-      } catch {
-        // Ignore
+      const studentProfile = await loginStudentByMobile({
+        mobileNumber: cleanMobile,
+        fullName: effectiveName,
+        email: profile.email || authUser?.email || '',
+      });
+
+      const resolvedName = (studentProfile.fullName || effectiveName).trim().slice(0, 60);
+      setStudent(studentProfile);
+      persistUserMeta(resolvedName, cleanMobile);
+
+      const restoredSubjects = new Set<string>(studentProfile.unlockedSubjects ?? []);
+      if (studentProfile.hasQuizAccess) {
+        restoredSubjects.add('all');
+        ALL_SUBJECT_IDS.forEach((s) => restoredSubjects.add(s));
       }
-    }
-
-    if (profile.paymentRequestIds && profile.paymentRequestIds.length > 0) {
-      let latestIds = loadMyPaymentRequestIds(cleanMobile);
-      profile.paymentRequestIds.forEach((pid) => {
-        if (/^pay_[a-f0-9]{32}$/.test(pid)) {
-          latestIds = saveMyPaymentRequestId(pid, cleanMobile);
+      if (restoredSubjects.size > 0) {
+        const arr = Array.from(restoredSubjects);
+        setLocalUnlockedSubjects(arr);
+        try {
+          localStorage.setItem(`${LOCAL_UNLOCKS_KEY}_${cleanMobile}`, JSON.stringify(arr));
+        } catch {
+          // Ignore
         }
-      });
-      setMyPaymentIds(latestIds);
-    }
+      }
 
-    setRoute({ name: 'public', tab: 'quiz' });
-    if (profile.isReturningUser) {
-      setBanner({
-        isError: false,
-        message: `${effectiveName} — ${t.returningWelcomeMsg}`,
+      const restoredFreeMock = Array.from(
+        new Set([
+          ...loadSavedFreeMockUsedSubjects(cleanMobile),
+          ...(studentProfile.freeMockUsedSubjects ?? []).filter((s) =>
+            ALL_SUBJECT_IDS.includes(s as SubjectId)
+          ),
+        ])
+      );
+      setLocalFreeMockUsedSubjects(restoredFreeMock);
+      if (restoredFreeMock.length > 0) {
+        try {
+          localStorage.setItem(
+            `${LOCAL_FREE_MOCK_KEY}_${cleanMobile}`,
+            JSON.stringify(restoredFreeMock)
+          );
+        } catch {
+          // Ignore
+        }
+      }
+
+      if (studentProfile.paymentRequestIds && studentProfile.paymentRequestIds.length > 0) {
+        let latestIds = loadMyPaymentRequestIds(cleanMobile);
+        studentProfile.paymentRequestIds.forEach((pid) => {
+          if (/^pay_[a-f0-9]{32}$/.test(pid)) {
+            latestIds = saveMyPaymentRequestId(pid, cleanMobile);
+          }
+        });
+        setMyPaymentIds(latestIds);
+      }
+
+      setRoute({ name: 'public', tab: 'quiz' });
+      if (showReturningToast && studentProfile.isReturningUser) {
+        setBanner({
+          isError: false,
+          message: `${resolvedName} — ${t.returningWelcomeMsg}`,
+        });
+      }
+    },
+    [authUser?.displayName, authUser?.email, persistUserMeta, t.returningWelcomeMsg]
+  );
+
+  const fetchedProfileUidRef = useRef<string>('');
+
+  // Auto-restore /users/{uid} profile whenever a verified Google Auth session is present
+  useEffect(() => {
+    if (!authUser?.uid) {
+      fetchedProfileUidRef.current = '';
+      setUserProfile(null);
+      setIsUserProfileLoading(false);
+      return;
+    }
+    if (fetchedProfileUidRef.current === authUser.uid) {
+      return;
+    }
+    fetchedProfileUidRef.current = authUser.uid;
+    let cancelled = false;
+    setIsUserProfileLoading(true);
+    void fetchCurrentUserProfile()
+      .then((profile) => {
+        if (cancelled) return;
+        setUserProfile(profile);
+        setIsUserProfileLoading(false);
+        if (profile && isValidIndianMobile10(normalizeIndianMobile10(profile.mobileNumber))) {
+          void hydrateLinkedStudentAccount(profile, false).catch(() => {});
+        }
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setUserProfile({
+          uid: authUser.uid,
+          name: authUser.displayName || authUser.email?.split('@')[0] || 'Student',
+          email: authUser.email || '',
+          photoURL: authUser.photoUrl || '',
+          mobileNumber: '',
+          mobileVerified: false,
+          createdAt: null,
+          lastLoginAt: null,
+        });
+        setIsUserProfileLoading(false);
       });
+    return () => {
+      cancelled = true;
+    };
+  }, [authUser?.uid, hydrateLinkedStudentAccount]);
+
+  const handleGoogleUserSignIn = async () => {
+    const res = await signInUserWithGoogle();
+    fetchedProfileUidRef.current = res.user.uid;
+    setAuthUser(res.user);
+    setUserProfile(res.profile);
+    if (isValidIndianMobile10(normalizeIndianMobile10(res.profile.mobileNumber))) {
+      await hydrateLinkedStudentAccount(res.profile, true);
     }
   };
 
-  const handleStudentLogout = () => {
+  const handleLinkMobileSubmit = async (params: { mobileNumber: string; displayName: string }) => {
+    const updatedProfile = await linkMobileNumberToUserProfile({
+      mobileNumber: params.mobileNumber,
+      displayName: params.displayName,
+    });
+    setUserProfile(updatedProfile);
+    await hydrateLinkedStudentAccount(updatedProfile, true);
+  };
+
+  const handleStudentLogout = async () => {
+    setIsProfileModalOpen(false);
+    try {
+      await signOutUserSession();
+    } catch {
+      // Ignore secondary sign-out errors
+    }
+    setAuthUser(null);
+    setUserProfile(null);
     clearLocalStudentSession();
+    setBanner({
+      isError: false,
+      message:
+        lang === 'en'
+          ? 'Signed out successfully.'
+          : 'તમે સફળતાપૂર્વક લોગ આઉટ થઈ ગયા છો.',
+    });
   };
 
   const persistUnlockedSubject = (subjectId: string, mobile = savedUserMeta.mobile) => {
@@ -2437,7 +2553,10 @@ const AppContent: React.FC = () => {
     try {
       await signOutAdminSession().catch(() => {});
       setAuthUser(null);
+      setUserProfile(null);
+      setIsProfileModalOpen(false);
       setApprovedConfirmation(null);
+      clearLocalStudentSession();
       setRoute({ name: 'public', tab: 'quiz' });
     } catch (err) {
       setBanner({
@@ -2445,7 +2564,7 @@ const AppContent: React.FC = () => {
         message: formatAppError(err, 'Sign out error'),
       });
     }
-  }, [formatAppError]);
+  }, [clearLocalStudentSession, formatAppError]);
 
   const handleAdminLoginSuccess = (result: AdminPasscodeAuthResult) => {
     setAuthUser(result.user);
@@ -2827,12 +2946,16 @@ const AppContent: React.FC = () => {
           activeTab="quiz"
           isStudentLoggedIn={isStudentLoggedIn}
           studentName={effectiveStudentName}
-          studentMobile={savedUserMeta.mobile}
+          studentMobile={linkedMobile10 || savedUserMeta.mobile}
+          studentPhotoUrl={userProfile?.photoURL || authUser?.photoUrl || ''}
+          studentEmail={userProfile?.email || authUser?.email || ''}
+          mobileVerified={Boolean(userProfile?.mobileVerified)}
           isAdmin={isAdmin}
           adminBadgeCount={unreadNotifBadge + unreadChatBadge + pendingBadge || liveAlerts.length}
           isDarkTheme={isDarkTheme}
           onSelectTab={(tab) => setRoute({ name: 'public', tab })}
-          onStudentLogout={handleStudentLogout}
+          onStudentLogout={() => void handleStudentLogout()}
+          onOpenProfile={() => setIsProfileModalOpen(true)}
           onToggleTheme={() => setIsDarkTheme((prev) => !prev)}
           onOpenDisplaySettings={() => setShowDisplaySettings(true)}
           notificationPermissionStatus={notificationPermissionStatus}
@@ -2902,15 +3025,24 @@ const AppContent: React.FC = () => {
 
           {!isStudentLoggedIn ? (
             <StudentMobileLoginScreen
+              authUser={authUser}
+              userProfile={userProfile}
+              isProfileLoading={isUserProfileLoading}
+              isAdmin={isAdmin}
               initialName={savedUserMeta.name}
               initialMobile={savedUserMeta.mobile}
-              onLoginSuccess={handleStudentLogin}
+              onGoogleSignIn={handleGoogleUserSignIn}
+              onLinkMobileSubmit={handleLinkMobileSubmit}
+              onSignOut={handleStudentLogout}
+              onOpenAdminPanel={
+                isAdmin ? () => setRoute({ name: 'public', tab: 'admin' }) : undefined
+              }
               onAdminAuthenticated={handleAdminLoginSuccess}
             />
           ) : (
             <UseCodeScreen
               studentName={effectiveStudentName}
-              studentMobile={savedUserMeta.mobile}
+              studentMobile={linkedMobile10 || savedUserMeta.mobile}
               syncStatus={syncStatus}
               unlockedSubjects={effectiveUnlockedSubjects}
               myPayments={myPayments}
@@ -2938,6 +3070,15 @@ const AppContent: React.FC = () => {
             />
           )}
         </main>
+
+        <UserProfileModal
+          isOpen={isProfileModalOpen}
+          userProfile={userProfile}
+          student={student}
+          unlockedSubjects={effectiveUnlockedSubjects}
+          onClose={() => setIsProfileModalOpen(false)}
+          onLogout={() => void handleStudentLogout()}
+        />
       </div>
     );
   }

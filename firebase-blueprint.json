@@ -1,5 +1,35 @@
 {
   "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated Google user profile with linked +91 mobile number and OTP verification state.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "mobileNumber": { "type": "string" },
+        "mobileVerified": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "lastLoginAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "uid", "name", "email", "photoURL", "mobileNumber",
+        "mobileVerified", "createdAt", "lastLoginAt"
+      ]
+    },
+    "MobileNumberLock": {
+      "title": "MobileNumberLock",
+      "description": "Server-side uniqueness lock ensuring one 10-digit Indian mobile number can only be linked to a single Google Firebase UID.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "mobileNumber": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "mobileNumber", "createdAt"]
+    },
     "StudentProfile": {
       "title": "StudentProfile",
       "description": "User profile tracking unlocked Std 10 Quiz subjects and quiz progress.",
@@ -345,6 +375,14 @@
     }
   },
   "firestore": {
+    "/users/{uid}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Authenticated Google user profile isolated by Firebase UID with linked mobile number and mobileVerified status."
+    },
+    "/mobile_number_locks/{mobile10}": {
+      "schema": { "$ref": "#/entities/MobileNumberLock" },
+      "description": "Server-side atomic uniqueness lock preventing the same 10-digit mobile number from being linked to multiple Google accounts."
+    },
     "/students/{userId}": {
       "schema": { "$ref": "#/entities/StudentProfile" },
       "description": "Unlocked subject tracking and quiz stats per student ID."

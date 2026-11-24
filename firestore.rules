@@ -67,13 +67,64 @@ service cloud.firestore {
       );
     }
 
+    function isValidMobile10(m) {
+      return m is string && m.matches('^[0-9]{10}$');
+    }
+
+    function isValidIndianE164(m) {
+      return m is string && m.matches('^\\+91[0-9]{10}$');
+    }
+
+    function isValidUserProfile(data) {
+      return data.keys().hasAll([
+               'uid', 'name', 'email', 'photoURL', 'mobileNumber',
+               'mobileVerified', 'createdAt', 'lastLoginAt'
+             ]) &&
+             data.keys().hasOnly([
+               'uid', 'name', 'email', 'photoURL', 'mobileNumber',
+               'mobileVerified', 'createdAt', 'lastLoginAt'
+             ]) &&
+             data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
+             data.email is string && data.email.size() <= 120 &&
+             data.photoURL is string && data.photoURL.size() <= 500 &&
+             (data.mobileNumber == '' || isValidIndianE164(data.mobileNumber)) &&
+             data.mobileVerified is bool &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.lastLoginAt is timestamp && data.lastLoginAt <= request.time;
+    }
+
+    function ownsMobileStudentDoc(userId) {
+      return isSignedIn() &&
+             isValidMobileStudentId(userId) &&
+             exists(/databases/$(database)/documents/mobile_number_locks/$(userId[4:14])) &&
+             get(/databases/$(database)/documents/mobile_number_locks/$(userId[4:14])).data.uid == request.auth.uid;
+    }
+
     function canUseReservedAdminMobile(data) {
       return data.mobileNumber != '9099592283' || isAdmin();
     }
 
     function isStudentDocOwner(userId, data) {
-      return (isSignedIn() && request.auth.uid == userId) ||
-             (isValidMobileStudentId(userId) && userId == 'mob_' + data.mobileNumber);
+      return isSignedIn() && (
+        request.auth.uid == userId ||
+        (
+          isValidMobileStudentId(userId) &&
+          userId == 'mob_' + data.mobileNumber &&
+          get(/databases/$(database)/documents/mobile_number_locks/$(data.mobileNumber)).data.uid == request.auth.uid
+        )
+      );
+    }
+
+    function isStudentDocOwnerOnCreate(userId, data) {
+      return isSignedIn() && (
+        request.auth.uid == userId ||
+        (
+          isValidMobileStudentId(userId) &&
+          userId == 'mob_' + data.mobileNumber &&
+          getAfter(/databases/$(database)/documents/mobile_number_locks/$(data.mobileNumber)).data.uid == request.auth.uid
+        )
+      );
     }
 
     function hasSubjectAccess(studentData, subjectId) {
@@ -513,12 +564,79 @@ service cloud.firestore {
       }
     }
 
-    // Students collection (tracks unlocked content, payment IDs & quiz stats per student ID or signed-in UID)
+    // Authenticated Google User Profiles (isolated per Firebase UID; mobileVerified stays false until future OTP)
+    match /users/{uid} {
+      allow get: if isAdmin() || (isSignedIn() && isValidId(uid) && request.auth.uid == uid);
+      allow list: if isAdmin();
+
+      allow create: if isSignedIn() &&
+                       isValidId(uid) &&
+                       request.auth.uid == uid &&
+                       isValidUserProfile(incoming()) &&
+                       incoming().uid == uid &&
+                       incoming().mobileVerified == false &&
+                       (
+                         incoming().mobileNumber == '' ||
+                         (
+                           isValidIndianE164(incoming().mobileNumber) &&
+                           (incoming().mobileNumber[3:13] != '9099592283' || isAdmin()) &&
+                           getAfter(/databases/$(database)/documents/mobile_number_locks/$(incoming().mobileNumber[3:13])).data.uid == uid
+                         )
+                       );
+
+      allow update: if isSignedIn() &&
+                       isValidId(uid) &&
+                       isValidUserProfile(incoming()) &&
+                       incoming().uid == existing().uid &&
+                       incoming().createdAt == existing().createdAt && (
+                         isAdmin() ||
+                         (
+                           request.auth.uid == uid &&
+                           incoming().mobileVerified == existing().mobileVerified &&
+                           incoming().mobileVerified == false &&
+                           (
+                             incoming().mobileNumber == existing().mobileNumber ||
+                             (
+                               existing().mobileNumber == '' &&
+                               isValidIndianE164(incoming().mobileNumber) &&
+                               (incoming().mobileNumber[3:13] != '9099592283' || isAdmin()) &&
+                               getAfter(/databases/$(database)/documents/mobile_number_locks/$(incoming().mobileNumber[3:13])).data.uid == uid
+                             )
+                           ) &&
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'name', 'email', 'photoURL', 'mobileNumber', 'lastLoginAt'
+                           ])
+                         )
+                       );
+
+      allow delete: if isAdmin() && isValidId(uid);
+    }
+
+    // Server-side Atomic Mobile Number Uniqueness Locks (prevents 1 mobile from linking to >1 Google Account)
+    match /mobile_number_locks/{mobile10} {
+      allow get: if isAdmin() || (isSignedIn() && isValidMobile10(mobile10));
+      allow list: if isAdmin();
+
+      allow create: if isSignedIn() &&
+                       isValidMobile10(mobile10) &&
+                       (mobile10 != '9099592283' || isAdmin()) &&
+                       incoming().keys().hasAll(['uid', 'mobileNumber', 'createdAt']) &&
+                       incoming().keys().hasOnly(['uid', 'mobileNumber', 'createdAt']) &&
+                       incoming().uid == request.auth.uid &&
+                       incoming().mobileNumber == '+91' + mobile10 &&
+                       incoming().createdAt is timestamp && incoming().createdAt <= request.time &&
+                       getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.mobileNumber == '+91' + mobile10;
+
+      allow update: if false;
+      allow delete: if isAdmin() && isValidMobile10(mobile10);
+    }
+
+    // Students collection (tracks unlocked content, payment IDs & quiz stats strictly isolated by Firebase UID)
     match /students/{userId} {
       allow get: if isAdmin() || (
         isValidId(userId) && (
           (isSignedIn() && request.auth.uid == userId) ||
-          isValidMobileStudentId(userId)
+          ownsMobileStudentDoc(userId)
         )
       );
       allow list: if isAdmin();
@@ -526,7 +644,7 @@ service cloud.firestore {
       allow create: if isValidId(userId) &&
                        isValidStudent(incoming()) &&
                        canUseReservedAdminMobile(incoming()) &&
-                       isStudentDocOwner(userId, incoming()) &&
+                       (isAdmin() || isStudentDocOwnerOnCreate(userId, incoming())) &&
                        incoming().userId == userId &&
                        incoming().hasQuizAccess == false &&
                        incoming().redeemedCode == '' &&
@@ -602,14 +720,14 @@ service cloud.firestore {
         allow get: if isAdmin() || (
           isValidId(attemptId) && (
             (isSignedIn() && request.auth.uid == userId) ||
-            isValidMobileStudentId(userId)
+            ownsMobileStudentDoc(userId)
           )
         );
-        allow list: if isAdmin() || (isSignedIn() && request.auth.uid == userId) || isValidMobileStudentId(userId);
+        allow list: if isAdmin() || (isSignedIn() && request.auth.uid == userId) || ownsMobileStudentDoc(userId);
         allow create: if isValidId(attemptId) &&
                          isValidQuizAttempt(incoming()) &&
                          incoming().userId == userId &&
-                         ((isSignedIn() && request.auth.uid == userId) || isValidMobileStudentId(userId)) &&
+                         ((isSignedIn() && request.auth.uid == userId) || ownsMobileStudentDoc(userId)) &&
                          hasSubjectAccess(get(/databases/$(database)/documents/students/$(userId)).data, incoming().subjectId);
         allow update, delete: if isAdmin() && isValidId(attemptId);
       }
@@ -645,7 +763,8 @@ service cloud.firestore {
         isAdmin() ||
         resource == null ||
         (resource.data.status == 'unused' && resource.data.isUsed == false) ||
-        (isSignedIn() && resource.data.usedByUserId == request.auth.uid)
+        (isSignedIn() && resource.data.usedByUserId == request.auth.uid) ||
+        ownsMobileStudentDoc(resource.data.usedByUserId)
       );
       allow list: if isAdmin();
 

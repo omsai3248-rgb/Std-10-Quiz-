@@ -96,7 +96,7 @@ beforeEach(async () => {
   }
 });
 
-test("Unauthenticated user cannot list any collection or read non-UUID/student/used docs", async () => {
+test("Unauthenticated user cannot list any collection or read non-UUID/student/user/used docs", async () => {
   const unauthDb = testEnv.unauthenticatedContext().firestore();
   await assertFails(unauthDb.collection("payment_requests").get());
   await assertFails(unauthDb.collection("payment_requests").doc("pay_1").get());
@@ -104,6 +104,11 @@ test("Unauthenticated user cannot list any collection or read non-UUID/student/u
   await assertFails(unauthDb.collection("utr_locks").get());
   await assertFails(unauthDb.collection("students").get());
   await assertFails(unauthDb.collection("students").doc("some_uid").get());
+  await assertFails(unauthDb.collection("students").doc("mob_9876543210").get());
+  await assertFails(unauthDb.collection("users").get());
+  await assertFails(unauthDb.collection("users").doc(ALICE_UID).get());
+  await assertFails(unauthDb.collection("mobile_number_locks").get());
+  await assertFails(unauthDb.collection("mobile_number_locks").doc("9876543210").get());
 });
 
 test("Public visitor (without Anonymous Auth) can submit payment with cryptographic UUIDs and redeem unused code once", async () => {
@@ -387,14 +392,59 @@ test("Public user can redeem an unused code once with usedBy + deviceInfo, and r
   );
 });
 
-test("Mobile student (mob_9876543210) persists profile, links paymentRequestIds, unlocks only via valid transaction, and saves quiz attempts", async () => {
+async function linkGoogleUserMobile(db, uid, mobile10, name = "Aarav Patel", email = "aarav@example.com", now = new Date()) {
+  const batch = db.batch();
+  batch.set(db.collection("users").doc(uid), {
+    uid,
+    name,
+    email,
+    photoURL: "https://example.com/photo.jpg",
+    mobileNumber: `+91${mobile10}`,
+    mobileVerified: false,
+    createdAt: now,
+    lastLoginAt: now,
+  });
+  batch.set(db.collection("mobile_number_locks").doc(mobile10), {
+    uid,
+    mobileNumber: `+91${mobile10}`,
+    createdAt: now,
+  });
+  await assertSucceeds(batch.commit());
+}
+
+test("Authenticated Google student (mob_9876543210) persists profile, unlocks only via valid transaction, saves quiz attempts, and is isolated from other users", async () => {
   const unauthDb = testEnv.unauthenticatedContext().firestore();
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID, { email: "aarav@example.com", email_verified: true }).firestore();
+  const bobDb = testEnv.authenticatedContext(BOB_UID, { email: "bob@example.com", email_verified: true }).firestore();
   const studentId = "mob_9876543210";
   const now = new Date();
 
-  // Cannot create profile with pre-unlocked quiz access or reserved admin number
+  // Unauthenticated user cannot create student profile
   await assertFails(
     unauthDb.collection("students").doc(studentId).set({
+      userId: studentId,
+      fullName: "Unauth",
+      mobileNumber: "9876543210",
+      email: "",
+      standard: "ધોરણ 10",
+      hasQuizAccess: false,
+      redeemedCode: "",
+      paymentStatus: "none",
+      totalQuizzesTaken: 0,
+      bestScorePercent: 0,
+      unlockedSubjects: [],
+      paymentRequestIds: [],
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  // Alice links her mobile number atomically via users/{uid} + mobile_number_locks/{mobile10}
+  await linkGoogleUserMobile(aliceDb, ALICE_UID, "9876543210", "Aarav Patel", "aarav@example.com", now);
+
+  // Cannot create profile with pre-unlocked quiz access or reserved admin number
+  await assertFails(
+    aliceDb.collection("students").doc(studentId).set({
       userId: studentId,
       fullName: "Hacker",
       mobileNumber: "9876543210",
@@ -411,7 +461,7 @@ test("Mobile student (mob_9876543210) persists profile, links paymentRequestIds,
     })
   );
   await assertFails(
-    unauthDb.collection("students").doc("mob_9099592283").set({
+    aliceDb.collection("students").doc("mob_9099592283").set({
       userId: "mob_9099592283",
       fullName: "Fake Admin",
       mobileNumber: "9099592283",
@@ -427,13 +477,13 @@ test("Mobile student (mob_9876543210) persists profile, links paymentRequestIds,
     })
   );
 
-  // Valid initial locked student profile creation succeeds
+  // Valid initial locked student profile creation succeeds for owner Alice
   await assertSucceeds(
-    unauthDb.collection("students").doc(studentId).set({
+    aliceDb.collection("students").doc(studentId).set({
       userId: studentId,
       fullName: "Aarav Patel",
       mobileNumber: "9876543210",
-      email: "",
+      email: "aarav@example.com",
       standard: "ધોરણ 10",
       hasQuizAccess: false,
       redeemedCode: "",
@@ -447,9 +497,18 @@ test("Mobile student (mob_9876543210) persists profile, links paymentRequestIds,
     })
   );
 
+  // Bob CANNOT read or update Alice's student profile
+  await assertFails(bobDb.collection("students").doc(studentId).get());
+  await assertFails(
+    bobDb.collection("students").doc(studentId).update({
+      fullName: "Hijacked",
+      updatedAt: now,
+    })
+  );
+
   // Cannot record quiz attempt before subject is unlocked
   await assertFails(
-    unauthDb.collection("students").doc(studentId).collection("quiz_attempts").doc("att_1").set({
+    aliceDb.collection("students").doc(studentId).collection("quiz_attempts").doc("att_1").set({
       userId: studentId,
       subjectId: "maths",
       subjectTitle: "ગણિત",
@@ -464,7 +523,7 @@ test("Mobile student (mob_9876543210) persists profile, links paymentRequestIds,
 
   // Cannot self-unlock without redeeming a real unused access_code in the same transaction
   await assertFails(
-    unauthDb.collection("students").doc(studentId).update({
+    aliceDb.collection("students").doc(studentId).update({
       hasQuizAccess: true,
       redeemedCode: "FAKECODE",
       unlockedSubjects: ["all"],
@@ -480,8 +539,8 @@ test("Mobile student (mob_9876543210) persists profile, links paymentRequestIds,
     );
   });
 
-  const redeemBatch = unauthDb.batch();
-  redeemBatch.update(unauthDb.collection("access_codes").doc(code), {
+  const redeemBatch = aliceDb.batch();
+  redeemBatch.update(aliceDb.collection("access_codes").doc(code), {
     status: "used",
     isUsed: true,
     usedAt: now,
@@ -496,7 +555,7 @@ test("Mobile student (mob_9876543210) persists profile, links paymentRequestIds,
     usedByMobile: "9876543210",
     updatedAt: now,
   });
-  redeemBatch.update(unauthDb.collection("students").doc(studentId), {
+  redeemBatch.update(aliceDb.collection("students").doc(studentId), {
     hasQuizAccess: false,
     redeemedCode: code,
     unlockedSubjects: ["maths"],
@@ -504,9 +563,9 @@ test("Mobile student (mob_9876543210) persists profile, links paymentRequestIds,
   });
   await assertSucceeds(redeemBatch.commit());
 
-  // Now student CAN record a quiz attempt for unlocked subject 'maths', but NOT locked 'science'
-  const attBatch = unauthDb.batch();
-  attBatch.set(unauthDb.collection("students").doc(studentId).collection("quiz_attempts").doc("att_1"), {
+  // Now student Alice CAN record a quiz attempt for unlocked subject 'maths', but NOT locked 'science'
+  const attBatch = aliceDb.batch();
+  attBatch.set(aliceDb.collection("students").doc(studentId).collection("quiz_attempts").doc("att_1"), {
     userId: studentId,
     subjectId: "maths",
     subjectTitle: "ગણિત",
@@ -517,15 +576,31 @@ test("Mobile student (mob_9876543210) persists profile, links paymentRequestIds,
     timeTakenSeconds: 42,
     createdAt: now,
   });
-  attBatch.update(unauthDb.collection("students").doc(studentId), {
+  attBatch.update(aliceDb.collection("students").doc(studentId), {
     totalQuizzesTaken: 1,
     bestScorePercent: 90,
     updatedAt: now,
   });
   await assertSucceeds(attBatch.commit());
 
+  // Bob CANNOT read or inject attempts into Alice's quiz history
+  await assertFails(bobDb.collection("students").doc(studentId).collection("quiz_attempts").get());
   await assertFails(
-    unauthDb.collection("students").doc(studentId).collection("quiz_attempts").doc("att_2").set({
+    bobDb.collection("students").doc(studentId).collection("quiz_attempts").doc("att_evil").set({
+      userId: studentId,
+      subjectId: "maths",
+      subjectTitle: "ગણિત",
+      chapterTitle: "Ch 1",
+      score: 10,
+      totalQuestions: 10,
+      percentage: 100,
+      timeTakenSeconds: 10,
+      createdAt: now,
+    })
+  );
+
+  await assertFails(
+    aliceDb.collection("students").doc(studentId).collection("quiz_attempts").doc("att_2").set({
       userId: studentId,
       subjectId: "science",
       subjectTitle: "વિજ્ઞાન",
@@ -539,22 +614,24 @@ test("Mobile student (mob_9876543210) persists profile, links paymentRequestIds,
   );
 });
 
-test("New device login takes over single-device session (forcing old device auto-logout) while admin_sessions is strictly admin-only", async () => {
+test("New device login by same authenticated Google owner takes over single-device session while admin_sessions is strictly admin-only", async () => {
   const unauthDb = testEnv.unauthenticatedContext().firestore();
-  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID, { email: "gguu@example.com", email_verified: true }).firestore();
   const adminDb = testEnv.authenticatedContext(ADMIN_UID, {
     phone_number: ADMIN_PHONE,
   }).firestore();
   const studentId = "mob_9998668886";
   const now = new Date();
 
+  await linkGoogleUserMobile(aliceDb, ALICE_UID, "9998668886", "Gguu", "gguu@example.com", now);
+
   // Device 1 creates & claims session
   await assertSucceeds(
-    unauthDb.collection("students").doc(studentId).set({
+    aliceDb.collection("students").doc(studentId).set({
       userId: studentId,
       fullName: "Gguu",
       mobileNumber: "9998668886",
-      email: "",
+      email: "gguu@example.com",
       standard: "ધોરણ 10",
       hasQuizAccess: false,
       redeemedCode: "",
@@ -570,9 +647,9 @@ test("New device login takes over single-device session (forcing old device auto
     })
   );
 
-  // Device 2 logs in with the SAME mobile -> SUCCEEDS and takes over activeDeviceId (kicking Device 1 out)
+  // Device 2 (same Google account) logs in -> SUCCEEDS and takes over activeDeviceId
   await assertSucceeds(
-    unauthDb.collection("students").doc(studentId).update({
+    aliceDb.collection("students").doc(studentId).update({
       fullName: "Gguu",
       activeDeviceId: "and_device_two",
       activeDeviceName: "Pixel 8",
@@ -582,7 +659,7 @@ test("New device login takes over single-device session (forcing old device auto
 
   // Device takeover still cannot forge hasQuizAccess or unlockedSubjects
   await assertFails(
-    unauthDb.collection("students").doc(studentId).update({
+    aliceDb.collection("students").doc(studentId).update({
       fullName: "Gguu",
       activeDeviceId: "and_device_three",
       activeDeviceName: "Pixel 9",
@@ -602,7 +679,7 @@ test("New device login takes over single-device session (forcing old device auto
 
   // Device 1 can log in again after Admin unlock or takeover
   await assertSucceeds(
-    unauthDb.collection("students").doc(studentId).update({
+    aliceDb.collection("students").doc(studentId).update({
       fullName: "Gguu",
       activeDeviceId: "and_device_one",
       activeDeviceName: "Samsung Galaxy A54",
@@ -1094,17 +1171,19 @@ test("App Update system: only Admin can publish releases/configs/notifications; 
 });
 
 test("Board Mock Test: student freeMockUsedSubjects must start empty, grows monotonically, and cannot forge access", async () => {
-  const unauthDb = testEnv.unauthenticatedContext().firestore();
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID, { email: "mock@example.com", email_verified: true }).firestore();
   const studentId = "mob_9123456789";
   const now = new Date();
 
+  await linkGoogleUserMobile(aliceDb, ALICE_UID, "9123456789", "Mock Student", "mock@example.com", now);
+
   // Cannot create student with pre-populated freeMockUsedSubjects
   await assertFails(
-    unauthDb.collection("students").doc(studentId).set({
+    aliceDb.collection("students").doc(studentId).set({
       userId: studentId,
       fullName: "Mock Student",
       mobileNumber: "9123456789",
-      email: "",
+      email: "mock@example.com",
       standard: "ધોરણ 10",
       hasQuizAccess: false,
       redeemedCode: "",
@@ -1121,11 +1200,11 @@ test("Board Mock Test: student freeMockUsedSubjects must start empty, grows mono
 
   // Valid creation with empty freeMockUsedSubjects succeeds
   await assertSucceeds(
-    unauthDb.collection("students").doc(studentId).set({
+    aliceDb.collection("students").doc(studentId).set({
       userId: studentId,
       fullName: "Mock Student",
       mobileNumber: "9123456789",
-      email: "",
+      email: "mock@example.com",
       standard: "ધોરણ 10",
       hasQuizAccess: false,
       redeemedCode: "",
@@ -1142,13 +1221,13 @@ test("Board Mock Test: student freeMockUsedSubjects must start empty, grows mono
 
   // Student can record free mock usage per folder
   await assertSucceeds(
-    unauthDb.collection("students").doc(studentId).update({
+    aliceDb.collection("students").doc(studentId).update({
       freeMockUsedSubjects: ["science"],
       updatedAt: now,
     })
   );
   await assertSucceeds(
-    unauthDb.collection("students").doc(studentId).update({
+    aliceDb.collection("students").doc(studentId).update({
       freeMockUsedSubjects: ["science", "maths", "english"],
       updatedAt: now,
     })
@@ -1156,7 +1235,7 @@ test("Board Mock Test: student freeMockUsedSubjects must start empty, grows mono
 
   // Student CANNOT remove an already-used folder to reset free mock quota
   await assertFails(
-    unauthDb.collection("students").doc(studentId).update({
+    aliceDb.collection("students").doc(studentId).update({
       freeMockUsedSubjects: ["maths"],
       updatedAt: now,
     })
@@ -1164,13 +1243,13 @@ test("Board Mock Test: student freeMockUsedSubjects must start empty, grows mono
 
   // Student CANNOT pass invalid subject IDs or piggyback hasQuizAccess
   await assertFails(
-    unauthDb.collection("students").doc(studentId).update({
+    aliceDb.collection("students").doc(studentId).update({
       freeMockUsedSubjects: ["science", "maths", "all"],
       updatedAt: now,
     })
   );
   await assertFails(
-    unauthDb.collection("students").doc(studentId).update({
+    aliceDb.collection("students").doc(studentId).update({
       freeMockUsedSubjects: ["science", "maths", "social_science"],
       hasQuizAccess: true,
       updatedAt: now,
@@ -1280,3 +1359,165 @@ test("Push Broadcasts & permission-gated FCM tokens: only Admins can create/mana
     })
   );
 });
+
+test("Google Sign-In /users/{uid} + Server-side Duplicate Mobile Lock: enforces UID isolation, mobileVerified=false, duplicate rejection, and existing data preservation", async () => {
+  const unauthDb = testEnv.unauthenticatedContext().firestore();
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID, { email: "alice@gmail.com", email_verified: true }).firestore();
+  const bobDb = testEnv.authenticatedContext(BOB_UID, { email: "bob@gmail.com", email_verified: true }).firestore();
+  const adminDb = testEnv.authenticatedContext(ADMIN_UID, { phone_number: ADMIN_PHONE }).firestore();
+  const now = new Date();
+
+  // Seed pre-existing student unlocks & quiz history (must survive without reset!)
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await db.collection("students").doc("mob_9825012345").set({
+      userId: "mob_9825012345",
+      fullName: "Existing Student",
+      mobileNumber: "9825012345",
+      email: "",
+      standard: "ધોરણ 10",
+      hasQuizAccess: true,
+      redeemedCode: "ALL88990",
+      paymentStatus: "approved",
+      totalQuizzesTaken: 12,
+      bestScorePercent: 95,
+      unlockedSubjects: ["all"],
+      paymentRequestIds: [],
+      createdAt: now,
+      updatedAt: now,
+    });
+    await db.collection("students").doc("mob_9825012345").collection("quiz_attempts").doc("old_att_1").set({
+      userId: "mob_9825012345",
+      subjectId: "maths",
+      subjectTitle: "ગણિત",
+      chapterTitle: "Ch 1",
+      score: 19,
+      totalQuestions: 20,
+      percentage: 95,
+      timeTakenSeconds: 110,
+      createdAt: now,
+    });
+  });
+
+  // 1. Alice cannot forge mobileVerified=true on initial profile create
+  await assertFails(
+    aliceDb.collection("users").doc(ALICE_UID).set({
+      uid: ALICE_UID,
+      name: "Alice Patel",
+      email: "alice@gmail.com",
+      photoURL: "https://example.com/a.jpg",
+      mobileNumber: "",
+      mobileVerified: true,
+      createdAt: now,
+      lastLoginAt: now,
+    })
+  );
+
+  // 2. Alice creates initial Google profile with mobileNumber="" and mobileVerified=false
+  await assertSucceeds(
+    aliceDb.collection("users").doc(ALICE_UID).set({
+      uid: ALICE_UID,
+      name: "Alice Patel",
+      email: "alice@gmail.com",
+      photoURL: "https://example.com/a.jpg",
+      mobileNumber: "",
+      mobileVerified: false,
+      createdAt: now,
+      lastLoginAt: now,
+    })
+  );
+
+  // 3. Alice cannot read/write Bob's profile, and Bob cannot read/write Alice's profile
+  await assertFails(bobDb.collection("users").doc(ALICE_UID).get());
+  await assertFails(bobDb.collection("users").get());
+  await assertFails(
+    bobDb.collection("users").doc(ALICE_UID).update({
+      name: "Hacked",
+      lastLoginAt: now,
+    })
+  );
+
+  // 4. Alice cannot set mobileNumber in /users/{uid} WITHOUT creating the atomic /mobile_number_locks/{mobile10}
+  await assertFails(
+    aliceDb.collection("users").doc(ALICE_UID).update({
+      mobileNumber: "+919825012345",
+      lastLoginAt: now,
+    })
+  );
+
+  // 5. Alice cannot forge mobileVerified=true on update
+  await assertFails(
+    aliceDb.collection("users").doc(ALICE_UID).update({
+      mobileVerified: true,
+      lastLoginAt: now,
+    })
+  );
+
+  // 6. Alice links +919825012345 atomically with mobile_number_locks/9825012345 -> SUCCEEDS
+  const aliceLinkBatch = aliceDb.batch();
+  aliceLinkBatch.set(aliceDb.collection("mobile_number_locks").doc("9825012345"), {
+    uid: ALICE_UID,
+    mobileNumber: "+919825012345",
+    createdAt: now,
+  });
+  aliceLinkBatch.update(aliceDb.collection("users").doc(ALICE_UID), {
+    mobileNumber: "+919825012345",
+    lastLoginAt: now,
+  });
+  await assertSucceeds(aliceLinkBatch.commit());
+
+  // 7. Existing student unlocks & quiz history are IMMEDIATELY preserved and readable by Alice!
+  await assertSucceeds(aliceDb.collection("students").doc("mob_9825012345").get());
+  await assertSucceeds(aliceDb.collection("students").doc("mob_9825012345").collection("quiz_attempts").get());
+
+  // 8. Bob creates his own initial profile, then tries to link Alice's SAME mobile 9825012345 -> SERVER-SIDE REJECTED!
+  await assertSucceeds(
+    bobDb.collection("users").doc(BOB_UID).set({
+      uid: BOB_UID,
+      name: "Bob Shah",
+      email: "bob@gmail.com",
+      photoURL: "",
+      mobileNumber: "",
+      mobileVerified: false,
+      createdAt: now,
+      lastLoginAt: now,
+    })
+  );
+
+  const bobDupBatch = bobDb.batch();
+  bobDupBatch.set(bobDb.collection("mobile_number_locks").doc("9825012345"), {
+    uid: BOB_UID,
+    mobileNumber: "+919825012345",
+    createdAt: now,
+  });
+  bobDupBatch.update(bobDb.collection("users").doc(BOB_UID), {
+    mobileNumber: "+919825012345",
+    lastLoginAt: now,
+  });
+  await assertFails(bobDupBatch.commit());
+
+  // Bob also cannot read Alice's preserved student profile or quiz history, and cannot list locks
+  await assertFails(bobDb.collection("students").doc("mob_9825012345").get());
+  await assertFails(bobDb.collection("students").doc("mob_9825012345").collection("quiz_attempts").get());
+  await assertFails(bobDb.collection("mobile_number_locks").get());
+  await assertFails(unauthDb.collection("students").doc("mob_9825012345").get());
+
+  // 9. Alice cannot overwrite her linked mobile number to hijack another number, but CAN update lastLoginAt/name
+  await assertSucceeds(
+    aliceDb.collection("users").doc(ALICE_UID).update({
+      name: "Alice K. Patel",
+      lastLoginAt: now,
+    })
+  );
+  await assertFails(
+    aliceDb.collection("users").doc(ALICE_UID).update({
+      mobileNumber: "+919900112233",
+      lastLoginAt: now,
+    })
+  );
+
+  // 10. Admin can read users & locks directory
+  await assertSucceeds(adminDb.collection("users").get());
+  await assertSucceeds(adminDb.collection("mobile_number_locks").get());
+});
+

@@ -507,9 +507,8 @@ class NativeFirebaseBridge(
                     val firebaseCred = GoogleAuthProvider.getCredential(idToken, null)
                     val signed = localAuth.signInWithCredential(firebaseCred).awaitResult()
                     val signedUser = signed.user
-                    if (!verifyAuthorizedAdminSuspended(signedUser)) {
-                        runCatching { localAuth.signOut() }
-                    } else {
+                    if (signedUser != null) {
+                        runCatching { upsertUserProfileOnLoginSuspended(signedUser) }
                         emitAuthState(signedUser)
                     }
                 }
@@ -630,6 +629,309 @@ class NativeFirebaseBridge(
         }
     }
 
+    private suspend fun upsertUserProfileOnLoginSuspended(user: FirebaseUser): JSONObject {
+        val localDb = db
+        val uid = user.uid
+        val displayName = user.displayName?.trim()?.take(80).orEmpty()
+            .ifBlank { user.email?.substringBefore("@")?.take(60).orEmpty() }
+            .ifBlank { "Student" }
+        val email = user.email?.trim()?.take(120).orEmpty()
+        val photoUrl = user.photoUrl?.toString()?.take(500).orEmpty()
+
+        val fallbackJson = JSONObject().apply {
+            put("uid", uid)
+            put("name", displayName)
+            put("email", email)
+            put("photoURL", photoUrl)
+            put("mobileNumber", "")
+            put("mobileVerified", false)
+            put("createdAt", JSONObject.NULL)
+            put("lastLoginAt", JSONObject.NULL)
+        }
+        if (localDb == null) return fallbackJson
+
+        val userRef = localDb.collection("users").document(uid)
+        val snap = try {
+            withTimeoutOrNull(6_000L) { userRef.get().awaitResult() }
+                ?: runCatching { userRef.get(Source.CACHE).awaitResult() }.getOrNull()
+        } catch (e: Throwable) {
+            runCatching { userRef.get(Source.CACHE).awaitResult() }.getOrNull()
+        }
+
+        if (snap == null || !snap.exists()) {
+            val payload = mapOf(
+                "uid" to uid,
+                "name" to displayName,
+                "email" to email,
+                "photoURL" to photoUrl,
+                "mobileNumber" to "",
+                "mobileVerified" to false,
+                "createdAt" to FieldValue.serverTimestamp(),
+                "lastLoginAt" to FieldValue.serverTimestamp(),
+            )
+            runCatching {
+                withTimeoutOrNull(6_000L) { userRef.set(payload).awaitResult() }
+            }
+            val created = runCatching { withTimeoutOrNull(4_000L) { userRef.get().awaitResult() } }.getOrNull()
+            return if (created != null && created.exists()) serializeUserProfile(created) else fallbackJson
+        } else {
+            val existingName = snap.getString("name").orEmpty().trim()
+            val nextName = existingName.ifBlank { displayName }
+            val updateMap = mapOf(
+                "name" to nextName,
+                "email" to email.ifBlank { snap.getString("email").orEmpty() },
+                "photoURL" to photoUrl.ifBlank { snap.getString("photoURL").orEmpty() },
+                "lastLoginAt" to FieldValue.serverTimestamp(),
+            )
+            runCatching {
+                withTimeoutOrNull(5_000L) { userRef.update(updateMap).awaitResult() }
+            }
+            val refreshed = runCatching { withTimeoutOrNull(4_000L) { userRef.get().awaitResult() } }.getOrNull()
+            return if (refreshed != null && refreshed.exists()) serializeUserProfile(refreshed) else serializeUserProfile(snap)
+        }
+    }
+
+    @JavascriptInterface
+    fun requestUserGoogleSignIn(callId: String) {
+        val localAuth = auth
+        if (localAuth == null || credentialManager == null) {
+            resolveCallError(callId, "NATIVE_FIREBASE_MISSING")
+            return
+        }
+        val clientId = getOptionalStringResource("default_web_client_id")
+        if (clientId.isBlank()) {
+            resolveCallError(callId, "GOOGLE_SIGNIN_CONFIG_ERROR")
+            return
+        }
+
+        activity.lifecycleScope.launch {
+            try {
+                val creds = CredentialManager.create(activity)
+                val signInOption = GetSignInWithGoogleOption.Builder(serverClientId = clientId).build()
+                val request = GetCredentialRequest.Builder().addCredentialOption(signInOption).build()
+                val result = try {
+                    creds.getCredential(activity, request)
+                } catch (cancelErr: GetCredentialCancellationException) {
+                    throw cancelErr
+                } catch (primaryErr: Throwable) {
+                    Log.w("Auth", "Primary GetSignInWithGoogleOption failed (${primaryErr.javaClass.simpleName}): ${primaryErr.message}")
+                    val fallbackOption = GetGoogleIdOption.Builder()
+                        .setFilterByAuthorizedAccounts(false)
+                        .setServerClientId(clientId)
+                        .build()
+                    val fallbackRequest = GetCredentialRequest.Builder()
+                        .addCredentialOption(fallbackOption)
+                        .build()
+                    creds.getCredential(activity, fallbackRequest)
+                }
+                val credential = result.credential
+                if (credential is CustomCredential && credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
+                    val googleCred = GoogleIdTokenCredential.createFrom(credential.data)
+                    val authCred = GoogleAuthProvider.getCredential(googleCred.idToken, null)
+                    val authResult = localAuth.signInWithCredential(authCred).awaitResult()
+                    val signedUser = authResult.user
+                    if (signedUser == null) {
+                        resolveCallError(callId, "Sign in failed")
+                        return@launch
+                    }
+                    val profileJson = withContext(Dispatchers.IO) {
+                        upsertUserProfileOnLoginSuspended(signedUser)
+                    }
+                    emitAuthState(signedUser)
+                    val response = JSONObject().apply {
+                        put("user", serializeUser(signedUser) ?: JSONObject())
+                        put("profile", profileJson)
+                    }
+                    resolveCallSuccess(callId, response.toString())
+                } else {
+                    resolveCallError(callId, "Unexpected credential type")
+                }
+            } catch (e: GetCredentialCancellationException) {
+                Log.w("Auth", "User Google Sign-In flow cancelled or dismissed: ${e.message}", e)
+                val apkSha1 = getApkSigningSha1Hex()
+                val msg = e.localizedMessage.orEmpty()
+                when {
+                    apkSha1.isNotBlank() && apkSha1 != EXPECTED_DEBUG_CERT_SHA1 -> {
+                        resolveCallError(callId, "GOOGLE_SIGNIN_SHA1_MISMATCH:${formatSha1Colons(apkSha1)}")
+                    }
+                    isGoogleConfigFailureMessage(msg) -> {
+                        resolveCallError(callId, "GOOGLE_SIGNIN_CONFIG_ERROR")
+                    }
+                    else -> {
+                        resolveCallError(callId, "SIGN_IN_CANCELLED")
+                    }
+                }
+            } catch (e: NoCredentialException) {
+                Log.w("Auth", "No Google credentials found on device: ${e.message}", e)
+                val apkSha1 = getApkSigningSha1Hex()
+                if (apkSha1.isNotBlank() && apkSha1 != EXPECTED_DEBUG_CERT_SHA1) {
+                    resolveCallError(callId, "GOOGLE_SIGNIN_SHA1_MISMATCH:${formatSha1Colons(apkSha1)}")
+                } else {
+                    resolveCallError(callId, "NO_GOOGLE_CREDENTIAL")
+                }
+            } catch (e: Throwable) {
+                Log.e("Auth", "User Google Sign-In failed (${e.javaClass.simpleName}): ${e.message}", e)
+                val apkSha1 = getApkSigningSha1Hex()
+                val msg = e.localizedMessage.orEmpty()
+                when {
+                    apkSha1.isNotBlank() && apkSha1 != EXPECTED_DEBUG_CERT_SHA1 -> {
+                        resolveCallError(callId, "GOOGLE_SIGNIN_SHA1_MISMATCH:${formatSha1Colons(apkSha1)}")
+                    }
+                    isGoogleConfigFailureMessage(msg) -> {
+                        resolveCallError(callId, "GOOGLE_SIGNIN_CONFIG_ERROR")
+                    }
+                    else -> {
+                        resolveCallError(callId, msg.ifBlank { "Sign in failed" })
+                    }
+                }
+            }
+        }
+    }
+
+    @JavascriptInterface
+    fun getUserProfile(callId: String) {
+        val currentUser = auth?.currentUser
+        if (currentUser == null) {
+            resolveCallSuccess(callId, "null")
+            return
+        }
+        activity.lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val profileJson = upsertUserProfileOnLoginSuspended(currentUser)
+                resolveCallSuccess(callId, profileJson.toString())
+            } catch (e: Throwable) {
+                resolveCallError(callId, e.localizedMessage ?: "Failed to load user profile")
+            }
+        }
+    }
+
+    @JavascriptInterface
+    fun linkUserMobileNumber(callId: String, payloadJson: String) {
+        val localDb = db
+        val currentUser = auth?.currentUser
+        if (localDb == null) {
+            resolveCallError(callId, "NATIVE_FIREBASE_MISSING")
+            return
+        }
+        if (currentUser == null) {
+            resolveCallError(callId, "AUTH_REQUIRED")
+            return
+        }
+
+        activity.lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val obj = JSONObject(payloadJson)
+                val rawMobile = obj.optString("mobileNumber", "").replace(Regex("\\D"), "")
+                val mobile10 = if (rawMobile.length >= 10) rawMobile.takeLast(10) else rawMobile
+                val customName = obj.optString("displayName", "").trim().take(80)
+
+                if (!Regex("^[0-9]{10}$").matches(mobile10)) {
+                    resolveCallError(callId, "INVALID_MOBILE")
+                    return@launch
+                }
+                if (mobile10 == "9099592283" && !isCurrentUserAdmin()) {
+                    resolveCallError(callId, "RESERVED_ADMIN_MOBILE")
+                    return@launch
+                }
+
+                val uid = currentUser.uid
+                val e164 = "+91$mobile10"
+                val effectiveName = customName
+                    .ifBlank { currentUser.displayName?.trim()?.take(80).orEmpty() }
+                    .ifBlank { currentUser.email?.substringBefore("@")?.take(60).orEmpty() }
+                    .ifBlank { "Student" }
+                val email = currentUser.email?.trim()?.take(120).orEmpty()
+                val photoUrl = currentUser.photoUrl?.toString()?.take(500).orEmpty()
+
+                val lockRef = localDb.collection("mobile_number_locks").document(mobile10)
+                val userRef = localDb.collection("users").document(uid)
+
+                localDb.runTransaction { tx ->
+                    val lockSnap = tx.get(lockRef)
+                    val userSnap = tx.get(userRef)
+
+                    if (lockSnap.exists()) {
+                        val ownerUid = lockSnap.getString("uid").orEmpty()
+                        if (ownerUid != uid) {
+                            throw IllegalStateException("MOBILE_ALREADY_LINKED")
+                        }
+                    }
+
+                    if (userSnap.exists()) {
+                        val existingMob = userSnap.getString("mobileNumber").orEmpty()
+                        if (existingMob.isNotBlank() && existingMob != e164) {
+                            throw IllegalStateException("MOBILE_ALREADY_SET")
+                        }
+                    }
+
+                    if (!lockSnap.exists()) {
+                        tx.set(
+                            lockRef,
+                            mapOf(
+                                "uid" to uid,
+                                "mobileNumber" to e164,
+                                "createdAt" to FieldValue.serverTimestamp(),
+                            )
+                        )
+                    }
+
+                    if (!userSnap.exists()) {
+                        tx.set(
+                            userRef,
+                            mapOf(
+                                "uid" to uid,
+                                "name" to effectiveName,
+                                "email" to email,
+                                "photoURL" to photoUrl,
+                                "mobileNumber" to e164,
+                                "mobileVerified" to false,
+                                "createdAt" to FieldValue.serverTimestamp(),
+                                "lastLoginAt" to FieldValue.serverTimestamp(),
+                            )
+                        )
+                    } else {
+                        tx.update(
+                            userRef,
+                            mapOf(
+                                "name" to effectiveName,
+                                "email" to email,
+                                "photoURL" to photoUrl,
+                                "mobileNumber" to e164,
+                                "lastLoginAt" to FieldValue.serverTimestamp(),
+                            )
+                        )
+                    }
+                    null
+                }.awaitResult()
+
+                val updatedSnap = runCatching { withTimeoutOrNull(4_000L) { userRef.get().awaitResult() } }.getOrNull()
+                val resultJson = if (updatedSnap != null && updatedSnap.exists()) {
+                    serializeUserProfile(updatedSnap)
+                } else {
+                    JSONObject().apply {
+                        put("uid", uid)
+                        put("name", effectiveName)
+                        put("email", email)
+                        put("photoURL", photoUrl)
+                        put("mobileNumber", e164)
+                        put("mobileVerified", false)
+                        put("createdAt", JSONObject.NULL)
+                        put("lastLoginAt", JSONObject.NULL)
+                    }
+                }
+                resolveCallSuccess(callId, resultJson.toString())
+            } catch (e: Throwable) {
+                val msg = e.message.orEmpty()
+                when {
+                    msg.contains("MOBILE_ALREADY_LINKED") -> resolveCallError(callId, "MOBILE_ALREADY_LINKED")
+                    msg.contains("MOBILE_ALREADY_SET") -> resolveCallError(callId, "MOBILE_ALREADY_SET")
+                    msg.contains("PERMISSION_DENIED") -> resolveCallError(callId, "MOBILE_ALREADY_LINKED")
+                    else -> resolveCallError(callId, e.localizedMessage ?: "Failed to link mobile number")
+                }
+            }
+        }
+    }
+
     @JavascriptInterface
     fun signOutGoogle(callId: String) {
         activity.lifecycleScope.launch {
@@ -648,6 +950,8 @@ class NativeFirebaseBridge(
                 stopAdminNotificationsAndChatListeners()
                 stopAdminChatThreadListener()
                 stopAdminListeners()
+                stopStudentListeners()
+                setActiveStudentMobile("")
                 try {
                     credentialManager?.clearCredentialState(ClearCredentialStateRequest())
                 } catch (e: Throwable) {
@@ -656,6 +960,7 @@ class NativeFirebaseBridge(
                     runCatching { auth?.signOut() }
                 }
             }
+            emitAuthState(null)
             resolveCallSuccess(callId, "true")
         }
     }
@@ -4116,6 +4421,17 @@ class NativeFirebaseBridge(
             put("displayName", user.displayName ?: "")
             put("photoUrl", user.photoUrl?.toString() ?: "")
         }
+    }
+
+    private fun serializeUserProfile(doc: DocumentSnapshot): JSONObject = JSONObject().apply {
+        put("uid", doc.getString("uid") ?: doc.id)
+        put("name", doc.getString("name").orEmpty())
+        put("email", doc.getString("email").orEmpty())
+        put("photoURL", doc.getString("photoURL").orEmpty())
+        put("mobileNumber", doc.getString("mobileNumber").orEmpty())
+        put("mobileVerified", doc.getBoolean("mobileVerified") ?: false)
+        put("createdAt", serializeTimestamp(doc.getTimestamp("createdAt")))
+        put("lastLoginAt", serializeTimestamp(doc.getTimestamp("lastLoginAt")))
     }
 
     private fun serializeTimestamp(ts: Timestamp?): Any {

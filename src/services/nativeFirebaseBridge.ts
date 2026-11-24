@@ -40,6 +40,9 @@ interface AndroidFirebaseBridgeApi {
   getFirebaseConfigSummary?: () => string;
   getCurrentAuthUser?: () => string;
   requestGoogleSignIn?: (callId: string) => void;
+  requestUserGoogleSignIn?: (callId: string) => void;
+  getUserProfile?: (callId: string) => void;
+  linkUserMobileNumber?: (callId: string, payloadJson: string) => void;
   signOutGoogle?: (callId: string) => void;
   lookupStudentProfile?: (callId: string, mobileNumber: string) => void;
   loginStudentByMobile?: (callId: string, payloadJson: string) => void;

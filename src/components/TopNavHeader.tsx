@@ -20,11 +20,15 @@ interface TopNavHeaderProps {
   isStudentLoggedIn: boolean;
   studentName?: string;
   studentMobile?: string;
+  studentPhotoUrl?: string;
+  studentEmail?: string;
+  mobileVerified?: boolean;
   isAdmin: boolean;
   adminBadgeCount: number;
   isDarkTheme: boolean;
   onSelectTab: (tab: PublicTabId) => void;
   onStudentLogout: () => void;
+  onOpenProfile?: () => void;
   onToggleTheme: () => void;
   onOpenDisplaySettings?: () => void;
   notificationPermissionStatus?: 'granted' | 'denied' | 'default';
@@ -37,11 +41,15 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
   isStudentLoggedIn,
   studentName = '',
   studentMobile = '',
+  studentPhotoUrl = '',
+  studentEmail = '',
+  mobileVerified = false,
   isAdmin,
   adminBadgeCount,
   isDarkTheme,
   onSelectTab,
   onStudentLogout,
+  onOpenProfile,
   onToggleTheme,
   onOpenDisplaySettings,
   notificationPermissionStatus = 'default',
@@ -169,15 +177,41 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
         </div>
       </div>
 
-      {/* Logged-in Student Strip */}
+      {/* Logged-in Student Profile Strip */}
       {isStudentLoggedIn && activeTab === 'quiz' && (
         <div
           className={`${containerWidthCls} mx-auto py-1.5 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between gap-2 bg-[#FAF9F5]/80 dark:bg-[#0F172A]/60 text-xs`}
         >
-          <div className="flex items-center gap-1.5 min-w-0 font-bold text-[#0F172A] dark:text-[#F8FAFC]">
-            <Smartphone className="h-3.5 w-3.5 text-[#1E3A8A] dark:text-[#93C5FD] shrink-0" />
-            <span className="truncate">{identityLabel}</span>
-          </div>
+          <button
+            type="button"
+            data-testid="open_user_profile_btn"
+            onClick={() => onOpenProfile?.()}
+            title={studentEmail || identityLabel}
+            className="flex items-center gap-2 min-w-0 text-left rounded-xl px-1.5 py-1 hover:bg-slate-100 dark:hover:bg-slate-800/80 transition-colors cursor-pointer"
+          >
+            {studentPhotoUrl ? (
+              <img
+                src={studentPhotoUrl}
+                alt={studentName || 'Student'}
+                referrerPolicy="no-referrer"
+                className="h-7 w-7 rounded-full object-cover border border-[#CBD5E1] dark:border-[#334155] shrink-0"
+              />
+            ) : (
+              <div className="h-7 w-7 rounded-full bg-[#1E3A8A]/10 dark:bg-[#1E3A8A]/40 text-[#1E3A8A] dark:text-[#93C5FD] flex items-center justify-center shrink-0">
+                <Smartphone className="h-3.5 w-3.5" />
+              </div>
+            )}
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5 font-bold text-[#0F172A] dark:text-[#F8FAFC] truncate">
+                <span className="truncate">{identityLabel}</span>
+                {!mobileVerified && (
+                  <span className="hidden sm:inline-block shrink-0 rounded-full bg-amber-100 dark:bg-amber-950/70 text-amber-800 dark:text-amber-300 px-1.5 py-0.5 text-[9px] font-extrabold">
+                    {lang === 'en' ? 'Unverified' : 'OTP બાકી'}
+                  </span>
+                )}
+              </div>
+            </div>
+          </button>
           <button
             type="button"
             data-testid="student_logout_button"

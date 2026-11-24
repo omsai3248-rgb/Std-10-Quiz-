@@ -103,6 +103,8 @@ import {
   getDefaultPrefix,
   getFixedPlanPrice,
   getSubjectDisplayName,
+  isValidIndianMobile10,
+  normalizeIndianMobile10,
   resolveCodeSubjectId,
   resolvePaymentSubjectId,
   type AccessCode,
@@ -129,6 +131,7 @@ import {
   type StudentProfile,
   type SubjectId,
   type UpdateNotificationRecord,
+  type UserProfile,
 } from '../types/models';
 import { getDeviceBrowserInfo } from '../utils/imageUtils';
 import { handleFirestoreError, OperationType } from './firestoreErrorHandler';
@@ -286,6 +289,287 @@ async function verifyAuthorizedAdminWeb(uid: string, email: string, emailVerifie
     // Ignore permission error if uninvited
   }
   return false;
+}
+
+export interface GoogleUserSignInResult {
+  user: AppAuthUser;
+  profile: UserProfile;
+}
+
+const COLLECTION_USERS = 'users';
+const COLLECTION_MOBILE_LOCKS = 'mobile_number_locks';
+
+function mapUserProfileDoc(uid: string, d: Record<string, unknown>, fallback?: Partial<AppAuthUser>): UserProfile {
+  return {
+    uid: String(d.uid ?? uid),
+    name: String(d.name ?? fallback?.displayName ?? '').trim() || 'Student',
+    email: String(d.email ?? fallback?.email ?? '').trim(),
+    photoURL: String(d.photoURL ?? fallback?.photoUrl ?? '').trim(),
+    mobileNumber: String(d.mobileNumber ?? '').trim(),
+    mobileVerified: Boolean(d.mobileVerified === true),
+    createdAt: (d.createdAt as UserProfile['createdAt']) ?? null,
+    lastLoginAt: (d.lastLoginAt as UserProfile['lastLoginAt']) ?? null,
+  };
+}
+
+async function upsertWebUserProfileOnLogin(user: {
+  uid: string;
+  displayName?: string | null;
+  email?: string | null;
+  photoURL?: string | null;
+}): Promise<UserProfile> {
+  const uid = user.uid;
+  const fallbackName =
+    (user.displayName ?? '').trim().slice(0, 80) ||
+    (user.email ?? '').split('@')[0]?.slice(0, 60) ||
+    'Student';
+  const cleanEmail = (user.email ?? '').trim().slice(0, 120);
+  const cleanPhoto = (user.photoURL ?? '').trim().slice(0, 500);
+  const userRef = doc(db, COLLECTION_USERS, uid);
+
+  const existingSnap = await getDoc(userRef);
+  if (!existingSnap.exists()) {
+    const payload = {
+      uid,
+      name: fallbackName,
+      email: cleanEmail,
+      photoURL: cleanPhoto,
+      mobileNumber: '',
+      mobileVerified: false,
+      createdAt: serverTimestamp(),
+      lastLoginAt: serverTimestamp(),
+    };
+    await setDoc(userRef, payload);
+    const createdSnap = await getDoc(userRef);
+    return createdSnap.exists()
+      ? mapUserProfileDoc(uid, createdSnap.data(), {
+          displayName: fallbackName,
+          email: cleanEmail,
+          photoUrl: cleanPhoto,
+        })
+      : {
+          uid,
+          name: fallbackName,
+          email: cleanEmail,
+          photoURL: cleanPhoto,
+          mobileNumber: '',
+          mobileVerified: false,
+          createdAt: null,
+          lastLoginAt: null,
+        };
+  }
+
+  const existingData = existingSnap.data();
+  const nextName = String(existingData.name ?? '').trim() || fallbackName;
+  await updateDoc(userRef, {
+    name: nextName,
+    email: cleanEmail || String(existingData.email ?? ''),
+    photoURL: cleanPhoto || String(existingData.photoURL ?? ''),
+    lastLoginAt: serverTimestamp(),
+  });
+  const refreshed = await getDoc(userRef);
+  return mapUserProfileDoc(uid, refreshed.exists() ? refreshed.data() : existingData, {
+    displayName: nextName,
+    email: cleanEmail,
+    photoUrl: cleanPhoto,
+  });
+}
+
+export async function signInUserWithGoogle(): Promise<GoogleUserSignInResult> {
+  if (hasNativeFirebaseBridge()) {
+    const res = await invokeNativeBridgeCall<GoogleUserSignInResult>((callId) => {
+      window.AndroidFirebaseBridge?.requestUserGoogleSignIn?.(callId);
+    });
+    if (res?.user?.uid) {
+      if (res.user.email && isAdminAccount(res.user.phoneNumber, res.user.email)) {
+        registerVerifiedAdminEmail(res.user.email);
+      }
+      notifyNativeAuthUser(res.user);
+    }
+    return res;
+  }
+  if (typeof window !== 'undefined' && Boolean(window.AndroidBridge)) {
+    throw new Error('NATIVE_FIREBASE_MISSING');
+  }
+  try {
+    const cred = await signInWithPopup(auth, googleProvider);
+    const profile = await upsertWebUserProfileOnLogin(cred.user);
+    const appUser: AppAuthUser = {
+      uid: cred.user.uid,
+      email: cred.user.email ?? '',
+      phoneNumber: cred.user.phoneNumber ?? '',
+      emailVerified: Boolean(cred.user.emailVerified),
+      displayName: cred.user.displayName ?? '',
+      photoUrl: cred.user.photoURL ?? '',
+    };
+    return { user: appUser, profile };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err ?? '');
+    const lower = msg.toLowerCase();
+    if (lower.includes('popup-closed') || lower.includes('cancelled')) {
+      throw new Error('SIGN_IN_CANCELLED');
+    }
+    if (
+      lower.includes('action is invalid') ||
+      lower.includes('unauthorized-domain') ||
+      lower.includes('operation-not-allowed') ||
+      lower.includes('operation-not-supported') ||
+      lower.includes('popup-blocked')
+    ) {
+      throw new Error('GOOGLE_SIGNIN_CONFIG_ERROR');
+    }
+    throw err;
+  }
+}
+
+export async function fetchCurrentUserProfile(): Promise<UserProfile | null> {
+  if (hasNativeFirebaseBridge()) {
+    const current = getNativeCurrentAuthUser();
+    if (!current?.uid) return null;
+    const profile = await invokeNativeBridgeCall<UserProfile | null>((callId) => {
+      window.AndroidFirebaseBridge?.getUserProfile?.(callId);
+    });
+    return profile ?? null;
+  }
+  const currentUser = auth.currentUser;
+  if (!currentUser) return null;
+  return upsertWebUserProfileOnLogin(currentUser);
+}
+
+export async function linkMobileNumberToUserProfile(params: {
+  mobileNumber: string;
+  displayName?: string;
+}): Promise<UserProfile> {
+  const mobile10 = normalizeIndianMobile10(params.mobileNumber);
+  if (!isValidIndianMobile10(mobile10)) {
+    throw new Error('INVALID_MOBILE');
+  }
+
+  const currentUser = hasNativeFirebaseBridge() ? getNativeCurrentAuthUser() : auth.currentUser;
+  if (!currentUser?.uid) {
+    throw new Error('AUTH_REQUIRED');
+  }
+  const isCurrentAdmin = isAdminAccount(
+    currentUser.phoneNumber ?? '',
+    currentUser.email ?? ''
+  );
+  if (mobile10 === ADMIN_PHONE_TEN_DIGITS && !isCurrentAdmin) {
+    throw new Error('RESERVED_ADMIN_MOBILE');
+  }
+
+  if (hasNativeFirebaseBridge()) {
+    return invokeNativeBridgeCall<UserProfile>((callId) => {
+      window.AndroidFirebaseBridge?.linkUserMobileNumber?.(
+        callId,
+        JSON.stringify({
+          mobileNumber: mobile10,
+          displayName: (params.displayName ?? '').trim().slice(0, 80),
+        })
+      );
+    });
+  }
+
+  const webUser = auth.currentUser;
+  if (!webUser) {
+    throw new Error('AUTH_REQUIRED');
+  }
+  const uid = webUser.uid;
+  const e164 = `+91${mobile10}`;
+  const effectiveName =
+    (params.displayName ?? '').trim().slice(0, 80) ||
+    (webUser.displayName ?? '').trim().slice(0, 80) ||
+    (webUser.email ?? '').split('@')[0]?.slice(0, 60) ||
+    'Student';
+  const cleanEmail = (webUser.email ?? '').trim().slice(0, 120);
+  const cleanPhoto = (webUser.photoURL ?? '').trim().slice(0, 500);
+
+  const lockRef = doc(db, COLLECTION_MOBILE_LOCKS, mobile10);
+  const userRef = doc(db, COLLECTION_USERS, uid);
+
+  try {
+    await runTransaction(db, async (tx) => {
+      const lockSnap = await tx.get(lockRef);
+      const userSnap = await tx.get(userRef);
+
+      if (lockSnap.exists()) {
+        const ownerUid = String(lockSnap.data().uid ?? '');
+        if (ownerUid !== uid) {
+          throw new Error('MOBILE_ALREADY_LINKED');
+        }
+      }
+
+      if (userSnap.exists()) {
+        const existingMob = String(userSnap.data().mobileNumber ?? '');
+        if (existingMob && existingMob !== e164) {
+          throw new Error('MOBILE_ALREADY_SET');
+        }
+      }
+
+      if (!lockSnap.exists()) {
+        tx.set(lockRef, {
+          uid,
+          mobileNumber: e164,
+          createdAt: serverTimestamp(),
+        });
+      }
+
+      if (!userSnap.exists()) {
+        tx.set(userRef, {
+          uid,
+          name: effectiveName,
+          email: cleanEmail,
+          photoURL: cleanPhoto,
+          mobileNumber: e164,
+          mobileVerified: false,
+          createdAt: serverTimestamp(),
+          lastLoginAt: serverTimestamp(),
+        });
+      } else {
+        tx.update(userRef, {
+          name: effectiveName,
+          email: cleanEmail,
+          photoURL: cleanPhoto,
+          mobileNumber: e164,
+          lastLoginAt: serverTimestamp(),
+        });
+      }
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err ?? '');
+    if (msg.includes('MOBILE_ALREADY_LINKED') || msg.toLowerCase().includes('permission')) {
+      throw new Error('MOBILE_ALREADY_LINKED');
+    }
+    if (msg.includes('MOBILE_ALREADY_SET')) {
+      throw new Error('MOBILE_ALREADY_SET');
+    }
+    throw err;
+  }
+
+  const refreshed = await getDoc(userRef);
+  return refreshed.exists()
+    ? mapUserProfileDoc(uid, refreshed.data())
+    : {
+        uid,
+        name: effectiveName,
+        email: cleanEmail,
+        photoURL: cleanPhoto,
+        mobileNumber: e164,
+        mobileVerified: false,
+        createdAt: null,
+        lastLoginAt: null,
+      };
+}
+
+export async function signOutUserSession(): Promise<void> {
+  setNativeActiveStudentMobile('');
+  if (hasNativeFirebaseBridge()) {
+    await invokeNativeBridgeCall<boolean>((callId) => {
+      window.AndroidFirebaseBridge?.signOutGoogle?.(callId);
+    });
+    notifyNativeAuthUser(null);
+    return;
+  }
+  await signOut(auth);
 }
 
 export async function signInAdminWithGoogle(): Promise<AppAuthUser> {

@@ -3,6 +3,43 @@ import type { Timestamp } from 'firebase/firestore';
 export type SubjectId = 'maths' | 'science' | 'social_science' | 'english' | 'gujarati' | 'hindi';
 export type AccessScopeId = SubjectId | 'all';
 
+export interface UserProfile {
+  uid: string;
+  name: string;
+  email: string;
+  photoURL: string;
+  mobileNumber: string; // "" until set, then "+91XXXXXXXXXX"
+  mobileVerified: boolean; // Always false without real SMS OTP
+  createdAt: Timestamp | null;
+  lastLoginAt: Timestamp | null;
+}
+
+export function normalizeIndianMobile10(input: string): string {
+  const digits = input.replace(/\D/g, '');
+  if (digits.length === 12 && digits.startsWith('91')) {
+    return digits.slice(2);
+  }
+  if (digits.length === 11 && digits.startsWith('0')) {
+    return digits.slice(1);
+  }
+  return digits.slice(0, 10);
+}
+
+export function isValidIndianMobile10(digits10: string): boolean {
+  return /^[0-9]{10}$/.test(digits10);
+}
+
+export function toIndianE164(input: string): string {
+  const d10 = normalizeIndianMobile10(input);
+  return isValidIndianMobile10(d10) ? `+91${d10}` : '';
+}
+
+export function formatIndianMobileDisplay(mobileNumber: string): string {
+  const d10 = normalizeIndianMobile10(mobileNumber);
+  if (!isValidIndianMobile10(d10)) return mobileNumber || '';
+  return `+91 ${d10.slice(0, 5)} ${d10.slice(5)}`;
+}
+
 export interface StudentProfile {
   id: string;
   userId: string;
