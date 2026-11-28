@@ -372,6 +372,40 @@
         "senderUid", "senderName", "pushDispatched", "recipientCount",
         "createdAt", "updatedAt"
       ]
+    },
+    "BookOrder": {
+      "title": "BookOrder",
+      "description": "Admin-managed book order record with customer/school name, subject (maths, science, social_science, combo), unit price, quantity, computed total amount, and pending/done payment status.",
+      "type": "object",
+      "properties": {
+        "customerName": { "type": "string" },
+        "subject": { "type": "string", "enum": ["maths", "science", "social_science", "combo"] },
+        "unitPrice": { "type": "integer" },
+        "quantity": { "type": "integer" },
+        "totalAmount": { "type": "integer" },
+        "paymentStatus": { "type": "string", "enum": ["pending", "done"] },
+        "createdByUid": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "customerName", "subject", "unitPrice", "quantity",
+        "totalAmount", "paymentStatus", "createdByUid",
+        "createdAt", "updatedAt"
+      ]
+    },
+    "BookStockInventory": {
+      "title": "BookStockInventory",
+      "description": "Admin-managed total book stock counts for Maths, Science, and Social Science.",
+      "type": "object",
+      "properties": {
+        "maths": { "type": "integer" },
+        "science": { "type": "integer" },
+        "social_science": { "type": "integer" },
+        "updatedByUid": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["maths", "science", "social_science", "updatedByUid", "updatedAt"]
     }
   },
   "firestore": {
@@ -442,6 +476,14 @@
     "/push_broadcasts/{broadcastId}": {
       "schema": { "$ref": "#/entities/PushBroadcast" },
       "description": "Admin-authored real-time push broadcasts (messages, exam notices, app updates) triggering server-side FCM fan-out."
+    },
+    "/book_orders/{orderId}": {
+      "schema": { "$ref": "#/entities/BookOrder" },
+      "description": "Admin-only book order records synchronized live across admin devices."
+    },
+    "/book_stock/{stockId}": {
+      "schema": { "$ref": "#/entities/BookStockInventory" },
+      "description": "Admin-only book stock inventory totals (maths, science, social_science)."
     }
   }
 }

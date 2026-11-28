@@ -10,11 +10,15 @@ import type {
   AdminUser,
   AppReleaseConfig,
   AppUpdateProgressEvent,
+  BookOrder,
+  BookOrderPaymentStatus,
+  BookStockInventory,
   InspectedApkMetadata,
   InstalledAppInfo,
   PaymentRequest,
   PushBroadcastRecord,
   QuizAttempt,
+  SaveBookOrderInput,
   SendPushBroadcastInput,
   StudentProfile,
   UpdateNotificationRecord,
@@ -104,6 +108,10 @@ interface AndroidFirebaseBridgeApi {
   publishAppUpdate?: (callId: string, payloadJson: string) => void;
   downloadAndInstallAppUpdate?: (callId: string, payloadJson: string) => void;
   retryInstallPendingApk?: (callId: string) => void;
+  saveBookOrder?: (callId: string, payloadJson: string) => void;
+  toggleBookOrderStatus?: (callId: string, payloadJson: string) => void;
+  deleteBookOrder?: (callId: string, orderId: string) => void;
+  updateBookStock?: (callId: string, payloadJson: string) => void;
 }
 
 declare global {
@@ -135,6 +143,8 @@ declare global {
     __onNativeAdminNotifications?: (list: AdminNotificationItem[]) => void;
     __onNativeAdminChats?: (list: AdminChatThread[]) => void;
     __onNativeAdminChatMessages?: (list: AdminChatMessage[]) => void;
+    __onNativeBookOrders?: (list: BookOrder[]) => void;
+    __onNativeBookStock?: (stock: BookStockInventory | null) => void;
   }
 }
 
@@ -216,6 +226,8 @@ const adminChatsListeners = new Set<(list: AdminChatThread[]) => void>();
 const adminChatMessageListeners = new Set<(list: AdminChatMessage[]) => void>();
 const notifPermissionListeners = new Set<(status: 'granted' | 'denied') => void>();
 const adminDeepLinkListeners = new Set<(payload: AdminDeepLinkPayload) => void>();
+const bookOrdersListeners = new Set<(list: BookOrder[]) => void>();
+const bookStockListeners = new Set<(stock: BookStockInventory | null) => void>();
 
 let latestAuthUser: AppAuthUser | null | undefined;
 let latestReleaseConfig: AppReleaseConfig | null | undefined;
@@ -234,6 +246,8 @@ let latestAdminInvites: AdminInvite[] | undefined;
 let latestAdminNotifications: AdminNotificationItem[] | undefined;
 let latestAdminChats: AdminChatThread[] | undefined;
 let latestAdminChatMessages: AdminChatMessage[] | undefined;
+let latestBookOrders: BookOrder[] | undefined;
+let latestBookStock: BookStockInventory | null | undefined;
 
 if (typeof window !== 'undefined') {
   window.__resolveNativeFirebaseCall = (callId, ok, payload) => {
@@ -255,6 +269,8 @@ if (typeof window !== 'undefined') {
       latestAdminNotifications = undefined;
       latestAdminChats = undefined;
       latestAdminChatMessages = undefined;
+      latestBookOrders = undefined;
+      latestBookStock = undefined;
     }
     authListeners.forEach((cb) => cb(latestAuthUser ?? null));
   };
@@ -388,6 +404,16 @@ if (typeof window !== 'undefined') {
     latestAdminChatMessages = Array.isArray(list) ? list : [];
     adminChatMessageListeners.forEach((cb) => cb(latestAdminChatMessages!));
   };
+
+  window.__onNativeBookOrders = (list) => {
+    latestBookOrders = Array.isArray(list) ? list : [];
+    bookOrdersListeners.forEach((cb) => cb(latestBookOrders!));
+  };
+
+  window.__onNativeBookStock = (stock) => {
+    latestBookStock = stock && typeof stock === 'object' ? stock : null;
+    bookStockListeners.forEach((cb) => cb(latestBookStock ?? null));
+  };
 }
 
 export function invokeNativeBridgeCall<T>(
@@ -484,7 +510,9 @@ function maybeStopNativeAdminListeners(): void {
   if (
     allPaymentListeners.size === 0 &&
     allCodeListeners.size === 0 &&
-    allStudentListeners.size === 0
+    allStudentListeners.size === 0 &&
+    bookOrdersListeners.size === 0 &&
+    bookStockListeners.size === 0
   ) {
     adminListenersStarted = false;
     setLiveSyncState('paused');
@@ -1003,5 +1031,74 @@ export async function retryNativePendingApkInstall(): Promise<{ status: string }
     window.AndroidFirebaseBridge?.retryInstallPendingApk?.(callId);
   });
 }
+
+// =========================================================================
+// Native Book Order Management Bridge Calls
+// =========================================================================
+
+export function subscribeNativeBookOrders(
+  cb: (list: BookOrder[]) => void,
+  onError?: (err: Error) => void
+): () => void {
+  bookOrdersListeners.add(cb);
+  if (onError) adminErrorListeners.add(onError);
+  if (latestBookOrders !== undefined) cb(latestBookOrders);
+  ensureNativeAdminListenersStarted();
+  return () => {
+    bookOrdersListeners.delete(cb);
+    if (onError) adminErrorListeners.delete(onError);
+    maybeStopNativeAdminListeners();
+  };
+}
+
+export function subscribeNativeBookStock(
+  cb: (stock: BookStockInventory | null) => void,
+  onError?: (err: Error) => void
+): () => void {
+  bookStockListeners.add(cb);
+  if (onError) adminErrorListeners.add(onError);
+  if (latestBookStock !== undefined) cb(latestBookStock);
+  ensureNativeAdminListenersStarted();
+  return () => {
+    bookStockListeners.delete(cb);
+    if (onError) adminErrorListeners.delete(onError);
+    maybeStopNativeAdminListeners();
+  };
+}
+
+export async function saveNativeBookOrder(input: SaveBookOrderInput): Promise<{ id: string }> {
+  return invokeNativeBridgeCall<{ id: string }>((callId) => {
+    window.AndroidFirebaseBridge?.saveBookOrder?.(callId, JSON.stringify(input));
+  });
+}
+
+export async function toggleNativeBookOrderStatus(
+  orderId: string,
+  paymentStatus: BookOrderPaymentStatus
+): Promise<void> {
+  await invokeNativeBridgeCall((callId) => {
+    window.AndroidFirebaseBridge?.toggleBookOrderStatus?.(
+      callId,
+      JSON.stringify({ orderId, paymentStatus })
+    );
+  });
+}
+
+export async function deleteNativeBookOrder(orderId: string): Promise<void> {
+  await invokeNativeBridgeCall((callId) => {
+    window.AndroidFirebaseBridge?.deleteBookOrder?.(callId, orderId);
+  });
+}
+
+export async function updateNativeBookStock(stock: {
+  maths: number;
+  science: number;
+  social_science: number;
+}): Promise<void> {
+  await invokeNativeBridgeCall((callId) => {
+    window.AndroidFirebaseBridge?.updateBookStock?.(callId, JSON.stringify(stock));
+  });
+}
+
 
 

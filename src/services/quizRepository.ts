@@ -31,6 +31,7 @@ import { auth, db, googleProvider, storage } from '../firebase';
 import {
   addNativeAdminInvite,
   deleteNativeAdminNotification,
+  deleteNativeBookOrder,
   deleteNativePushBroadcast,
   forceRefreshNativeAdminListeners,
   getActiveFirebaseSummary,
@@ -53,6 +54,7 @@ import {
   removeNativeAdminInvite,
   requestNativeNotificationPermission,
   resumeNativeAdminListeners,
+  saveNativeBookOrder,
   sendNativeAdminChatMessage,
   sendNativePushBroadcast,
   setNativeActiveStudentMobile,
@@ -66,6 +68,8 @@ import {
   subscribeNativeAllStudents,
   subscribeNativeApkUploadProgress,
   subscribeNativeAuthState,
+  subscribeNativeBookOrders,
+  subscribeNativeBookStock,
   subscribeNativeMyAttempts,
   subscribeNativeMyPayments,
   subscribeNativePushBroadcasts,
@@ -73,8 +77,10 @@ import {
   subscribeNativeStudentProfile,
   subscribeNativeUpdateNotifications,
   syncNativeAdminProfileAndFcmToken,
+  toggleNativeBookOrderStatus,
   triggerNativeActiveSessionCheck,
   updateNativeAdminNotificationPrefs,
+  updateNativeBookStock,
   type AppAuthUser,
 } from './nativeFirebaseBridge';
 import {
@@ -100,6 +106,7 @@ import {
 import {
   ALL_SUBJECT_IDS,
   DEFAULT_ADMIN_NOTIFICATION_PREFS,
+  DEFAULT_BOOK_STOCK,
   getDefaultPrefix,
   getFixedPlanPrice,
   getSubjectDisplayName,
@@ -120,6 +127,10 @@ import {
   type AdminUser,
   type AppReleaseConfig,
   type AppReleaseRecord,
+  type BookOrder,
+  type BookOrderPaymentStatus,
+  type BookOrderSubject,
+  type BookStockInventory,
   type ChatMessageStatus,
   type PaymentRequest,
   type PushBroadcastCategory,
@@ -127,6 +138,7 @@ import {
   type PushBroadcastTargetRoute,
   type PublishAppUpdateInput,
   type QuizAttempt,
+  type SaveBookOrderInput,
   type SendPushBroadcastInput,
   type StudentProfile,
   type SubjectId,
@@ -4246,4 +4258,244 @@ export async function markAdminChatMessagesRead(chatId: string): Promise<void> {
     await batch.commit();
   }
 }
+
+// ============================================================================
+// Admin-Only Book Order Management (/book_orders & /book_stock/inventory)
+// ============================================================================
+
+export const COLLECTION_BOOK_ORDERS = 'book_orders';
+export const COLLECTION_BOOK_STOCK = 'book_stock';
+export const DOC_BOOK_STOCK_INVENTORY = 'inventory';
+
+const VALID_BOOK_SUBJECTS: BookOrderSubject[] = ['maths', 'science', 'social_science', 'combo'];
+
+function normalizeBookSubject(raw: unknown): BookOrderSubject {
+  const s = String(raw ?? '').trim();
+  return (VALID_BOOK_SUBJECTS as string[]).includes(s) ? (s as BookOrderSubject) : 'maths';
+}
+
+function mapBookOrderDoc(id: string, data: Record<string, unknown>): BookOrder {
+  const unitPrice = Math.max(0, Math.round(Number(data.unitPrice ?? 0) || 0));
+  const quantity = Math.max(1, Math.round(Number(data.quantity ?? 1) || 1));
+  const rawTotal = Number(data.totalAmount);
+  const totalAmount = Number.isFinite(rawTotal) && rawTotal >= 0 ? Math.round(rawTotal) : unitPrice * quantity;
+  return {
+    id,
+    customerName: String(data.customerName ?? '').trim(),
+    subject: normalizeBookSubject(data.subject),
+    unitPrice,
+    quantity,
+    totalAmount,
+    paymentStatus: data.paymentStatus === 'done' ? 'done' : 'pending',
+    createdByUid: String(data.createdByUid ?? ''),
+    createdAt: (data.createdAt as Timestamp | null) ?? null,
+    updatedAt: (data.updatedAt as Timestamp | null) ?? null,
+  };
+}
+
+function mapBookStockDoc(data: Record<string, unknown> | null | undefined): BookStockInventory {
+  if (!data) return { ...DEFAULT_BOOK_STOCK };
+  return {
+    maths: Math.max(0, Math.round(Number(data.maths ?? DEFAULT_BOOK_STOCK.maths))),
+    science: Math.max(0, Math.round(Number(data.science ?? DEFAULT_BOOK_STOCK.science))),
+    social_science: Math.max(
+      0,
+      Math.round(Number(data.social_science ?? DEFAULT_BOOK_STOCK.social_science))
+    ),
+    updatedByUid: typeof data.updatedByUid === 'string' ? data.updatedByUid : undefined,
+    updatedAt: (data.updatedAt as Timestamp | null) ?? null,
+  };
+}
+
+export function observeBookOrders(
+  onData: (orders: BookOrder[]) => void,
+  onError?: (err: Error) => void
+): Unsubscribe {
+  if (hasNativeFirebaseBridge()) {
+    return subscribeNativeBookOrders(onData, onError);
+  }
+  const q = query(collection(db, COLLECTION_BOOK_ORDERS), orderBy('createdAt', 'desc'));
+  return onSnapshot(
+    q,
+    (snap) => {
+      const list = snap.docs.map((d) => mapBookOrderDoc(d.id, d.data() as Record<string, unknown>));
+      onData(list);
+      if (!snap.metadata.fromCache) {
+        markServerSyncSuccess();
+      }
+    },
+    (error) => {
+      markServerSyncError(error);
+      onError?.(error);
+    }
+  );
+}
+
+export function observeBookStock(
+  onData: (stock: BookStockInventory) => void,
+  onError?: (err: Error) => void
+): Unsubscribe {
+  if (hasNativeFirebaseBridge()) {
+    return subscribeNativeBookStock((raw) => {
+      onData(raw ? mapBookStockDoc(raw as unknown as Record<string, unknown>) : { ...DEFAULT_BOOK_STOCK });
+    }, onError);
+  }
+  const stockRef = doc(db, COLLECTION_BOOK_STOCK, DOC_BOOK_STOCK_INVENTORY);
+  return onSnapshot(
+    stockRef,
+    (snap) => {
+      if (snap.exists()) {
+        onData(mapBookStockDoc(snap.data() as Record<string, unknown>));
+      } else {
+        onData({ ...DEFAULT_BOOK_STOCK });
+      }
+    },
+    (error) => {
+      markServerSyncError(error);
+      onError?.(error);
+    }
+  );
+}
+
+export async function saveBookOrderAdmin(input: SaveBookOrderInput): Promise<{ id: string }> {
+  const customerName = input.customerName.trim().slice(0, 80);
+  if (!customerName) {
+    throw new Error('ગ્રાહકનું નામ દાખલ કરો.');
+  }
+  const subject = normalizeBookSubject(input.subject);
+  const unitPrice = Math.min(100000, Math.max(0, Math.round(Number(input.unitPrice) || 0)));
+  const quantity = Math.min(10000, Math.max(1, Math.round(Number(input.quantity) || 1)));
+  const totalAmount = unitPrice * quantity;
+  const paymentStatus: BookOrderPaymentStatus = input.paymentStatus === 'done' ? 'done' : 'pending';
+
+  const normalizedInput: SaveBookOrderInput = {
+    ...(input.id ? { id: input.id.trim() } : {}),
+    customerName,
+    subject,
+    unitPrice,
+    quantity,
+    paymentStatus,
+  };
+
+  if (hasNativeFirebaseBridge()) {
+    return saveNativeBookOrder(normalizedInput);
+  }
+
+  const uid = requireUserId();
+  const isEdit = Boolean(normalizedInput.id);
+  const orderId = isEdit
+    ? normalizedInput.id!.replace(/[^a-zA-Z0-9_-]/g, '_')
+    : `ord_${Date.now()}_${Math.floor(1000 + Math.random() * 9000)}`;
+  const orderRef = doc(db, COLLECTION_BOOK_ORDERS, orderId);
+
+  try {
+    if (isEdit) {
+      await updateDoc(orderRef, {
+        customerName,
+        subject,
+        unitPrice,
+        quantity,
+        totalAmount,
+        paymentStatus,
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      await setDoc(orderRef, {
+        customerName,
+        subject,
+        unitPrice,
+        quantity,
+        totalAmount,
+        paymentStatus,
+        createdByUid: uid,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+    markServerSyncSuccess();
+    return { id: orderId };
+  } catch (error) {
+    markServerSyncError(error);
+    handleFirestoreError(error, isEdit ? OperationType.UPDATE : OperationType.CREATE, orderRef.path);
+  }
+}
+
+export async function toggleBookOrderPaymentStatusAdmin(
+  orderId: string,
+  nextStatus: BookOrderPaymentStatus
+): Promise<void> {
+  const cleanId = orderId.trim();
+  if (!cleanId) return;
+  const status: BookOrderPaymentStatus = nextStatus === 'done' ? 'done' : 'pending';
+
+  if (hasNativeFirebaseBridge()) {
+    await toggleNativeBookOrderStatus(cleanId, status);
+    return;
+  }
+
+  requireUserId();
+  const orderRef = doc(db, COLLECTION_BOOK_ORDERS, cleanId);
+  try {
+    await updateDoc(orderRef, {
+      paymentStatus: status,
+      updatedAt: serverTimestamp(),
+    });
+    markServerSyncSuccess();
+  } catch (error) {
+    markServerSyncError(error);
+    handleFirestoreError(error, OperationType.UPDATE, orderRef.path);
+  }
+}
+
+export async function deleteBookOrderAdmin(orderId: string): Promise<void> {
+  const cleanId = orderId.trim();
+  if (!cleanId) return;
+
+  if (hasNativeFirebaseBridge()) {
+    await deleteNativeBookOrder(cleanId);
+    return;
+  }
+
+  requireUserId();
+  const orderRef = doc(db, COLLECTION_BOOK_ORDERS, cleanId);
+  try {
+    await deleteDoc(orderRef);
+    markServerSyncSuccess();
+  } catch (error) {
+    markServerSyncError(error);
+    handleFirestoreError(error, OperationType.DELETE, orderRef.path);
+  }
+}
+
+export async function updateBookStockAdmin(stock: {
+  maths: number;
+  science: number;
+  social_science: number;
+}): Promise<void> {
+  const cleanStock = {
+    maths: Math.min(1000000, Math.max(0, Math.round(Number(stock.maths) || 0))),
+    science: Math.min(1000000, Math.max(0, Math.round(Number(stock.science) || 0))),
+    social_science: Math.min(1000000, Math.max(0, Math.round(Number(stock.social_science) || 0))),
+  };
+
+  if (hasNativeFirebaseBridge()) {
+    await updateNativeBookStock(cleanStock);
+    return;
+  }
+
+  const uid = requireUserId();
+  const stockRef = doc(db, COLLECTION_BOOK_STOCK, DOC_BOOK_STOCK_INVENTORY);
+  try {
+    await setDoc(stockRef, {
+      ...cleanStock,
+      updatedByUid: uid,
+      updatedAt: serverTimestamp(),
+    });
+    markServerSyncSuccess();
+  } catch (error) {
+    markServerSyncError(error);
+    handleFirestoreError(error, OperationType.WRITE, stockRef.path);
+  }
+}
+
 

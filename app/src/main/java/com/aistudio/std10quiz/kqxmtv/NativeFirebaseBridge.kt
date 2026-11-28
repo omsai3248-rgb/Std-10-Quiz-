@@ -2085,6 +2085,31 @@ class NativeFirebaseBridge(
             } else {
                 emitToJs("window.__onNativeAllStudents", loadAdminListBackup("all_students"))
             }
+
+            val bookOrdersCache = runCatching {
+                localDb.collection("book_orders")
+                    .orderBy("createdAt", Query.Direction.DESCENDING)
+                    .get(Source.CACHE)
+                    .awaitResult()
+            }.getOrNull()
+            if (bookOrdersCache != null && !bookOrdersCache.isEmpty) {
+                val arr = JSONArray()
+                bookOrdersCache.documents.forEach { arr.put(serializeBookOrder(it)) }
+                val jsonStr = arr.toString()
+                saveAdminListBackup("book_orders", jsonStr)
+                emitToJs("window.__onNativeBookOrders", jsonStr)
+            } else {
+                emitToJs("window.__onNativeBookOrders", loadAdminListBackup("book_orders"))
+            }
+
+            val bookStockCache = runCatching {
+                localDb.collection("book_stock").document("inventory")
+                    .get(Source.CACHE)
+                    .awaitResult()
+            }.getOrNull()
+            if (bookStockCache != null && bookStockCache.exists()) {
+                emitToJs("window.__onNativeBookStock", serializeBookStock(bookStockCache).toString())
+            }
         }
     }
 
@@ -2333,6 +2358,218 @@ class NativeFirebaseBridge(
                     }
                 }
             adminListeners.add(releaseReg)
+
+            val bookOrdersReg = localDb.collection("book_orders")
+                .orderBy("createdAt", Query.Direction.DESCENDING)
+                .addSnapshotListener { snap, error ->
+                    if (error != null) {
+                        handleFirestoreError(error, OperationType.LIST, "book_orders")
+                        if (isQuotaOrOfflineException(error)) {
+                            pauseAdminListenersOnQuota(localDb)
+                        }
+                        return@addSnapshotListener
+                    }
+                    val arr = JSONArray()
+                    snap?.documents?.forEach { arr.put(serializeBookOrder(it)) }
+                    val jsonStr = arr.toString()
+                    saveAdminListBackup("book_orders", jsonStr)
+                    emitToJs("window.__onNativeBookOrders", jsonStr)
+                    if (snap != null && !snap.metadata.isFromCache) {
+                        emitNativeSyncState(
+                            serverConnected = true,
+                            liveSyncActive = adminListenersActive,
+                            lastSyncAtMs = System.currentTimeMillis(),
+                            errorKind = "none",
+                            quotaCooldownUntilMs = 0L,
+                            lastErrorMessage = ""
+                        )
+                    }
+                }
+            adminListeners.add(bookOrdersReg)
+
+            val bookStockReg = localDb.collection("book_stock").document("inventory")
+                .addSnapshotListener { snap, error ->
+                    if (error != null) {
+                        handleFirestoreError(error, OperationType.GET, "book_stock/inventory")
+                        return@addSnapshotListener
+                    }
+                    if (snap != null && snap.exists()) {
+                        emitToJs("window.__onNativeBookStock", serializeBookStock(snap).toString())
+                    } else {
+                        emitToJs("window.__onNativeBookStock", "null")
+                    }
+                }
+            adminListeners.add(bookStockReg)
+        }
+    }
+
+    @JavascriptInterface
+    fun saveBookOrder(callId: String, payloadJson: String) {
+        val localDb = db ?: run {
+            resolveCallError(callId, "Firebase Firestore is not initialized.")
+            return
+        }
+        val uid = auth?.currentUser?.uid
+        if (uid.isNullOrBlank() || !isCurrentUserAdmin()) {
+            resolveCallError(callId, "Admin authentication required.")
+            return
+        }
+        activity.lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val obj = JSONObject(payloadJson)
+                val existingId = obj.optString("id").trim()
+                val customerName = obj.optString("customerName").trim().take(80)
+                val subject = obj.optString("subject").trim()
+                val unitPrice = obj.optInt("unitPrice", 0).coerceIn(0, 100000)
+                val quantity = obj.optInt("quantity", 1).coerceIn(1, 10000)
+                val totalAmount = unitPrice * quantity
+                val paymentStatus = if (obj.optString("paymentStatus").trim() == "done") "done" else "pending"
+
+                if (customerName.isEmpty()) {
+                    resolveCallError(callId, "ગ્રાહકનું નામ દાખલ કરો.")
+                    return@launch
+                }
+                if (subject !in listOf("maths", "science", "social_science", "combo")) {
+                    resolveCallError(callId, "માન્ય વિષય પસંદ કરો.")
+                    return@launch
+                }
+
+                val orderId = if (existingId.isNotEmpty()) {
+                    existingId.replace(Regex("[^a-zA-Z0-9_\\-]"), "_")
+                } else {
+                    "ord_${System.currentTimeMillis()}_${(1000..9999).random()}"
+                }
+                val docRef = localDb.collection("book_orders").document(orderId)
+
+                if (existingId.isNotEmpty()) {
+                    docRef.update(
+                        mapOf(
+                            "customerName" to customerName,
+                            "subject" to subject,
+                            "unitPrice" to unitPrice,
+                            "quantity" to quantity,
+                            "totalAmount" to totalAmount,
+                            "paymentStatus" to paymentStatus,
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    ).awaitResult()
+                } else {
+                    docRef.set(
+                        mapOf(
+                            "customerName" to customerName,
+                            "subject" to subject,
+                            "unitPrice" to unitPrice,
+                            "quantity" to quantity,
+                            "totalAmount" to totalAmount,
+                            "paymentStatus" to paymentStatus,
+                            "createdByUid" to uid,
+                            "createdAt" to FieldValue.serverTimestamp(),
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    ).awaitResult()
+                }
+                resolveCallSuccess(callId, JSONObject().put("id", orderId).toString())
+            } catch (e: Exception) {
+                handleFirestoreError(e, OperationType.WRITE, "book_orders")
+                resolveCallError(callId, e.localizedMessage ?: "ઓર્ડર સેવ કરવામાં ભૂલ આવી.")
+            }
+        }
+    }
+
+    @JavascriptInterface
+    fun toggleBookOrderStatus(callId: String, payloadJson: String) {
+        val localDb = db ?: run {
+            resolveCallError(callId, "Firebase Firestore is not initialized.")
+            return
+        }
+        if (!isCurrentUserAdmin()) {
+            resolveCallError(callId, "Admin authentication required.")
+            return
+        }
+        activity.lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val obj = JSONObject(payloadJson)
+                val orderId = obj.optString("orderId").trim()
+                val nextStatus = if (obj.optString("paymentStatus").trim() == "done") "done" else "pending"
+                if (orderId.isEmpty()) {
+                    resolveCallError(callId, "Invalid order ID.")
+                    return@launch
+                }
+                localDb.collection("book_orders").document(orderId)
+                    .update(
+                        mapOf(
+                            "paymentStatus" to nextStatus,
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                    .awaitResult()
+                resolveCallSuccess(callId, "true")
+            } catch (e: Exception) {
+                handleFirestoreError(e, OperationType.UPDATE, "book_orders")
+                resolveCallError(callId, e.localizedMessage ?: "પેમેન્ટ સ્થિતિ બદલવામાં ભૂલ આવી.")
+            }
+        }
+    }
+
+    @JavascriptInterface
+    fun deleteBookOrder(callId: String, orderIdRaw: String) {
+        val localDb = db ?: run {
+            resolveCallError(callId, "Firebase Firestore is not initialized.")
+            return
+        }
+        if (!isCurrentUserAdmin()) {
+            resolveCallError(callId, "Admin authentication required.")
+            return
+        }
+        activity.lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val orderId = orderIdRaw.trim()
+                if (orderId.isEmpty()) {
+                    resolveCallError(callId, "Invalid order ID.")
+                    return@launch
+                }
+                localDb.collection("book_orders").document(orderId).delete().awaitResult()
+                resolveCallSuccess(callId, "true")
+            } catch (e: Exception) {
+                handleFirestoreError(e, OperationType.DELETE, "book_orders/$orderIdRaw")
+                resolveCallError(callId, e.localizedMessage ?: "ઓર્ડર કાઢવામાં ભૂલ આવી.")
+            }
+        }
+    }
+
+    @JavascriptInterface
+    fun updateBookStock(callId: String, payloadJson: String) {
+        val localDb = db ?: run {
+            resolveCallError(callId, "Firebase Firestore is not initialized.")
+            return
+        }
+        val uid = auth?.currentUser?.uid
+        if (uid.isNullOrBlank() || !isCurrentUserAdmin()) {
+            resolveCallError(callId, "Admin authentication required.")
+            return
+        }
+        activity.lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val obj = JSONObject(payloadJson)
+                val maths = obj.optInt("maths", 350).coerceIn(0, 1000000)
+                val science = obj.optInt("science", 350).coerceIn(0, 1000000)
+                val socialScience = obj.optInt("social_science", 300).coerceIn(0, 1000000)
+                localDb.collection("book_stock").document("inventory")
+                    .set(
+                        mapOf(
+                            "maths" to maths,
+                            "science" to science,
+                            "social_science" to socialScience,
+                            "updatedByUid" to uid,
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                    .awaitResult()
+                resolveCallSuccess(callId, "true")
+            } catch (e: Exception) {
+                handleFirestoreError(e, OperationType.WRITE, "book_stock/inventory")
+                resolveCallError(callId, e.localizedMessage ?: "સ્ટોક અપડેટ કરવામાં ભૂલ આવી.")
+            }
         }
     }
 
@@ -4543,6 +4780,27 @@ class NativeFirebaseBridge(
         put("percentage", (doc.getLong("percentage") ?: 0L).toInt())
         put("timeTakenSeconds", (doc.getLong("timeTakenSeconds") ?: 0L).toInt())
         put("createdAt", serializeTimestamp(doc.getTimestamp("createdAt")))
+    }
+
+    private fun serializeBookOrder(doc: DocumentSnapshot): JSONObject = JSONObject().apply {
+        put("id", doc.id)
+        put("customerName", doc.getString("customerName").orEmpty())
+        put("subject", doc.getString("subject") ?: "maths")
+        put("unitPrice", (doc.getLong("unitPrice") ?: 0L).toInt())
+        put("quantity", (doc.getLong("quantity") ?: 1L).toInt())
+        put("totalAmount", (doc.getLong("totalAmount") ?: 0L).toInt())
+        put("paymentStatus", doc.getString("paymentStatus") ?: "pending")
+        put("createdByUid", doc.getString("createdByUid").orEmpty())
+        put("createdAt", serializeTimestamp(doc.getTimestamp("createdAt")))
+        put("updatedAt", serializeTimestamp(doc.getTimestamp("updatedAt")))
+    }
+
+    private fun serializeBookStock(doc: DocumentSnapshot): JSONObject = JSONObject().apply {
+        put("maths", (doc.getLong("maths") ?: 350L).toInt())
+        put("science", (doc.getLong("science") ?: 350L).toInt())
+        put("social_science", (doc.getLong("social_science") ?: 300L).toInt())
+        put("updatedByUid", doc.getString("updatedByUid").orEmpty())
+        put("updatedAt", serializeTimestamp(doc.getTimestamp("updatedAt")))
     }
 
     private fun resolveCallSuccess(callId: String, jsonLiteral: String) {

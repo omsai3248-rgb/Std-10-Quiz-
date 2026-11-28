@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   ArrowLeft,
   Bell,
+  BookOpen,
   CheckCircle2,
   Clock,
   Cloud,
@@ -50,19 +51,25 @@ import {
   type AdminNotificationRoute,
   type AdminUser,
   type AppReleaseConfig,
+  type BookOrder,
+  type BookOrderPaymentStatus,
+  type BookStockInventory,
   type InstalledAppInfo,
   type PaymentRequest,
   type PublishAppUpdateInput,
   type PushBroadcastRecord,
+  type SaveBookOrderInput,
   type SendPushBroadcastInput,
   type StudentProfile,
   type SubjectId,
   type UpdateNotificationRecord,
+  DEFAULT_BOOK_STOCK,
 } from '../types/models';
 import {
   buildPaymentApprovalWhatsAppHref,
   launchExternalUrl,
 } from '../utils/imageUtils';
+import { AdminBookOrdersTab } from './AdminBookOrdersTab';
 import { AdminChatTab } from './AdminChatTab';
 import { AdminNotificationsTab } from './AdminNotificationsTab';
 import {
@@ -75,6 +82,7 @@ import { AdminUpdateSettingsTab } from './AdminUpdateSettingsTab';
 
 export type AdminTabId =
   | 'requests'
+  | 'book_orders'
   | 'all_codes'
   | 'used_codes'
   | 'students'
@@ -189,6 +197,17 @@ interface AdminPanelScreenProps {
   focusedTarget?: AdminFocusedTarget | null;
   onClearFocusedTarget?: () => void;
   onFocusNotificationTarget?: (target: AdminFocusedTarget | null) => void;
+  // Book Order Management Props
+  bookOrders?: BookOrder[];
+  bookStock?: BookStockInventory;
+  onSaveBookOrder?: (input: SaveBookOrderInput) => Promise<void>;
+  onToggleBookOrderStatus?: (orderId: string, nextStatus: BookOrderPaymentStatus) => Promise<void>;
+  onDeleteBookOrder?: (order: BookOrder) => Promise<void>;
+  onUpdateBookStock?: (next: {
+    maths: number;
+    science: number;
+    social_science: number;
+  }) => Promise<void>;
 }
 
 type PendingDeleteTarget =
@@ -275,6 +294,12 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
   focusedTarget = null,
   onClearFocusedTarget,
   onFocusNotificationTarget,
+  bookOrders = [],
+  bookStock = DEFAULT_BOOK_STOCK,
+  onSaveBookOrder,
+  onToggleBookOrderStatus,
+  onDeleteBookOrder,
+  onUpdateBookStock,
 }) => {
   const { lang, toggleLang, t } = useTranslation();
   const { useNavigationRail, isLargeScreen, isTvOrSmartBoard } = useAdaptiveDisplay();
@@ -386,6 +411,15 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
       label: `${t.tabRequests} (${pendingCount})`,
       Icon: Wallet,
       badge: pendingCount,
+    },
+    {
+      id: 'book_orders' as const,
+      label:
+        lang === 'en'
+          ? `Book Orders (${bookOrders.length})`
+          : `બુક ઓર્ડર (${bookOrders.length})`,
+      Icon: BookOpen,
+      badge: bookOrders.filter((o) => o.paymentStatus === 'pending').length,
     },
     {
       id: 'notifications' as const,
@@ -820,6 +854,28 @@ export const AdminPanelScreen: React.FC<AdminPanelScreenProps> = ({
                 title: `${req.studentName} (₹${req.amountRupees})`,
                 subtitle: `+91 ${req.mobileNumber} • UTR: ${displayPaymentTransactionRef(req) || req.id}`,
               })
+            }
+            onNotify={onNotify}
+          />
+        )}
+
+        {selectedTab === 'book_orders' && (
+          <AdminBookOrdersTab
+            orders={bookOrders}
+            stock={bookStock}
+            isLiveSyncActive={syncStatus.liveSyncState === 'active' && syncStatus.isOnline}
+            isBusy={isBusy}
+            onSaveOrder={(input) =>
+              onSaveBookOrder ? onSaveBookOrder(input) : Promise.resolve()
+            }
+            onToggleOrderStatus={(id, next) =>
+              onToggleBookOrderStatus ? onToggleBookOrderStatus(id, next) : Promise.resolve()
+            }
+            onDeleteOrder={(order) =>
+              onDeleteBookOrder ? onDeleteBookOrder(order) : Promise.resolve()
+            }
+            onUpdateStock={(next) =>
+              onUpdateBookStock ? onUpdateBookStock(next) : Promise.resolve()
             }
             onNotify={onNotify}
           />

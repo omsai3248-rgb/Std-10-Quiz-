@@ -1043,5 +1043,67 @@ service cloud.firestore {
 
       allow delete: if isAdmin() && isValidId(requestId);
     }
+
+    function isValidBookOrder(data) {
+      return data.keys().hasAll([
+               'customerName', 'subject', 'unitPrice', 'quantity',
+               'totalAmount', 'paymentStatus', 'createdByUid',
+               'createdAt', 'updatedAt'
+             ]) &&
+             data.keys().hasOnly([
+               'customerName', 'subject', 'unitPrice', 'quantity',
+               'totalAmount', 'paymentStatus', 'createdByUid',
+               'createdAt', 'updatedAt'
+             ]) &&
+             data.customerName is string && data.customerName.size() >= 1 && data.customerName.size() <= 80 &&
+             data.subject in ['maths', 'science', 'social_science', 'combo'] &&
+             data.unitPrice is int && data.unitPrice >= 0 && data.unitPrice <= 100000 &&
+             data.quantity is int && data.quantity >= 1 && data.quantity <= 10000 &&
+             data.totalAmount is int && data.totalAmount >= 0 && data.totalAmount <= 100000000 &&
+             data.totalAmount == data.unitPrice * data.quantity &&
+             data.paymentStatus in ['pending', 'done'] &&
+             data.createdByUid is string && data.createdByUid.size() >= 1 && data.createdByUid.size() <= 128 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidBookStock(data) {
+      return data.keys().hasAll([
+               'maths', 'science', 'social_science', 'updatedByUid', 'updatedAt'
+             ]) &&
+             data.keys().hasOnly([
+               'maths', 'science', 'social_science', 'updatedByUid', 'updatedAt'
+             ]) &&
+             data.maths is int && data.maths >= 0 && data.maths <= 1000000 &&
+             data.science is int && data.science >= 0 && data.science <= 1000000 &&
+             data.social_science is int && data.social_science >= 0 && data.social_science <= 1000000 &&
+             data.updatedByUid is string && data.updatedByUid.size() >= 1 && data.updatedByUid.size() <= 128 &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    // Book Order Management (Strictly Admin-only)
+    match /book_orders/{orderId} {
+      allow get, list: if isAdmin();
+      allow create: if isAdmin() &&
+                       isValidId(orderId) &&
+                       isValidBookOrder(incoming()) &&
+                       incoming().createdByUid == request.auth.uid;
+      allow update: if isAdmin() &&
+                       isValidId(orderId) &&
+                       isValidBookOrder(incoming()) &&
+                       incoming().createdByUid == existing().createdByUid &&
+                       incoming().createdAt == existing().createdAt;
+      allow delete: if isAdmin() && isValidId(orderId);
+    }
+
+    // Book Stock Inventory Totals (Strictly Admin-only)
+    match /book_stock/{stockId} {
+      allow get, list: if isAdmin();
+      allow create, update: if isAdmin() &&
+                               isValidId(stockId) &&
+                               isValidBookStock(incoming()) &&
+                               incoming().updatedByUid == request.auth.uid;
+      allow delete: if false;
+    }
   }
 }

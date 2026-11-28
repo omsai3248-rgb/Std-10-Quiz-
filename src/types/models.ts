@@ -675,7 +675,15 @@ export interface AdminDeepLinkPayload {
 }
 
 export interface AdminFocusedTarget {
-  tab: 'requests' | 'all_codes' | 'used_codes' | 'students' | 'notifications' | 'chat' | 'updates';
+  tab:
+    | 'requests'
+    | 'book_orders'
+    | 'all_codes'
+    | 'used_codes'
+    | 'students'
+    | 'notifications'
+    | 'chat'
+    | 'updates';
   referenceId?: string;
   actorName?: string;
   actorMobile?: string;
@@ -684,3 +692,44 @@ export interface AdminFocusedTarget {
   body?: string;
   notifId?: string;
 }
+
+export type BookOrderSubject = 'maths' | 'science' | 'social_science' | 'combo';
+
+export type BookOrderPaymentStatus = 'pending' | 'done';
+
+export interface BookOrder {
+  id: string;
+  customerName: string;
+  subject: BookOrderSubject;
+  unitPrice: number;
+  quantity: number;
+  totalAmount: number;
+  paymentStatus: BookOrderPaymentStatus;
+  createdByUid: string;
+  createdAt: Timestamp | null;
+  updatedAt: Timestamp | null;
+}
+
+export interface BookStockInventory {
+  maths: number;
+  science: number;
+  social_science: number;
+  updatedByUid?: string;
+  updatedAt?: Timestamp | null;
+}
+
+export interface SaveBookOrderInput {
+  id?: string;
+  customerName: string;
+  subject: BookOrderSubject;
+  unitPrice: number;
+  quantity: number;
+  paymentStatus: BookOrderPaymentStatus;
+}
+
+export const DEFAULT_BOOK_STOCK: BookStockInventory = {
+  maths: 350,
+  science: 350,
+  social_science: 300,
+};
+

@@ -36,6 +36,7 @@ import {
   deleteAccessCodeAdmin,
   deleteAdminNotificationItem,
   deleteAppReleaseRecord,
+  deleteBookOrderAdmin,
   deletePaymentRequestAdmin,
   deletePushBroadcastNotification,
   deleteStudentAdmin,
@@ -74,6 +75,8 @@ import {
   observeAllPaymentRequests,
   observeAllStudents,
   observeAppAuthState,
+  observeBookOrders,
+  observeBookStock,
   observeMyPaymentRequests,
   observeMyQuizAttempts,
   observePaymentRequestsByIds,
@@ -90,6 +93,7 @@ import {
   removeAdminInviteByEmail,
   requestAppNotificationPermission,
   resumeNativeAdminListeners,
+  saveBookOrderAdmin,
   saveMyPaymentRequestId,
   saveReleaseConfig,
   sendAdminChatMessage,
@@ -101,8 +105,10 @@ import {
   submitPaymentRequest,
   syncAdminDeltaSince,
   syncAdminProfileAndPushToken,
+  toggleBookOrderPaymentStatusAdmin,
   toggleStudentQuizAccess,
   updateAdminNotificationPrefs,
+  updateBookStockAdmin,
   updateStudentSubjectAccess,
   verifyActiveSessionOnResume,
   type AdminPasscodeAuthResult,
@@ -135,6 +141,7 @@ import {
 } from './services/webSwUpdateService';
 import {
   ALL_SUBJECT_IDS,
+  DEFAULT_BOOK_STOCK,
   getSubjectDisplayName,
   isValidIndianMobile10,
   normalizeIndianMobile10,
@@ -143,6 +150,8 @@ import {
   type ActionBanner,
   type AdminChatMessage,
   type AdminChatThread,
+  type BookOrder,
+  type BookStockInventory,
   type AdminDeepLinkPayload,
   type AdminFocusedTarget,
   type AdminInvite,
@@ -367,6 +376,8 @@ const AppContent: React.FC = () => {
   const [allPayments, setAllPayments] = useState<PaymentRequest[]>([]);
   const [allCodes, setAllCodes] = useState<AccessCode[]>([]);
   const [allStudents, setAllStudents] = useState<StudentProfile[]>([]);
+  const [bookOrders, setBookOrders] = useState<BookOrder[]>([]);
+  const [bookStock, setBookStock] = useState<BookStockInventory>({ ...DEFAULT_BOOK_STOCK });
   const [releaseConfig, setReleaseConfig] = useState<AppReleaseConfig | null>(null);
 
   const [hasMorePayments, setHasMorePayments] = useState(false);
@@ -1241,6 +1252,14 @@ const AppContent: React.FC = () => {
     };
 
     const unsubs = [
+      observeBookOrders((orders) => {
+        setBookOrders(orders);
+      }, onAdminListenerError),
+
+      observeBookStock((nextStock) => {
+        setBookStock(nextStock);
+      }, onAdminListenerError),
+
       observeAllStudents((list) => {
         setAllStudents(list);
         setHasMoreStudents(list.length >= ADMIN_PAGE_SIZE);
@@ -2827,6 +2846,59 @@ const AppContent: React.FC = () => {
           focusedTarget={focusedAdminTarget}
           onClearFocusedTarget={() => setFocusedAdminTarget(null)}
           onFocusNotificationTarget={setFocusedAdminTarget}
+          bookOrders={bookOrders}
+          bookStock={bookStock}
+          onSaveBookOrder={async (input) => {
+            try {
+              await saveBookOrderAdmin(input);
+              setBanner({
+                isError: false,
+                message: input.id
+                  ? 'બુક ઓર્ડર સફળતાપૂર્વક સુધારાઈ ગયો.'
+                  : 'નવો બુક ઓર્ડર સફળતાપૂર્વક ઉમેરાઈ ગયો.',
+              });
+            } catch (err) {
+              setBanner({ isError: true, message: formatAppError(err, 'ઓર્ડર સેવ કરવામાં ભૂલ આવી.') });
+              throw err;
+            }
+          }}
+          onToggleBookOrderStatus={async (orderId, nextStatus) => {
+            try {
+              await toggleBookOrderPaymentStatusAdmin(orderId, nextStatus);
+              setBanner({
+                isError: false,
+                message:
+                  nextStatus === 'done'
+                    ? 'પેમેન્ટ Done તરીકે અપડેટ થયું.'
+                    : 'પેમેન્ટ બાકી તરીકે અપડેટ થયું.',
+              });
+            } catch (err) {
+              setBanner({ isError: true, message: formatAppError(err, 'સ્થિતિ બદલવામાં ભૂલ આવી.') });
+            }
+          }}
+          onDeleteBookOrder={async (order) => {
+            try {
+              await deleteBookOrderAdmin(order.id);
+              setBanner({
+                isError: false,
+                message: `${order.customerName} નો ઓર્ડર કાઢી નાખવામાં આવ્યો.`,
+              });
+            } catch (err) {
+              setBanner({ isError: true, message: formatAppError(err, 'ઓર્ડર કાઢવામાં ભૂલ આવી.') });
+            }
+          }}
+          onUpdateBookStock={async (nextStock) => {
+            try {
+              await updateBookStockAdmin(nextStock);
+              setBanner({
+                isError: false,
+                message: 'બુક સ્ટોક સફળતાપૂર્વક અપડેટ થઈ ગયો.',
+              });
+            } catch (err) {
+              setBanner({ isError: true, message: formatAppError(err, 'સ્ટોક અપડેટ કરવામાં ભૂલ આવી.') });
+              throw err;
+            }
+          }}
         />
       </Suspense>
     );

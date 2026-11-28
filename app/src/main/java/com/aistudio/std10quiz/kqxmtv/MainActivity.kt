@@ -222,10 +222,10 @@ private class AndroidExportBridge(
 
     @JavascriptInterface
     fun saveExportedFile(suggestedName: String, dataUrl: String) {
-        activity.runOnUiThread {
+        Thread {
             try {
                 val commaIdx = dataUrl.indexOf(',')
-                if (commaIdx <= 0) return@runOnUiThread
+                if (commaIdx <= 0) return@Thread
                 val header = dataUrl.substring(0, commaIdx)
                 val base64Part = dataUrl.substring(commaIdx + 1)
                 val bytes = Base64.decode(base64Part, Base64.DEFAULT)
@@ -238,9 +238,45 @@ private class AndroidExportBridge(
                 val safeName = suggestedName
                     .replace(Regex("[^A-Za-z0-9._-]"), "_")
                     .ifBlank {
-                        if (mimeType.contains("pdf")) "access_codes.pdf" else "access_codes.csv"
+                        when {
+                            mimeType.contains("pdf") -> "export.pdf"
+                            mimeType.contains("spreadsheet") || mimeType.contains("excel") -> "export.xlsx"
+                            else -> "export.csv"
+                        }
                     }
 
+                // 1. Save a permanent copy into Downloads/QuickQuiz on Android 10+ (zero permissions required via MediaStore)
+                var savedToDownloads = false
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    val resolver = activity.contentResolver
+                    val values = ContentValues().apply {
+                        put(MediaStore.Downloads.DISPLAY_NAME, safeName)
+                        put(MediaStore.Downloads.MIME_TYPE, mimeType)
+                        put(
+                            MediaStore.Downloads.RELATIVE_PATH,
+                            "${Environment.DIRECTORY_DOWNLOADS}/QuickQuiz"
+                        )
+                        put(MediaStore.Downloads.IS_PENDING, 1)
+                    }
+                    var insertedUri: Uri? = null
+                    try {
+                        insertedUri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                        if (insertedUri != null) {
+                            resolver.openOutputStream(insertedUri)?.use { out ->
+                                out.write(bytes)
+                                out.flush()
+                            }
+                            values.clear()
+                            values.put(MediaStore.Downloads.IS_PENDING, 0)
+                            resolver.update(insertedUri, values, null, null)
+                            savedToDownloads = true
+                        }
+                    } catch (_: Exception) {
+                        insertedUri?.let { runCatching { resolver.delete(it, null, null) } }
+                    }
+                }
+
+                // 2. Also write to cacheDir/exports for instant Open/Share chooser
                 val exportDir = File(activity.cacheDir, "exports").apply { mkdirs() }
                 val outFile = File(exportDir, safeName)
                 outFile.writeBytes(bytes)
@@ -250,25 +286,47 @@ private class AndroidExportBridge(
                     "${activity.packageName}.fileprovider",
                     outFile
                 )
-                val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                    type = mimeType
-                    putExtra(Intent.EXTRA_STREAM, uri)
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+
+                activity.runOnUiThread {
+                    if (savedToDownloads) {
+                        Toast.makeText(
+                            activity,
+                            "Downloads/QuickQuiz/$safeName માં સેવ થઈ ગયું",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                    try {
+                        val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                            type = mimeType
+                            putExtra(Intent.EXTRA_STREAM, uri)
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        activity.startActivity(
+                            Intent.createChooser(
+                                shareIntent,
+                                activity.getString(R.string.share_export_title)
+                            )
+                        )
+                    } catch (e: Exception) {
+                        if (!savedToDownloads) {
+                            Toast.makeText(
+                                activity,
+                                e.localizedMessage ?: activity.getString(R.string.error_no_app),
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    }
                 }
-                activity.startActivity(
-                    Intent.createChooser(
-                        shareIntent,
-                        activity.getString(R.string.share_export_title)
-                    )
-                )
             } catch (e: Exception) {
-                Toast.makeText(
-                    activity,
-                    e.localizedMessage ?: activity.getString(R.string.error_no_app),
-                    Toast.LENGTH_SHORT
-                ).show()
+                activity.runOnUiThread {
+                    Toast.makeText(
+                        activity,
+                        e.localizedMessage ?: activity.getString(R.string.error_no_app),
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
             }
-        }
+        }.start()
     }
 
     @JavascriptInterface

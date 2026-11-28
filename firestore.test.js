@@ -1521,3 +1521,87 @@ test("Google Sign-In /users/{uid} + Server-side Duplicate Mobile Lock: enforces 
   await assertSucceeds(adminDb.collection("mobile_number_locks").get());
 });
 
+test("Book Order Management (/book_orders and /book_stock) is strictly Admin-only and enforces schema invariants", async () => {
+  const unauthDb = testEnv.unauthenticatedContext().firestore();
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID, { email: "alice@gmail.com", email_verified: true }).firestore();
+  const adminDb = testEnv.authenticatedContext(ADMIN_UID, { email: "omsai3248@gmail.com", email_verified: true }).firestore();
+  const now = new Date();
+
+  const validOrder = {
+    customerName: "Raydhanpar school",
+    subject: "combo",
+    unitPrice: 300,
+    quantity: 2,
+    totalAmount: 600,
+    paymentStatus: "done",
+    createdByUid: ADMIN_UID,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  const validStock = {
+    maths: 350,
+    science: 350,
+    social_science: 300,
+    updatedByUid: ADMIN_UID,
+    updatedAt: now,
+  };
+
+  // Unauthenticated and regular students CANNOT read or write book_orders or book_stock
+  await assertFails(unauthDb.collection("book_orders").get());
+  await assertFails(unauthDb.collection("book_orders").doc("ord_1").set({ ...validOrder, createdByUid: "anon" }));
+  await assertFails(aliceDb.collection("book_orders").get());
+  await assertFails(aliceDb.collection("book_orders").doc("ord_1").set({ ...validOrder, createdByUid: ALICE_UID }));
+  await assertFails(unauthDb.collection("book_stock").doc("inventory").get());
+  await assertFails(aliceDb.collection("book_stock").doc("inventory").get());
+  await assertFails(aliceDb.collection("book_stock").doc("inventory").set({ ...validStock, updatedByUid: ALICE_UID }));
+
+  // Admin can create valid book order & stock inventory
+  await assertSucceeds(adminDb.collection("book_orders").doc("ord_1").set(validOrder));
+  await assertSucceeds(adminDb.collection("book_orders").get());
+  await assertSucceeds(adminDb.collection("book_stock").doc("inventory").set(validStock));
+  await assertSucceeds(adminDb.collection("book_stock").doc("inventory").get());
+
+  // Admin cannot write invalid order payloads (mismatched totalAmount, invalid subject, quantity <= 0)
+  await assertFails(
+    adminDb.collection("book_orders").doc("ord_bad_total").set({
+      ...validOrder,
+      totalAmount: 999,
+    })
+  );
+  await assertFails(
+    adminDb.collection("book_orders").doc("ord_bad_sub").set({
+      ...validOrder,
+      subject: "english",
+    })
+  );
+  await assertFails(
+    adminDb.collection("book_orders").doc("ord_bad_qty").set({
+      ...validOrder,
+      quantity: 0,
+      totalAmount: 0,
+    })
+  );
+
+  // Admin cannot write negative stock or delete stock doc
+  await assertFails(
+    adminDb.collection("book_stock").doc("inventory").set({
+      ...validStock,
+      maths: -5,
+    })
+  );
+  await assertFails(adminDb.collection("book_stock").doc("inventory").delete());
+
+  // Admin can toggle paymentStatus & edit order, and delete order; Alice still blocked
+  await assertSucceeds(
+    adminDb.collection("book_orders").doc("ord_1").update({
+      paymentStatus: "pending",
+      updatedAt: now,
+    })
+  );
+  await assertFails(aliceDb.collection("book_orders").doc("ord_1").get());
+  await assertFails(aliceDb.collection("book_orders").doc("ord_1").delete());
+  await assertSucceeds(adminDb.collection("book_orders").doc("ord_1").delete());
+});
+
+
